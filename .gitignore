@@ -1,0 +1,55 @@
+# Build artifacts
+build/
+bin/
+lib/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.app
+
+# IDE / Editor
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vcxproj*
+*.filters
+*.fbp
+*.iml
+.idea/
+*.swp
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+CMakeOutput.log
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+*.tmp
+*.bak
+*.orig
+
+# JUCE (large dependency - download from juce.com)
+third_party/JUCE/
+third_party/JUCE.zip
+
+# Project files
+*.aws
+*.aws~
+*.log
+*.wav
+*.mp3
+*.flac
+*.aiff
