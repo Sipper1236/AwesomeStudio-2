@@ -252,7 +252,8 @@ public:
         return true;
     }
 
-    bool arpeggiateSelectedChord(int direction, int octaveRange, int gatePercent)
+    bool arpeggiateSelectedChord(int direction, int octaveRange, int gatePercent,
+                                 int velocityPattern)
     {
         QVector<MidiNote> chord;
         for (const MidiNote& note : notes)
@@ -295,6 +296,7 @@ public:
         direction = std::clamp(direction, 0, 2);
         octaveRange = std::clamp(octaveRange, 1, 4);
         gatePercent = std::clamp(gatePercent, 10, 100);
+        velocityPattern = std::clamp(velocityPattern, 0, 4);
         QVector<MidiNote> pitchOrder;
         for (int octave = 0; octave < octaveRange; ++octave)
         {
@@ -341,6 +343,27 @@ public:
             arpNote.id = id++;
             arpNote.startBeat = noteStart;
             arpNote.lengthBeats = std::min(snap * gatePercent / 100.0, endBeat - noteStart);
+            double velocityScale = 1.0;
+            if (stepCount > 1 && velocityPattern == 1)
+            {
+                const double progress = static_cast<double>(step) / (stepCount - 1);
+                velocityScale = 0.35 + 0.65 * progress;
+            }
+            else if (stepCount > 1 && velocityPattern == 2)
+            {
+                const double progress = static_cast<double>(step) / (stepCount - 1);
+                velocityScale = 1.0 - 0.65 * progress;
+            }
+            else if (velocityPattern == 3)
+            {
+                velocityScale = step % 2 == 0 ? 1.0 : 0.55;
+            }
+            else if (velocityPattern == 4)
+            {
+                velocityScale = step % 3 == 0 ? 1.0 : 0.55;
+            }
+            arpNote.velocity = std::clamp(
+                static_cast<int>(std::lround(arpNote.velocity * velocityScale)), 1, 127);
             notes.push_back(arpNote);
             selected.insert(arpNote.id);
         }
@@ -1281,9 +1304,10 @@ bool MidiEditor::addChordToSelection(const QVector<int>& semitoneIntervals)
     return canvas->addChordToSelection(semitoneIntervals);
 }
 
-bool MidiEditor::arpeggiateSelectedChord(int direction, int octaveRange, int gatePercent)
+bool MidiEditor::arpeggiateSelectedChord(int direction, int octaveRange, int gatePercent,
+                                         int velocityPattern)
 {
-    return canvas->arpeggiateSelectedChord(direction, octaveRange, gatePercent);
+    return canvas->arpeggiateSelectedChord(direction, octaveRange, gatePercent, velocityPattern);
 }
 
 bool MidiEditor::strumSelectedChord()

@@ -1420,6 +1420,14 @@ void MainWindow::createMenus()
         gateControl->setSuffix(QStringLiteral("%"));
         form->addRow(tr("Gate"), gateControl);
 
+        auto* velocityPatternControl = new QComboBox(&dialog);
+        velocityPatternControl->addItem(tr("Keep source velocities"), 0);
+        velocityPatternControl->addItem(tr("Fade in"), 1);
+        velocityPatternControl->addItem(tr("Fade out"), 2);
+        velocityPatternControl->addItem(tr("Accent every 2 steps"), 3);
+        velocityPatternControl->addItem(tr("Accent every 3 steps"), 4);
+        form->addRow(tr("Velocity pattern"), velocityPatternControl);
+
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
         connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
         connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -1428,7 +1436,8 @@ void MainWindow::createMenus()
             return;
 
         if (midiEditor->arpeggiateSelectedChord(directionControl->currentData().toInt(),
-                                                octaveControl->value(), gateControl->value()))
+                                                octaveControl->value(), gateControl->value(),
+                                                velocityPatternControl->currentData().toInt()))
             statusBar()->showMessage(tr("Arpeggiated the selected chord on the current grid"), 2000);
         else
             statusBar()->showMessage(tr("Select chord notes with the same start and length"), 2400);
