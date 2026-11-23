@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 20;
+constexpr int currentProjectVersion = 21;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -87,6 +87,20 @@ QJsonArray saveNotes(const QVector<MidiNote>& notes)
             {QStringLiteral("startBeat"), note.startBeat},
             {QStringLiteral("lengthBeats"), note.lengthBeats},
             {QStringLiteral("channel"), note.channel}
+        });
+    }
+    return result;
+}
+
+QJsonArray savePitchBends(const QVector<MidiPitchBend>& pitchBends)
+{
+    QJsonArray result;
+    for (const MidiPitchBend& bend : pitchBends)
+    {
+        result.push_back(QJsonObject{
+            {QStringLiteral("channel"), bend.channel},
+            {QStringLiteral("value"), bend.value},
+            {QStringLiteral("beat"), bend.beat}
         });
     }
     return result;
@@ -283,6 +297,43 @@ bool loadNotes(const QJsonValue& value, QVector<MidiNote>& notes, QString* error
     return true;
 }
 
+bool loadPitchBends(const QJsonValue& value, QVector<MidiPitchBend>& pitchBends, QString* error)
+{
+    if (!value.isArray())
+    {
+        setError(error, QStringLiteral("The project is missing MIDI pitch-bend data."));
+        return false;
+    }
+    const QJsonArray array = value.toArray();
+    if (array.size() > 100000)
+    {
+        setError(error, QStringLiteral("This project contains too many MIDI pitch-bend events to open safely."));
+        return false;
+    }
+
+    for (const QJsonValue& item : array)
+    {
+        if (!item.isObject())
+        {
+            setError(error, QStringLiteral("The project contains an invalid MIDI pitch-bend event."));
+            return false;
+        }
+        const QJsonObject object = item.toObject();
+        MidiPitchBend bend;
+        bend.channel = object.value(QStringLiteral("channel")).toInt(-1);
+        bend.value = object.value(QStringLiteral("value")).toInt(-1);
+        bend.beat = object.value(QStringLiteral("beat")).toDouble(-1.0);
+        if (bend.channel < 0 || bend.channel > 15 || bend.value < 0 || bend.value > 16383 ||
+            !std::isfinite(bend.beat) || bend.beat < 0.0 || bend.beat > 16384.0)
+        {
+            setError(error, QStringLiteral("The project contains an out-of-range MIDI pitch-bend event."));
+            return false;
+        }
+        pitchBends.push_back(bend);
+    }
+    return true;
+}
+
 QJsonObject saveClip(const MidiClip& clip)
 {
     return QJsonObject{
@@ -291,6 +342,7 @@ QJsonObject saveClip(const MidiClip& clip)
         {QStringLiteral("startBeat"), clip.startBeat},
         {QStringLiteral("lengthBeats"), clip.lengthBeats},
         {QStringLiteral("notes"), saveNotes(clip.notes)},
+        {QStringLiteral("pitchBends"), savePitchBends(clip.pitchBends)},
         {QStringLiteral("audioSourcePath"), clip.audioSourcePath},
         {QStringLiteral("audioStartFrame"), static_cast<qint64>(clip.audioStartFrame)},
         {QStringLiteral("audioFadeInBeats"), clip.audioFadeInBeats},
@@ -401,7 +453,10 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
         clip.audioFadeOutCurve = static_cast<AudioFadeCurve>(fadeOutCurve);
     }
     loadAudioReference(clip.audioSourcePath, mediaBaseDir, media, clip.audioSource);
-    return loadNotes(object.value(QStringLiteral("notes")), clip.notes, error);
+    if (!loadNotes(object.value(QStringLiteral("notes")), clip.notes, error))
+        return false;
+    return version < 21 ||
+           loadPitchBends(object.value(QStringLiteral("pitchBends")), clip.pitchBends, error);
 }
 
 bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& mediaBaseDir,

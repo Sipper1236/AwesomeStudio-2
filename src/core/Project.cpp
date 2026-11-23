@@ -486,6 +486,26 @@ void ProjectData::normalize()
                 return left.pitch < right.pitch;
             });
             clip.notes = std::move(validNotes);
+
+            if (clip.pitchBends.size() > 100000)
+                clip.pitchBends.resize(100000);
+            QVector<MidiPitchBend> validPitchBends;
+            validPitchBends.reserve(clip.pitchBends.size());
+            for (MidiPitchBend bend : clip.pitchBends)
+            {
+                if (!std::isfinite(bend.beat))
+                    continue;
+                bend.channel = std::clamp(bend.channel, 0, 15);
+                bend.value = std::clamp(bend.value, 0, 16383);
+                bend.beat = std::clamp(bend.beat, 0.0, clip.lengthBeats);
+                validPitchBends.push_back(bend);
+            }
+            std::stable_sort(validPitchBends.begin(), validPitchBends.end(),
+                [](const MidiPitchBend& left, const MidiPitchBend& right)
+                {
+                    return left.beat < right.beat;
+                });
+            clip.pitchBends = std::move(validPitchBends);
             validClips.push_back(std::move(clip));
         }
 

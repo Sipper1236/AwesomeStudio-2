@@ -146,18 +146,24 @@ class NoteEditCommand final : public QUndoCommand
 public:
     NoteEditCommand(MainWindow* window, quint64 trackId, quint64 clipId,
                     QVector<MidiNote> before, QVector<MidiNote> after,
-                    double beforeLengthBeats = -1.0, double afterLengthBeats = -1.0)
+                    double beforeLengthBeats = -1.0, double afterLengthBeats = -1.0,
+                    QVector<MidiPitchBend> beforePitchBends = {},
+                    QVector<MidiPitchBend> afterPitchBends = {}, bool includePitchBends = false)
         : window(window), trackId(trackId), clipId(clipId),
           before(std::move(before)), after(std::move(after)),
-          beforeLengthBeats(beforeLengthBeats), afterLengthBeats(afterLengthBeats)
+          beforeLengthBeats(beforeLengthBeats), afterLengthBeats(afterLengthBeats),
+          beforePitchBends(std::move(beforePitchBends)),
+          afterPitchBends(std::move(afterPitchBends)), includePitchBends(includePitchBends)
     {
-        setText(QObject::tr("Edit MIDI notes"));
+        setText(includePitchBends ? QObject::tr("Record MIDI take")
+                                  : QObject::tr("Edit MIDI notes"));
     }
 
     void undo() override
     {
         if (window != nullptr)
-            window->applyNoteHistory(trackId, clipId, before, beforeLengthBeats);
+            window->applyNoteHistory(trackId, clipId, before, beforeLengthBeats,
+                                     includePitchBends ? &beforePitchBends : nullptr);
     }
 
     void redo() override
@@ -168,7 +174,8 @@ public:
             return;
         }
         if (window != nullptr)
-            window->applyNoteHistory(trackId, clipId, after, afterLengthBeats);
+            window->applyNoteHistory(trackId, clipId, after, afterLengthBeats,
+                                     includePitchBends ? &afterPitchBends : nullptr);
     }
 
 private:
@@ -179,6 +186,9 @@ private:
     QVector<MidiNote> after;
     double beforeLengthBeats;
     double afterLengthBeats;
+    QVector<MidiPitchBend> beforePitchBends;
+    QVector<MidiPitchBend> afterPitchBends;
+    bool includePitchBends = false;
     bool firstRedo = true;
 };
 
@@ -3507,12 +3517,15 @@ void MainWindow::refreshDirtyState()
 }
 
 void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,
-                                  double clipLengthBeats)
+                                  double clipLengthBeats,
+                                  const QVector<MidiPitchBend>* pitchBends)
 {
     MidiClip* clip = project.findClip(trackId, clipId);
     if (clip == nullptr)
         return;
     clip->notes = notes;
+    if (pitchBends != nullptr)
+        clip->pitchBends = *pitchBends;
     if (selectedTrackId == trackId && selectedClipId == clipId)
     {
         if (clipLengthBeats >= 0.0)
@@ -4574,6 +4587,7 @@ void MainWindow::startMidiRecording()
     midiOpenNoteCount = 0;
     openMidiNotes.clear();
     recordedMidiNotes.clear();
+    recordedMidiPitchBends.clear();
     const bool playbackAvailable = audioEngine.isAudioAvailable() || audioEngine.initialize();
     midiTransportActive = playbackAvailable;
     midiRecordingPending = playbackAvailable;
@@ -4643,6 +4657,11 @@ void MainWindow::pollMidiInput()
         {
             if (midiMonitorAction->isChecked())
                 audioEngine.triggerLiveMidiPitchBend(event.channel, event.value);
+            if (midiRecordingActive && recordedMidiPitchBends.size() < 100000)
+            {
+                recordedMidiPitchBends.push_back({event.channel, event.value,
+                                                  currentMidiRecordingBeat()});
+            }
             continue;
         }
 
@@ -4765,17 +4784,19 @@ void MainWindow::finishMidiRecording(bool keepTake)
     if (!keepTake)
     {
         recordedMidiNotes.clear();
+        recordedMidiPitchBends.clear();
         return;
     }
     if (wasPending)
     {
         statusBar()->showMessage(tr("MIDI recording stopped before the count-in finished; no notes were added."), 3500);
         recordedMidiNotes.clear();
+        recordedMidiPitchBends.clear();
         return;
     }
-    if (recordedMidiNotes.isEmpty())
+    if (recordedMidiNotes.isEmpty() && recordedMidiPitchBends.isEmpty())
     {
-        statusBar()->showMessage(tr("No MIDI notes were captured."), 3500);
+        statusBar()->showMessage(tr("No MIDI notes or pitch bends were captured."), 3500);
         return;
     }
 
@@ -4784,6 +4805,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
     {
         statusBar()->showMessage(tr("The target instrument track is no longer available."), 5000);
         recordedMidiNotes.clear();
+        recordedMidiPitchBends.clear();
         return;
     }
     MidiClip* clip = midiRecordingClipId == 0
@@ -4795,6 +4817,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
         {
             statusBar()->showMessage(tr("The target track has reached the 10,000 pattern limit."), 5000);
             recordedMidiNotes.clear();
+            recordedMidiPitchBends.clear();
             return;
         }
         MidiClip newClip;
@@ -4807,6 +4830,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
     }
 
     const QVector<MidiNote> beforeNotes = clip->notes;
+    const QVector<MidiPitchBend> beforePitchBends = clip->pitchBends;
     const double beforeLength = clip->lengthBeats;
     quint64 nextNoteId = project.nextNoteId();
     double maximumEndBeat = clip->lengthBeats;
@@ -4828,12 +4852,29 @@ void MainWindow::finishMidiRecording(bool keepTake)
         maximumEndBeat = std::max(maximumEndBeat, note.startBeat + note.lengthBeats);
         clip->notes.push_back(note);
     }
-    if (clip->notes.size() == beforeNotes.size())
+    std::stable_sort(recordedMidiPitchBends.begin(), recordedMidiPitchBends.end(),
+        [](const MidiPitchBend& left, const MidiPitchBend& right)
+        {
+            return left.beat < right.beat;
+        });
+    for (MidiPitchBend bend : recordedMidiPitchBends)
+    {
+        if (clip->pitchBends.size() >= 100000)
+            break;
+        if (bend.beat >= 16384.0)
+            continue;
+        bend.beat = std::clamp(bend.beat, 0.0, 16384.0);
+        maximumEndBeat = std::max(maximumEndBeat, bend.beat);
+        clip->pitchBends.push_back(bend);
+    }
+    if (clip->notes.size() == beforeNotes.size() &&
+        clip->pitchBends.size() == beforePitchBends.size())
     {
         if (createdClip)
             track->clips.removeLast();
-        statusBar()->showMessage(tr("No MIDI notes fit in the target pattern."), 3500);
+        statusBar()->showMessage(tr("No MIDI notes or pitch bends fit in the target pattern."), 3500);
         recordedMidiNotes.clear();
+        recordedMidiPitchBends.clear();
         return;
     }
     std::sort(clip->notes.begin(), clip->notes.end(), [](const MidiNote& left, const MidiNote& right)
@@ -4841,6 +4882,11 @@ void MainWindow::finishMidiRecording(bool keepTake)
         if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
         return left.pitch < right.pitch;
     });
+    std::stable_sort(clip->pitchBends.begin(), clip->pitchBends.end(),
+        [](const MidiPitchBend& left, const MidiPitchBend& right)
+        {
+            return left.beat < right.beat;
+        });
 
     const double barLength = project.quarterNotesPerBar();
     const double afterLength = std::clamp(std::ceil(maximumEndBeat / barLength) * barLength,
@@ -4851,6 +4897,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
     const InstrumentType targetInstrumentType = track->instrumentType;
     const QString targetClipName = clip->name;
     const QVector<MidiNote> afterNotes = clip->notes;
+    const QVector<MidiPitchBend> afterPitchBends = clip->pitchBends;
     midiRecordingTrackId = 0;
     midiRecordingClipId = 0;
     selectedTrackId = targetTrackId;
@@ -4859,15 +4906,18 @@ void MainWindow::finishMidiRecording(bool keepTake)
         settingsDirty = true;
     refreshProjectUi();
     undoStack.push(new NoteEditCommand(this, targetTrackId, targetClipId,
-                                       beforeNotes, afterNotes, beforeLength, afterLength));
+                                       beforeNotes, afterNotes, beforeLength, afterLength,
+                                       beforePitchBends, afterPitchBends, true));
     editorTabs->setCurrentWidget(targetInstrumentType == InstrumentType::DrumRack
                                      ? static_cast<QWidget*>(stepSequencer)
                                      : static_cast<QWidget*>(midiEditor));
     refreshDirtyState();
-    statusBar()->showMessage(tr("Recorded %1 MIDI note(s) into %2")
+    statusBar()->showMessage(tr("Recorded %1 MIDI note(s) and %2 pitch bend event(s) into %3")
                                  .arg(afterNotes.size() - beforeNotes.size())
+                                 .arg(afterPitchBends.size() - beforePitchBends.size())
                                  .arg(targetClipName), 4500);
     recordedMidiNotes.clear();
+    recordedMidiPitchBends.clear();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)

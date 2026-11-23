@@ -118,7 +118,8 @@ private:
     void updateProjectTitle();
     void refreshDirtyState();
     void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,
-                          double clipLengthBeats = -1.0);
+                          double clipLengthBeats = -1.0,
+                          const QVector<MidiPitchBend>* pitchBends = nullptr);
     void exportAudio();
     void exportStems();
     void importAudio();
@@ -266,6 +267,7 @@ private:
     };
     QHash<int, QVector<OpenMidiNote>> openMidiNotes;
     QVector<MidiNote> recordedMidiNotes;
+    QVector<MidiPitchBend> recordedMidiPitchBends;
     QElapsedTimer midiRecordClock;
     quint64 midiRecordingTrackId = 0;
     quint64 midiRecordingClipId = 0;

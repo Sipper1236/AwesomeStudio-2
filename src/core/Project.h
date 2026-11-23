@@ -57,6 +57,13 @@ struct MidiNote
     bool operator==(const MidiNote& other) const;
 };
 
+struct MidiPitchBend
+{
+    int channel = 0;
+    int value = 8192;
+    double beat = 0.0;
+};
+
 struct MidiClip
 {
     quint64 id = 0;
@@ -64,6 +71,7 @@ struct MidiClip
     double startBeat = 0.0;
     double lengthBeats = 16.0;
     QVector<MidiNote> notes;
+    QVector<MidiPitchBend> pitchBends;
     QString audioSourcePath;
     std::shared_ptr<const AudioAsset> audioSource;
     qint64 audioStartFrame = 0;

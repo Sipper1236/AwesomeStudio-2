@@ -124,6 +124,13 @@ struct RawNote
     int channel = 0;
 };
 
+struct RawPitchBend
+{
+    qint64 tick = 0;
+    int value = 8192;
+    int channel = 0;
+};
+
 struct NoteOn
 {
     qint64 tick = 0;
@@ -135,6 +142,7 @@ struct ParsedTrack
 {
     QString name;
     QVector<RawNote> notes;
+    QVector<RawPitchBend> pitchBends;
     qint64 lastTick = 0;
     bool percussion = false;
 };
@@ -301,6 +309,11 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                                        data1, noteOn.velocity, noteOn.channel});
             }
         }
+        else if (eventType == 0xe0 && dataCount == 2)
+        {
+            track.pitchBends.push_back({absoluteTick,
+                (static_cast<int>(data2) << 7) | static_cast<int>(data1), channel});
+        }
         track.lastTick = absoluteTick;
     }
 
@@ -324,6 +337,7 @@ struct ExportEvent
     int velocity = 0;
     bool noteOn = false;
     int channel = 0;
+    bool pitchBend = false;
 };
 
 QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
@@ -378,9 +392,17 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
             const qint64 end = std::max(start + 1, std::llround(
                 (clip.startBeat + note.startBeat + note.lengthBeats) * exportPpqn));
             const int noteChannel = note.channel >= 0 ? note.channel : channel;
-            events.push_back({start, 1, std::clamp(note.pitch, 0, 127),
+            events.push_back({start, 2, std::clamp(note.pitch, 0, 127),
                               std::clamp(note.velocity, 1, 127), true, noteChannel});
             events.push_back({end, 0, std::clamp(note.pitch, 0, 127), 0, false, noteChannel});
+        }
+        for (const MidiPitchBend& bend : clip.pitchBends)
+        {
+            const qint64 tick = std::max<qint64>(0, std::llround(
+                (clip.startBeat + bend.beat) * exportPpqn));
+            const int value = std::clamp(bend.value, 0, 16383);
+            events.push_back({tick, 1, value & 0x7f, (value >> 7) & 0x7f,
+                              false, bend.channel, true});
         }
     }
     std::stable_sort(events.begin(), events.end(), [](const ExportEvent& left, const ExportEvent& right)
@@ -388,6 +410,7 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
         if (left.tick != right.tick) return left.tick < right.tick;
         if (left.priority != right.priority) return left.priority < right.priority;
         if (left.channel != right.channel) return left.channel < right.channel;
+        if (left.pitchBend && right.pitchBend) return false;
         return left.pitch < right.pitch;
     });
 
@@ -396,7 +419,8 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
     {
         const qint64 tick = std::max(previousTick, event.tick);
         appendVariableLength(track, static_cast<quint32>(tick - previousTick));
-        appendByte(track, static_cast<quint8>((event.noteOn ? 0x90 : 0x80) | (event.channel & 0x0f)));
+        const quint8 eventStatus = event.pitchBend ? 0xe0 : (event.noteOn ? 0x90 : 0x80);
+        appendByte(track, static_cast<quint8>(eventStatus | (event.channel & 0x0f)));
         appendByte(track, static_cast<quint8>(event.pitch));
         appendByte(track, static_cast<quint8>(event.velocity));
         previousTick = tick;
@@ -486,7 +510,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     double longestBeat = 0.0;
     for (const ParsedTrack& sourceTrack : parsedTracks)
     {
-        if (sourceTrack.notes.isEmpty())
+        if (sourceTrack.notes.isEmpty() && sourceTrack.pitchBends.isEmpty())
             continue;
         InstrumentTrack instrument;
         instrument.id = loaded.nextTrackId();
@@ -516,6 +540,17 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             clip.notes.push_back(note);
             longestBeat = std::max(longestBeat, endBeat);
         }
+        for (const RawPitchBend& sourceBend : sourceTrack.pitchBends)
+        {
+            const double bendBeat = static_cast<double>(sourceBend.tick) / ppqn;
+            if (bendBeat > maximumSongBeats)
+            {
+                setError(error, QStringLiteral("This MIDI arrangement exceeds the 16,384 beat limit."));
+                return false;
+            }
+            clip.pitchBends.push_back({sourceBend.channel, sourceBend.value, bendBeat});
+            longestBeat = std::max(longestBeat, bendBeat);
+        }
         const double barLength = loaded.quarterNotesPerBar();
         clip.lengthBeats = std::clamp(std::ceil(longestBeat / barLength) * barLength,
                                       std::max(0.25, barLength), maximumSongBeats);
@@ -524,7 +559,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     }
     if (loaded.tracks.isEmpty())
     {
-        setError(error, QStringLiteral("The MIDI file contains no playable note events."));
+        setError(error, QStringLiteral("The MIDI file contains no playable note or pitch-bend events."));
         return false;
     }
     const double barLength = loaded.quarterNotesPerBar();

@@ -124,6 +124,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     project = std::move(newProject);
     sampleRate = std::max(1.0, newSampleRate);
     notes.clear();
+    pitchBendEvents.clear();
+    trackPitchBends.clear();
     activeNotes.clear();
     audioRegions.clear();
     activeAudioRegions.clear();
@@ -158,6 +160,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackPeakLevels.clear();
     hasBusSolo = false;
     nextStartIndex = 0;
+    nextPitchBendIndex = 0;
     nextAudioStartIndex = 0;
     lastFrame = -1;
     if (!project)
@@ -166,6 +169,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixAutomations.reserve(static_cast<size_t>(project->tracks.size()));
     trackMixValues.resize(static_cast<size_t>(project->tracks.size()));
     liveTrackMixOverrides.resize(static_cast<size_t>(project->tracks.size()));
+    trackPitchBends.assign(static_cast<size_t>(project->tracks.size()), {});
     trackEqualizerGains.reserve(static_cast<size_t>(project->tracks.size()));
     trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
     trackEffectStates.resize(static_cast<size_t>(project->tracks.size()));
@@ -347,9 +351,16 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     for (const InstrumentTrack& track : project->tracks)
         hasTrackSolo = hasTrackSolo || track.solo;
 
+    int synthChannel = 0;
     for (size_t trackIndex = 0; trackIndex < static_cast<size_t>(project->tracks.size()); ++trackIndex)
     {
         const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+        int trackMidiChannel = 9;
+        if (track.instrumentType == InstrumentType::Synth)
+        {
+            const int channelSlot = synthChannel++ % 15;
+            trackMidiChannel = channelSlot < 9 ? channelSlot : channelSlot + 1;
+        }
         const auto busPosition = busIndexById.find(track.outputBusId);
         const int busIndex = busPosition == busIndexById.end() ? -1 : busPosition->second;
         trackBusIndices[trackIndex] = busIndex;
@@ -394,6 +405,17 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 audioRegions.push_back(std::move(region));
                 continue;
             }
+            for (const MidiPitchBend& bend : clip.pitchBends)
+            {
+                PitchBendEvent event;
+                event.frame = static_cast<qint64>(std::llround(
+                    (clip.startBeat + bend.beat) * sampleRate * 60.0 / project->tempoBpm));
+                event.trackIndex = trackIndex;
+                event.channel = std::clamp(bend.channel, 0, 15);
+                event.semitones = (static_cast<float>(std::clamp(bend.value, 0, 16383)) - 8192.0f) /
+                                  8192.0f * 2.0f;
+                pitchBendEvents.push_back(event);
+            }
             for (const MidiNote& note : clip.notes)
             {
                 if (track.instrumentType == InstrumentType::DrumRack)
@@ -437,11 +459,13 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     track.releaseSeconds * sampleRate)));
                 voice.trackIndex = trackIndex;
                 voice.sustainLevel = track.sustainLevel;
-                voice.frequency = 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0);
+                voice.baseFrequency = 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0);
+                voice.frequency = voice.baseFrequency;
                 voice.amplitude = (track.instrumentType == InstrumentType::DrumRack ? 0.48f : 0.22f) *
                                   static_cast<float>(note.velocity) / 127.0f;
                 voice.waveform = track.waveform;
                 voice.midiPitch = note.pitch;
+                voice.midiChannel = note.channel >= 0 ? note.channel : trackMidiChannel;
                 voice.percussion = track.instrumentType == InstrumentType::DrumRack;
                 if (voice.percussion)
                 {
@@ -458,6 +482,13 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     {
         return left.startFrame < right.startFrame;
     });
+    std::stable_sort(pitchBendEvents.begin(), pitchBendEvents.end(),
+        [](const PitchBendEvent& left, const PitchBendEvent& right)
+        {
+            if (left.frame != right.frame) return left.frame < right.frame;
+            if (left.trackIndex != right.trackIndex) return left.trackIndex < right.trackIndex;
+            return left.channel < right.channel;
+        });
     std::sort(audioRegions.begin(), audioRegions.end(), [](const AudioRegion& left, const AudioRegion& right)
     {
         return left.startFrame < right.startFrame;
@@ -484,7 +515,10 @@ void SynthRenderer::resetTransport()
     std::fill(busFrameTouched.begin(), busFrameTouched.end(), 0);
     touchedBusIndices.clear();
     nextStartIndex = 0;
+    nextPitchBendIndex = 0;
     nextAudioStartIndex = 0;
+    for (std::array<float, 16>& bends : trackPitchBends)
+        bends.fill(0.0f);
     lastFrame = -1;
 }
 
@@ -1006,15 +1040,46 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         activeAudioRegions.clear();
         resetTrackEqualizers();
         nextStartIndex = 0;
+        nextPitchBendIndex = 0;
         nextAudioStartIndex = 0;
+        for (std::array<float, 16>& bends : trackPitchBends)
+            bends.fill(0.0f);
     }
     lastFrame = projectFrame;
     const double projectBeat = static_cast<double>(projectFrame) * project->tempoBpm /
                                (60.0 * sampleRate);
 
     StereoSample sample;
+    while (nextPitchBendIndex < pitchBendEvents.size() &&
+           pitchBendEvents[nextPitchBendIndex].frame <= projectFrame)
+    {
+        const PitchBendEvent& bend = pitchBendEvents[nextPitchBendIndex++];
+        if (bend.trackIndex >= trackPitchBends.size())
+            continue;
+        trackPitchBends[bend.trackIndex][static_cast<size_t>(bend.channel)] = bend.semitones;
+        const double bendRatio = std::pow(2.0, static_cast<double>(bend.semitones) / 12.0);
+        for (const size_t index : activeNotes)
+        {
+            VoiceNote& voice = notes[index];
+            if (!voice.percussion && voice.trackIndex == bend.trackIndex &&
+                voice.midiChannel == bend.channel)
+                voice.frequency = voice.baseFrequency * bendRatio;
+        }
+    }
+
     while (nextStartIndex < notes.size() && notes[nextStartIndex].startFrame <= projectFrame)
-        activeNotes.push_back(nextStartIndex++);
+    {
+        const size_t index = nextStartIndex++;
+        VoiceNote& voice = notes[index];
+        if (voice.trackIndex < trackPitchBends.size())
+        {
+            const float semitones = trackPitchBends[voice.trackIndex][
+                static_cast<size_t>(voice.midiChannel)];
+            voice.frequency = voice.baseFrequency * std::pow(2.0,
+                static_cast<double>(semitones) / 12.0);
+        }
+        activeNotes.push_back(index);
+    }
 
     activeNotes.erase(std::remove_if(activeNotes.begin(), activeNotes.end(), [&](size_t index)
     {

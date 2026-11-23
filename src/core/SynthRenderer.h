@@ -41,11 +41,21 @@ private:
         qint64 releaseFrames = 1;
         size_t trackIndex = 0;
         double frequency = 440.0;
+        double baseFrequency = 440.0;
         float amplitude = 0.0f;
         float sustainLevel = 1.0f;
         SynthWaveform waveform = SynthWaveform::Sine;
         int midiPitch = 60;
+        int midiChannel = 0;
         bool percussion = false;
+    };
+
+    struct PitchBendEvent
+    {
+        qint64 frame = 0;
+        size_t trackIndex = 0;
+        int channel = 0;
+        float semitones = 0.0f;
     };
 
     struct AudioRegion
@@ -168,10 +178,13 @@ private:
     std::vector<float> trackPeakLevels;
     std::vector<EffectState> masterEffectStates;
     std::vector<VoiceNote> notes;
+    std::vector<PitchBendEvent> pitchBendEvents;
+    std::vector<std::array<float, 16>> trackPitchBends;
     std::vector<size_t> activeNotes;
     std::vector<AudioRegion> audioRegions;
     std::vector<size_t> activeAudioRegions;
     size_t nextStartIndex = 0;
+    size_t nextPitchBendIndex = 0;
     size_t nextAudioStartIndex = 0;
     qint64 lastFrame = -1;
     double sampleRate = 48000.0;
