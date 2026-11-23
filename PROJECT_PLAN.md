@@ -29,7 +29,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Playlist with multi-track MIDI clips and basic mixer controls
 - [x] 16-step sequencer and synthesized drum rack
 - [x] Editable clip length and common time signatures
-- [x] Standard MIDI File import (formats 0/1 PPQN or SMPTE, format 2 PPQN) and format 1 export; format 2 sequences are arranged consecutively with tempo maps
+- [x] Standard MIDI File import (formats 0–2 with PPQN or SMPTE) and format 1 export; format 2 sequences are arranged consecutively with tempo maps
 - [x] Count-in and metronome
 - [x] Linear tempo ramps between Playlist tempo markers with exact beat/time conversion and WAV rendering
 - [x] WAV audio import, Playlist playback, waveform display, and WAV render integration

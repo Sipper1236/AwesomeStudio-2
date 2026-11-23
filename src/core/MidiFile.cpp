@@ -614,11 +614,6 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     double ticksPerSecond = 0.0;
     if (smpteTiming)
     {
-        if (format == 2)
-        {
-            setError(error, QStringLiteral("Format 2 MIDI with SMPTE timing is not supported."));
-            return false;
-        }
         const int frameCode = static_cast<int>(static_cast<qint8>(division >> 8));
         const int ticksPerFrame = division & 0x00ff;
         double framesPerSecond = 0.0;
@@ -765,6 +760,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     }
 
     QVector<double> sequenceStartBeats(parsedTracks.size(), 0.0);
+    QVector<ProjectData> sequenceTimingMaps(parsedTracks.size());
     double sequenceEndBeat = 0.0;
     if (format == 2)
     {
@@ -780,23 +776,56 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             sequenceStartBeats[trackIndex] = sequenceEndBeat;
             if (trackIndex > 0)
                 tempoChanges.push_back({sequenceEndBeat, track.tempoBpm});
-            for (const RawTempoChange& change : track.tempoEvents)
-            {
-                const double beat = sequenceEndBeat +
-                                    static_cast<double>(change.tick) / ppqn;
-                if (beat > maximumSongBeats || tempoChanges.size() >= 1000)
-                {
-                    setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
-                    return false;
-                }
-                tempoChanges.push_back({beat, change.bpm});
-            }
 
-            double localEndBeat = static_cast<double>(track.lastTick) / ppqn;
+            ProjectData& sequenceTimingMap = sequenceTimingMaps[trackIndex];
+            sequenceTimingMap.tempoBpm = track.tempoBpm;
+            if (smpteTiming)
+            {
+                double previousSeconds = 0.0;
+                double localBeat = 0.0;
+                double activeTempo = std::clamp(track.tempoBpm, 20.0, 300.0);
+                for (const RawTempoChange& change : track.tempoEvents)
+                {
+                    const double seconds = static_cast<double>(change.tick) / ticksPerSecond;
+                    localBeat += std::max(0.0, seconds - previousSeconds) * activeTempo / 60.0;
+                    if (localBeat > maximumSongBeats || tempoChanges.size() >= 1000)
+                    {
+                        setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
+                        return false;
+                    }
+                    sequenceTimingMap.tempoChanges.push_back({localBeat, change.bpm});
+                    tempoChanges.push_back({sequenceEndBeat + localBeat, change.bpm});
+                    previousSeconds = seconds;
+                    activeTempo = std::clamp(change.bpm, 20.0, 300.0);
+                }
+            }
+            else
+            {
+                for (const RawTempoChange& change : track.tempoEvents)
+                {
+                    const double localBeat = static_cast<double>(change.tick) / ppqn;
+                    if (localBeat > maximumSongBeats || tempoChanges.size() >= 1000)
+                    {
+                        setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
+                        return false;
+                    }
+                    tempoChanges.push_back({sequenceEndBeat + localBeat, change.bpm});
+                }
+            }
+            sequenceTimingMap.normalize();
+
+            const auto localTickToBeat = [smpteTiming, ppqn, ticksPerSecond,
+                                          &sequenceTimingMap](qint64 tick)
+            {
+                return smpteTiming
+                    ? sequenceTimingMap.beatAtSeconds(static_cast<double>(tick) / ticksPerSecond)
+                    : static_cast<double>(tick) / ppqn;
+            };
+            double localEndBeat = localTickToBeat(track.lastTick);
             for (const RawNote& note : track.notes)
-                localEndBeat = std::max(localEndBeat, static_cast<double>(note.endTick) / ppqn);
+                localEndBeat = std::max(localEndBeat, localTickToBeat(note.endTick));
             for (const RawPitchBend& bend : track.pitchBends)
-                localEndBeat = std::max(localEndBeat, static_cast<double>(bend.tick) / ppqn);
+                localEndBeat = std::max(localEndBeat, localTickToBeat(bend.tick));
             const double sequenceLength = std::max(barLength,
                 std::ceil(localEndBeat / barLength) * barLength);
             if (!std::isfinite(sequenceLength) || sequenceEndBeat + sequenceLength > maximumSongBeats)
@@ -817,8 +846,11 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     timingMap.tempoBpm = tempo;
     timingMap.tempoChanges = tempoChanges;
     timingMap.normalize();
-    const auto tickToBeat = [smpteTiming, ppqn, ticksPerSecond, &timingMap](qint64 tick)
+    const auto tickToBeat = [smpteTiming, format, ppqn, ticksPerSecond,
+                             &timingMap, &sequenceTimingMaps](qsizetype trackIndex, qint64 tick)
     {
+        if (smpteTiming && format == 2)
+            return sequenceTimingMaps[trackIndex].beatAtSeconds(static_cast<double>(tick) / ticksPerSecond);
         if (!smpteTiming)
             return static_cast<double>(tick) / ppqn;
         return timingMap.beatAtSeconds(static_cast<double>(tick) / ticksPerSecond);
@@ -861,11 +893,11 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
         clip.name = format == 2 ? QStringLiteral("Imported sequence")
                                 : QStringLiteral("Imported pattern");
         clip.startBeat = trackStartBeat;
-        double trackEndBeat = tickToBeat(sourceTrack.lastTick);
+        double trackEndBeat = tickToBeat(sourceTrackIndex, sourceTrack.lastTick);
         for (const RawNote& sourceNote : sourceTrack.notes)
         {
-            const double startBeat = tickToBeat(sourceNote.startTick);
-            const double endBeat = tickToBeat(sourceNote.endTick);
+            const double startBeat = tickToBeat(sourceTrackIndex, sourceNote.startTick);
+            const double endBeat = tickToBeat(sourceTrackIndex, sourceNote.endTick);
             if (endBeat > maximumSongBeats)
             {
                 setError(error, QStringLiteral("This MIDI arrangement exceeds the 16,384 beat limit."));
@@ -884,7 +916,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
         }
         for (const RawPitchBend& sourceBend : sourceTrack.pitchBends)
         {
-            const double bendBeat = tickToBeat(sourceBend.tick);
+            const double bendBeat = tickToBeat(sourceTrackIndex, sourceBend.tick);
             if (bendBeat > maximumSongBeats)
             {
                 setError(error, QStringLiteral("This MIDI arrangement exceeds the 16,384 beat limit."));
