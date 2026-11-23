@@ -334,8 +334,15 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(uiTimer, &QTimer::timeout, this, [this]
     {
         const double beat = audioEngine.positionBeats();
-        if (automationWriteSession.active && !audioEngine.isPlaying())
-            finishAutomationWrite();
+        if (automationWriteSession.active)
+        {
+            if (!audioEngine.isPlaying())
+                finishAutomationWrite();
+            else if (automationWriteModeControl->currentData().toInt() == 1)
+                recordAutomationValue(automationWriteSession.trackId,
+                                      automationWriteSession.parameter,
+                                      automationWriteSession.lastValue);
+        }
         if (recordingPending)
         {
             if (!audioEngine.isPlaying())
@@ -629,6 +636,12 @@ void MainWindow::createToolBars()
     automationLaneParameterControl->setEnabled(false);
     automationLaneParameterControl->setToolTip(tr("Automation parameter shown in the Playlist lanes"));
     arrangementBar->addWidget(automationLaneParameterControl);
+    automationWriteModeControl = new QComboBox(arrangementBar);
+    automationWriteModeControl->addItem(tr("Touch"), 0);
+    automationWriteModeControl->addItem(tr("Latch"), 1);
+    automationWriteModeControl->setFixedWidth(82);
+    automationWriteModeControl->setToolTip(tr("Touch stops writing when you release the Mixer control; Latch keeps writing its last value until playback stops or Write is disarmed"));
+    arrangementBar->addWidget(automationWriteModeControl);
     automationWriteAction = new QAction(tr("Write automation"), this);
     automationWriteAction->setCheckable(true);
     automationWriteAction->setToolTip(tr("Record the selected volume or pan control while the transport plays"));
@@ -648,9 +661,21 @@ void MainWindow::createToolBars()
     {
         automationLaneParameterControl->setEnabled(enabled || automationViewAction->isChecked());
         if (enabled)
-            statusBar()->showMessage(tr("Write is armed. Start playback and move the selected track control in the Mixer."), 6000);
+            statusBar()->showMessage(automationWriteModeControl->currentData().toInt() == 1
+                ? tr("Latch is armed. Move a selected Mixer control; its last value keeps writing until playback stops or Write is disarmed.")
+                : tr("Touch is armed. Start playback and move the selected track control in the Mixer."), 6000);
         else
             finishAutomationWrite();
+    });
+    connect(automationWriteModeControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int)
+    {
+        if (automationWriteSession.active)
+            finishAutomationWrite();
+        if (automationWriteAction->isChecked())
+            statusBar()->showMessage(automationWriteModeControl->currentData().toInt() == 1
+                ? tr("Latch is armed. Move a selected Mixer control; its last value keeps writing until playback stops or Write is disarmed.")
+                : tr("Touch is armed. Start playback and move the selected track control in the Mixer."), 5000);
     });
     connect(automationLaneParameterControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int index)
@@ -1295,7 +1320,8 @@ void MainWindow::refreshMixer()
         connect(volume, &QSlider::sliderReleased, this, [this, trackId]
         {
             if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
-                automationWriteSession.parameter == 0)
+                automationWriteSession.parameter == 0 &&
+                automationWriteModeControl->currentData().toInt() == 0)
                 finishAutomationWrite();
         });
         connect(pan, &QSlider::sliderPressed, this, [this, trackId, pan]
@@ -1305,7 +1331,8 @@ void MainWindow::refreshMixer()
         connect(pan, &QSlider::sliderReleased, this, [this, trackId]
         {
             if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
-                automationWriteSession.parameter == 1)
+                automationWriteSession.parameter == 1 &&
+                automationWriteModeControl->currentData().toInt() == 0)
                 finishAutomationWrite();
         });
 
@@ -1337,7 +1364,7 @@ void MainWindow::refreshMixer()
                 automationWriteSession.parameter == 0)
             {
                 recordAutomationValue(trackId, 0, level);
-                if (!volume->isSliderDown())
+                if (!volume->isSliderDown() && automationWriteModeControl->currentData().toInt() == 0)
                     automationWriteIdleTimer->start(250);
                 return;
             }
@@ -1349,7 +1376,7 @@ void MainWindow::refreshMixer()
                     automationWriteSession.parameter == 0)
                 {
                     recordAutomationValue(trackId, 0, level);
-                    if (!volume->isSliderDown())
+                    if (!volume->isSliderDown() && automationWriteModeControl->currentData().toInt() == 0)
                         automationWriteIdleTimer->start(250);
                     return;
                 }
@@ -1369,7 +1396,7 @@ void MainWindow::refreshMixer()
                 automationWriteSession.parameter == 1)
             {
                 recordAutomationValue(trackId, 1, balance);
-                if (!pan->isSliderDown())
+                if (!pan->isSliderDown() && automationWriteModeControl->currentData().toInt() == 0)
                     automationWriteIdleTimer->start(250);
                 return;
             }
@@ -1381,7 +1408,7 @@ void MainWindow::refreshMixer()
                     automationWriteSession.parameter == 1)
                 {
                     recordAutomationValue(trackId, 1, balance);
-                    if (!pan->isSliderDown())
+                    if (!pan->isSliderDown() && automationWriteModeControl->currentData().toInt() == 0)
                         automationWriteIdleTimer->start(250);
                     return;
                 }
@@ -1767,6 +1794,7 @@ void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float valu
     automationWriteSession.trackId = trackId;
     automationWriteSession.parameter = parameter;
     automationWriteSession.initialValue = value;
+    automationWriteSession.lastValue = value;
     automationWriteSession.lastSampleBeat = beat;
     automationWriteSession.lastPointBeat = beat;
     automationWriteSession.before = points;
@@ -1811,6 +1839,7 @@ void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float val
     automationWriteSession.lastSampleBeat = beat;
     automationWriteSession.changed = automationWriteSession.changed ||
                                      std::abs(value - automationWriteSession.initialValue) > 1.0e-6f;
+    automationWriteSession.lastValue = value;
     audioEngine.setLiveTrackMixOverride(trackId, parameter, value);
 }
 

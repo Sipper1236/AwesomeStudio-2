@@ -16,12 +16,12 @@ Status describes the executable built by the repository's CMake target. Source f
 | Audio recording | Select an input device, record mono/stereo WAV takes, and add them as new Playlist audio tracks; uses count-in when output is available, works without output, and respects project and WAV size limits | Input monitoring, latency compensation, armed tracks, punch recording, take comping |
 | MIDI input | ALSA input device enumeration, polyphonic live monitoring for synth and sampled drum-rack notes, and note recording on Linux; note on/off, overlapping same-pitch notes, per-note channel preservation, count-in, loop timing, pattern assignment, and undo/redo | Native MIDI backends on other platforms, controller mapping |
 | Plugins and effects | Not implemented in the executable | VST3/CLAP hosting, parameter automation, bundled effects |
-| Automation | Per-track volume and pan keyframes with graphical Playlist lanes, click-to-add and drag-to-edit points, right-click/Delete removal, undo/redo, linear playback/render interpolation, and touch recording from Mixer controls during playback | Latch/trim modes, curved segments, plugin parameter automation |
+| Automation | Per-track volume and pan keyframes with graphical Playlist lanes, click-to-add and drag-to-edit points, right-click/Delete removal, undo/redo, linear playback/render interpolation, and touch/latch recording from Mixer controls during playback | Trim mode, curved segments, plugin parameter automation |
 | Collaboration and notation | Not implemented | Score view, collaboration, session interchange |
 
 ## Next slices
 
-1. Add automation latch/trim modes and plugin parameter automation with plugin hosting.
+1. Add automation trim mode and plugin parameter automation with plugin hosting.
 2. Add controller mapping and native MIDI input backends for other platforms; add audio monitoring, latency compensation, punch recording, and take comping.
 3. Add audio fade curves, crossfades, markers, and portable media packaging or relinking.
 4. Add mixer buses, sends, meters, effects inserts, and a real-time routing graph.

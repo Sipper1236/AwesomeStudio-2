@@ -167,6 +167,7 @@ private:
     QAction* midiMonitorAction = nullptr;
     QAction* automationViewAction = nullptr;
     QAction* automationWriteAction = nullptr;
+    QComboBox* automationWriteModeControl = nullptr;
     QComboBox* automationLaneParameterControl = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
     std::unique_ptr<MidiInput> midiInput;
@@ -203,6 +204,7 @@ private:
         quint64 trackId = 0;
         int parameter = 0;
         float initialValue = 0.0f;
+        float lastValue = 0.0f;
         double lastSampleBeat = -1.0;
         double lastPointBeat = -1.0;
         QVector<AutomationPoint> before;

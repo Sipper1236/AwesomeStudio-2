@@ -35,12 +35,13 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 
 - [x] Basic left/right edge trimming for WAV audio regions
 - [ ] Fade curves, crossfades, markers, comping, and portable media packaging
-- [ ] Mixer buses, routing, sends, inserts, and peak meters
+- [ ] Mixer buses, routing, sends, and inserts
 - [ ] Bundled EQ, delay, compression, and reverb in the playback graph
 - [x] Graphical per-track volume/pan automation lanes with undoable point editing
 - [x] Touch recording for volume/pan automation from Mixer controls during playback
+- [x] Latch recording for volume/pan automation until playback stops or Write is disarmed
 - [x] Realtime per-track and master peak meters in the Mixer
-- [ ] Automation latch/trim modes and plugin parameter automation
+- [ ] Automation trim mode and plugin parameter automation
 
 ### 3. Plugin and production workflow
 
