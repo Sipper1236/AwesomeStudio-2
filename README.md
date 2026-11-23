@@ -7,7 +7,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 ## Current workflow
 
 - Add instrument tracks and patterns from the Browser or toolbar. Click an empty Playlist row to add a clip; drag clips in time or between tracks, and double-click a clip to open its piano roll.
-- Choose one of seven factory synth presets or save and reuse your own patches from the Browser. Patches store both oscillators, amplitude ADSR, filter, and filter-envelope settings in the user's app data; each project still stores its own instrument settings.
+- Choose one of seven factory synth presets or save and reuse your own patches from the Browser. Right-click the preset selector to import, export, or remove saved patches. Patches store both oscillators, amplitude ADSR, filter, and filter-envelope settings in the user's app data; each project still stores its own instrument settings.
 - Each drum-rack pad can use five WAV layers across velocity, with adjustable split points, per-pad waveform editors with draggable start/end boundaries for manual slicing, and layer-specific tuning, looping, and ADSR overrides; missing layers fall back to an assigned sample.
 - Draw, move, resize, select, and delete notes across the full 128-note MIDI range in a scrollable piano roll. Shift-click to select notes for group movement.
 - Double-click a note or choose **Edit → Note properties…** to enter exact pitch, start, length, velocity, and MIDI channel values. With several notes selected, the dialog can transpose them, shift their starts, or apply a shared length, velocity, or MIDI channel.

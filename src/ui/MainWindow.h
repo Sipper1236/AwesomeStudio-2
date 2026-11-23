@@ -112,6 +112,10 @@ private:
     void applySelectedSynthPreset(int presetIndex);
     void populateSynthPresetControl(int selectedUserPresetIndex = -1);
     void saveSelectedSynthPreset();
+    void showSynthPresetMenu(const QPoint& position);
+    void importSynthPreset();
+    void exportSelectedSynthPreset();
+    void removeSelectedSynthPreset();
     void setSelectedTrackEqualizer(int band, double gainDb);
     void setSelectedTrackEqualizerCrossover(int band, double frequencyHz);
     void setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings);

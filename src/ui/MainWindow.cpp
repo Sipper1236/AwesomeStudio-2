@@ -3115,7 +3115,10 @@ void MainWindow::createDocks()
     synthPresetControl = new QComboBox(synthPresetPanel);
     synthPresetControl->setPlaceholderText(tr("Custom"));
     synthPresetControl->setToolTip(
-        tr("Choose a factory or saved patch. Editing its controls makes a custom sound."));
+        tr("Choose a factory or saved patch. Edit its controls to shape a sound; right-click for patch actions."));
+    synthPresetControl->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(synthPresetControl, &QWidget::customContextMenuRequested,
+            this, &MainWindow::showSynthPresetMenu);
     populateSynthPresetControl();
     auto* saveSynthPresetButton = new QPushButton(tr("Save…"), synthPresetPanel);
     saveSynthPresetButton->setToolTip(tr("Save the selected synth's current sound as a patch"));
@@ -6679,6 +6682,196 @@ void MainWindow::saveSelectedSynthPreset()
 
     populateSynthPresetControl(selectedUserPresetIndex);
     statusBar()->showMessage(tr("Saved synth patch “%1”").arg(name), 3000);
+}
+
+void MainWindow::showSynthPresetMenu(const QPoint& position)
+{
+    if (synthPresetControl == nullptr)
+        return;
+
+    const int index = synthPresetControl->currentIndex();
+    const bool customPreset = index >= 0 &&
+        synthPresetControl->itemData(index, customSynthPresetRole).toBool();
+    QMenu menu(synthPresetControl);
+    QAction* importAction = menu.addAction(tr("Import patch…"));
+    QAction* exportAction = menu.addAction(tr("Export selected patch…"));
+    QAction* removeAction = menu.addAction(tr("Remove selected patch"));
+    exportAction->setEnabled(customPreset);
+    removeAction->setEnabled(customPreset);
+    connect(importAction, &QAction::triggered, this, &MainWindow::importSynthPreset);
+    connect(exportAction, &QAction::triggered,
+            this, &MainWindow::exportSelectedSynthPreset);
+    connect(removeAction, &QAction::triggered,
+            this, &MainWindow::removeSelectedSynthPreset);
+    menu.exec(synthPresetControl->mapToGlobal(position));
+}
+
+void MainWindow::importSynthPreset()
+{
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import synth patch"), QString(),
+        tr("Awesome Studio synth patches (*.awspatch);;JSON files (*.json)"));
+    if (path.isEmpty())
+        return;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024)
+    {
+        QMessageBox::warning(this, tr("Could not import synth patch"),
+            tr("The patch file could not be read or is larger than 1 MiB."));
+        return;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    const QJsonObject root = document.object();
+    const QJsonObject preset = root.value(QStringLiteral("preset")).toObject();
+    SynthPresetSettings settings;
+    const QString name = preset.value(QStringLiteral("name")).toString().trimmed();
+    if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
+        root.value(QStringLiteral("format")).toString() !=
+            QStringLiteral("awesome-studio-synth-patch") ||
+        root.value(QStringLiteral("version")).toInt() != 1 || name.isEmpty() ||
+        !synthPresetSettingsFromJson(preset.value(QStringLiteral("settings")).toObject(),
+                                     settings))
+    {
+        QMessageBox::warning(this, tr("Could not import synth patch"),
+            tr("This file is not a valid Awesome Studio synth patch."));
+        return;
+    }
+
+    for (const FactorySynthPreset& factoryPreset : factorySynthPresets)
+    {
+        if (name.compare(QString::fromLatin1(factoryPreset.name), Qt::CaseInsensitive) == 0)
+        {
+            QMessageBox::information(this, tr("Patch name already used"),
+                tr("Rename this patch before importing it; that name belongs to a factory patch."));
+            return;
+        }
+    }
+
+    QString error;
+    QVector<QJsonObject> presets = loadUserSynthPresets(&error);
+    if (!error.isEmpty())
+    {
+        QMessageBox::warning(this, tr("Could not import synth patch"), error);
+        return;
+    }
+    int selectedUserPresetIndex = -1;
+    for (int index = 0; index < presets.size(); ++index)
+    {
+        if (presets[index].value(QStringLiteral("name")).toString()
+                .compare(name, Qt::CaseInsensitive) != 0)
+            continue;
+        const auto answer = QMessageBox::question(this, tr("Replace synth patch"),
+            tr("A patch named “%1” already exists. Replace it with the imported patch?")
+                .arg(name), QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+        selectedUserPresetIndex = index;
+        break;
+    }
+
+    const QJsonObject importedPreset{
+        {QStringLiteral("name"), name},
+        {QStringLiteral("settings"), preset.value(QStringLiteral("settings")).toObject()}
+    };
+    if (selectedUserPresetIndex >= 0)
+        presets[selectedUserPresetIndex] = importedPreset;
+    else
+    {
+        selectedUserPresetIndex = presets.size();
+        presets.append(importedPreset);
+    }
+    if (!saveUserSynthPresets(presets, &error))
+    {
+        QMessageBox::warning(this, tr("Could not import synth patch"), error);
+        return;
+    }
+
+    populateSynthPresetControl(selectedUserPresetIndex);
+    statusBar()->showMessage(tr("Imported synth patch “%1”").arg(name), 3000);
+}
+
+void MainWindow::exportSelectedSynthPreset()
+{
+    if (synthPresetControl == nullptr)
+        return;
+    const int index = synthPresetControl->currentIndex();
+    if (index < 0 || !synthPresetControl->itemData(index, customSynthPresetRole).toBool())
+        return;
+
+    QString suggestedName = synthPresetControl->itemText(index);
+    for (QChar& character : suggestedName)
+    {
+        if (QStringLiteral("/\\:*?\"<>|").contains(character))
+            character = QLatin1Char('_');
+    }
+    const QString path = QFileDialog::getSaveFileName(this, tr("Export synth patch"),
+        QDir::home().filePath(suggestedName + QStringLiteral(".awspatch")),
+        tr("Awesome Studio synth patches (*.awspatch)"));
+    if (path.isEmpty())
+        return;
+    QString patchPath = path;
+    if (!patchPath.endsWith(QStringLiteral(".awspatch"), Qt::CaseInsensitive))
+        patchPath += QStringLiteral(".awspatch");
+
+    const QJsonObject patch{
+        {QStringLiteral("format"), QStringLiteral("awesome-studio-synth-patch")},
+        {QStringLiteral("version"), 1},
+        {QStringLiteral("preset"), QJsonObject{
+            {QStringLiteral("name"), synthPresetControl->itemText(index)},
+            {QStringLiteral("settings"),
+             synthPresetControl->itemData(index).value<QJsonObject>()}
+        }}
+    };
+    const QByteArray contents = QJsonDocument(patch).toJson(QJsonDocument::Indented);
+    QSaveFile file(patchPath);
+    if (!file.open(QIODevice::WriteOnly) || file.write(contents) != contents.size() ||
+        !file.commit())
+    {
+        QMessageBox::warning(this, tr("Could not export synth patch"), file.errorString());
+        return;
+    }
+    statusBar()->showMessage(tr("Exported synth patch to %1").arg(patchPath), 3000);
+}
+
+void MainWindow::removeSelectedSynthPreset()
+{
+    if (synthPresetControl == nullptr)
+        return;
+    const int index = synthPresetControl->currentIndex();
+    if (index < 0 || !synthPresetControl->itemData(index, customSynthPresetRole).toBool())
+        return;
+    const QString name = synthPresetControl->itemText(index);
+    const auto answer = QMessageBox::question(this, tr("Remove synth patch"),
+        tr("Remove “%1” from your patch library?").arg(name),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    QString error;
+    QVector<QJsonObject> presets = loadUserSynthPresets(&error);
+    if (!error.isEmpty())
+    {
+        QMessageBox::warning(this, tr("Could not remove synth patch"), error);
+        return;
+    }
+    for (int presetIndex = 0; presetIndex < presets.size(); ++presetIndex)
+    {
+        if (presets[presetIndex].value(QStringLiteral("name")).toString()
+                .compare(name, Qt::CaseInsensitive) == 0)
+        {
+            presets.removeAt(presetIndex);
+            break;
+        }
+    }
+    if (!saveUserSynthPresets(presets, &error))
+    {
+        QMessageBox::warning(this, tr("Could not remove synth patch"), error);
+        return;
+    }
+
+    populateSynthPresetControl();
+    statusBar()->showMessage(tr("Removed synth patch “%1”").arg(name), 3000);
 }
 
 void MainWindow::setSelectedTrackEqualizer(int band, double gainDb)
