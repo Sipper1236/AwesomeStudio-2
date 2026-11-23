@@ -94,6 +94,7 @@ private:
     void moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
                          double lengthBeats, qint64 audioStartFrame);
+    void relinkAudioRegion(quint64 trackId, quint64 clipId);
     void setSelectedAudioFade(bool fadeIn, double beats);
     void setSelectedAudioFadeCurve(bool fadeIn, int curve);
     void setSelectedAudioFadeShape(bool fadeIn, double shape);

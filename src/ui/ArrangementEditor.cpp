@@ -475,7 +475,19 @@ protected:
             if (hit >= 0)
             {
                 const MidiClip clip = track.clips[hit];
-                emit owner->clipRemoved(track.id, clip.id);
+                if (clip.isAudioRegion())
+                {
+                    QMenu menu(this);
+                    QAction* relinkAction = menu.addAction(tr("Relink WAV…"));
+                    QAction* removeAction = menu.addAction(tr("Remove region"));
+                    QAction* chosen = menu.exec(event->globalPosition().toPoint());
+                    if (chosen == relinkAction)
+                        emit owner->audioRegionRelinkRequested(track.id, clip.id);
+                    else if (chosen == removeAction)
+                        emit owner->clipRemoved(track.id, clip.id);
+                }
+                else
+                    emit owner->clipRemoved(track.id, clip.id);
             }
             return;
         }

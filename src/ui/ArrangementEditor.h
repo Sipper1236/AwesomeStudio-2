@@ -25,6 +25,7 @@ signals:
     void clipMoved(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
     void audioRegionTrimmed(quint64 trackId, quint64 clipId, double startBeat,
                             double lengthBeats, qint64 audioStartFrame);
+    void audioRegionRelinkRequested(quint64 trackId, quint64 clipId);
     void trackSelected(quint64 trackId);
     void automationChanged(quint64 trackId, int parameter,
                            const QVector<AutomationPoint>& before,

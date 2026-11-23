@@ -901,6 +901,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(arrangementEditor, &ArrangementEditor::audioRegionTrimmed, this,
             [this](quint64 trackId, quint64 clipId, double startBeat, double lengthBeats, qint64 audioStartFrame)
             { trimAudioRegion(trackId, clipId, startBeat, lengthBeats, audioStartFrame); });
+    connect(arrangementEditor, &ArrangementEditor::audioRegionRelinkRequested, this,
+            &MainWindow::relinkAudioRegion);
     connect(arrangementEditor, &ArrangementEditor::automationChanged, this,
             [this](quint64 trackId, int parameter, const QVector<AutomationPoint>& before,
                    const QVector<AutomationPoint>& after)
@@ -3944,6 +3946,48 @@ void MainWindow::trimAudioRegion(quint64 trackId, quint64 clipId, double startBe
     refreshProjectUi();
     refreshDirtyState();
     statusBar()->showMessage(tr("Audio region trimmed"), 1800);
+}
+
+void MainWindow::relinkAudioRegion(quint64 trackId, quint64 clipId)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    MidiClip* clip = project.findClip(trackId, clipId);
+    if (track == nullptr || clip == nullptr || track->instrumentType != InstrumentType::Audio ||
+        !clip->isAudioRegion())
+        return;
+    const QString path = QFileDialog::getOpenFileName(this, tr("Relink audio region"),
+        QFileInfo(clip->audioSourcePath).absolutePath(), tr("WAV audio (*.wav)"));
+    if (path.isEmpty())
+        return;
+
+    std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
+    QString error;
+    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
+    {
+        QMessageBox::critical(this, tr("Could not relink audio region"), error);
+        return;
+    }
+
+    const QString previousPath = clip->audioSourcePath;
+    const std::shared_ptr<const AudioAsset> previousSource = clip->audioSource;
+    const qint64 previousStartFrame = clip->audioStartFrame;
+    clip->audioSourcePath = asset->path;
+    clip->audioSource = asset;
+    clip->audioStartFrame = std::clamp<qint64>(clip->audioStartFrame, 0,
+                                               std::max<qint64>(0, asset->frameCount() - 1));
+    if (projectAudioBytes() > AudioFile::maximumProjectDecodedBytes)
+    {
+        clip->audioSourcePath = previousPath;
+        clip->audioSource = previousSource;
+        clip->audioStartFrame = previousStartFrame;
+        QMessageBox::warning(this, tr("Audio memory limit"),
+                             tr("This project can load up to 512 MiB of decoded audio. Remove another audio source first."));
+        return;
+    }
+
+    settingsDirty = true;
+    refreshProjectUi();
+    statusBar()->showMessage(tr("Relinked audio region to %1").arg(QFileInfo(path).fileName()), 3000);
 }
 
 void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
