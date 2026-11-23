@@ -2311,7 +2311,7 @@ void MainWindow::createActions()
     recordAction = new QAction(tr("Record audio…"), this);
     recordAction->setCheckable(true);
     recordAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
-    recordAction->setToolTip(tr("Record the selected audio input to a new Playlist track"));
+    recordAction->setToolTip(tr("Record to the armed Audio track, or create a new Playlist track when none is armed"));
     connect(recordAction, &QAction::triggered, this, [this](bool enabled)
     {
         if (enabled)
@@ -2325,10 +2325,10 @@ void MainWindow::createActions()
     audioMonitorAction->setEnabled(false);
     audioMonitorAction->setToolTip(tr("Hear the selected audio input through the armed audio track or Master"));
     connect(audioMonitorAction, &QAction::toggled, this, &MainWindow::setAudioMonitoring);
-    audioMonitorArmAction = new QAction(tr("Arm monitor"), this);
+    audioMonitorArmAction = new QAction(tr("Arm track"), this);
     audioMonitorArmAction->setCheckable(true);
     audioMonitorArmAction->setEnabled(false);
-    audioMonitorArmAction->setToolTip(tr("Route monitored input through the selected Audio track's mixer path. Recording still creates a new track."));
+    audioMonitorArmAction->setToolTip(tr("Record takes and route monitored input through the selected Audio track. When unarmed, monitoring goes to Master and takes create new tracks."));
     connect(audioMonitorArmAction, &QAction::toggled, this, [this](bool armed)
     {
         const InstrumentTrack* track = selectedTrack();
@@ -2341,8 +2341,8 @@ void MainWindow::createActions()
         }
         audioEngine.setAudioInputMonitorTrack(armed ? track->id : 0);
         statusBar()->showMessage(armed
-            ? tr("Armed %1 for input monitoring").arg(track->name)
-            : tr("Input monitoring routed to Master"), 2500);
+            ? tr("Armed %1 for recording and input monitoring").arg(track->name)
+            : tr("Recording will create a new track; input monitoring is routed to Master"), 3000);
     });
 
     midiRecordAction = new QAction(tr("Record MIDI"), this);
@@ -3797,14 +3797,28 @@ void MainWindow::refreshProjectUi()
     if (audioMonitorArmAction != nullptr)
     {
         const bool audioTrackSelected = track != nullptr && track->instrumentType == InstrumentType::Audio;
-        if (!audioTrackSelected && audioMonitorArmAction->isChecked())
+        const bool recordingActive = recordingPending || audioRecorder != nullptr;
+        if (recordingActive && recordingTargetTrackId != 0)
         {
-            const QSignalBlocker monitorArmBlocker(audioMonitorArmAction);
-            audioMonitorArmAction->setChecked(false);
+            if (!audioMonitorArmAction->isChecked())
+            {
+                const QSignalBlocker monitorArmBlocker(audioMonitorArmAction);
+                audioMonitorArmAction->setChecked(true);
+            }
+            audioMonitorArmAction->setEnabled(false);
+            audioEngine.setAudioInputMonitorTrack(recordingTargetTrackId);
         }
-        audioMonitorArmAction->setEnabled(audioTrackSelected);
-        audioEngine.setAudioInputMonitorTrack(audioTrackSelected && audioMonitorArmAction->isChecked()
-                                                  ? track->id : 0);
+        else
+        {
+            if (!audioTrackSelected && audioMonitorArmAction->isChecked())
+            {
+                const QSignalBlocker monitorArmBlocker(audioMonitorArmAction);
+                audioMonitorArmAction->setChecked(false);
+            }
+            audioMonitorArmAction->setEnabled(audioTrackSelected && !recordingActive);
+            audioEngine.setAudioInputMonitorTrack(audioTrackSelected && audioMonitorArmAction->isChecked()
+                                                      ? track->id : 0);
+        }
     }
 
     const QSignalBlocker trackListBlocker(trackList);
@@ -8906,6 +8920,26 @@ void MainWindow::startAudioRecording()
 {
     if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
         return;
+    const InstrumentTrack* armedTrack = audioMonitorArmAction != nullptr &&
+        audioMonitorArmAction->isChecked() ? selectedTrack() : nullptr;
+    const quint64 targetTrackId = armedTrack != nullptr &&
+        armedTrack->instrumentType == InstrumentType::Audio ? armedTrack->id : 0;
+    if (audioMonitorArmAction != nullptr && audioMonitorArmAction->isChecked() && targetTrackId == 0)
+    {
+        QMessageBox::warning(this, tr("Select an Audio track"),
+                             tr("Select an Audio track before recording into an armed track."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+    if (targetTrackId != 0 && armedTrack->clips.size() >= 10000)
+    {
+        QMessageBox::warning(this, tr("Audio track region limit"),
+                             tr("The armed track already has 10,000 regions. Choose another Audio track or disarm it to record to a new track."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
     const bool punchEnabled = punchRecordAction != nullptr && punchRecordAction->isChecked();
     const double punchInBeat = punchInControl == nullptr ? 0.0 : punchInControl->value();
     const double punchOutBeat = punchOutControl == nullptr ? 16.0 : punchOutControl->value();
@@ -8918,7 +8952,7 @@ void MainWindow::startAudioRecording()
         recordAction->setChecked(false);
         return;
     }
-    if (project.tracks.size() >= 256)
+    if (project.tracks.size() >= 256 && targetTrackId == 0)
     {
         QMessageBox::warning(this, tr("Track limit"), tr("A project can contain up to 256 tracks."));
         QSignalBlocker blocker(recordAction);
@@ -9017,6 +9051,7 @@ void MainWindow::startAudioRecording()
     recordingPunchEnabled = punchEnabled;
     recordingPunchInBeat = punchInBeat;
     recordingPunchOutBeat = punchOutBeat;
+    recordingTargetTrackId = targetTrackId;
     recordingPunchPriorLoopEnabled = project.loopEnabled;
     if (punchEnabled)
     {
@@ -9026,6 +9061,7 @@ void MainWindow::startAudioRecording()
     }
     recordingPending = true;
     recordingTransportActive = playbackAvailable;
+    audioMonitorArmAction->setEnabled(false);
     refreshPunchRangeUi();
     audioInputControl->setEnabled(false);
     audioInputCompensationControl->setEnabled(false);
@@ -9103,6 +9139,7 @@ void MainWindow::finishAudioRecording(bool keepTake)
     if (!audioRecorder && !recordingPending)
         return;
 
+    const quint64 targetTrackId = recordingTargetTrackId;
     audioEngine.setAudioInputMonitoring(false);
     if (audioRecorder)
         audioRecorder->setMonitorCallback({});
@@ -9127,6 +9164,7 @@ void MainWindow::finishAudioRecording(bool keepTake)
     recordingPending = false;
     recordingTransportActive = false;
     recordingPunchEnabled = false;
+    recordingTargetTrackId = 0;
     pendingRecordingPath.clear();
     pendingRecordingDeviceId.clear();
     pendingRecordingDeviceName.clear();
@@ -9151,6 +9189,7 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
     refreshAudioInputs();
     refreshMidiInputs();
+    refreshProjectUi();
 
     if (!keepTake)
         return;
@@ -9175,10 +9214,19 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
 
     const QString takeName = QFileInfo(path).completeBaseName();
-    InstrumentTrack track;
-    track.id = project.nextTrackId();
-    track.name = tr("Audio · %1").arg(takeName);
-    track.instrumentType = InstrumentType::Audio;
+    InstrumentTrack* targetTrack = targetTrackId == 0 ? nullptr : project.findTrack(targetTrackId);
+    if (targetTrack != nullptr && targetTrack->instrumentType != InstrumentType::Audio)
+        targetTrack = nullptr;
+    const bool recordingIntoExistingTrack = targetTrack != nullptr;
+    const QString destinationTrackName = recordingIntoExistingTrack
+        ? targetTrack->name : tr("Audio · %1").arg(takeName);
+    InstrumentTrack newTrack;
+    if (!recordingIntoExistingTrack)
+    {
+        newTrack.id = project.nextTrackId();
+        newTrack.name = destinationTrackName;
+        newTrack.instrumentType = InstrumentType::Audio;
+    }
 
     MidiClip clip;
     clip.id = project.nextClipId();
@@ -9225,22 +9273,38 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
     clip.audioSourcePath = asset->path;
     clip.audioSource = asset;
-    track.clips.push_back(std::move(clip));
-    project.tracks.push_back(std::move(track));
+    const quint64 recordedClipId = clip.id;
+    if (recordingIntoExistingTrack)
+    {
+        targetTrack->clips.push_back(std::move(clip));
+        selectedTrackId = targetTrackId;
+        selectedClipId = recordedClipId;
+    }
+    else
+    {
+        newTrack.clips.push_back(std::move(clip));
+        project.tracks.push_back(std::move(newTrack));
+        selectedTrackId = project.tracks.last().id;
+        selectedClipId = project.tracks.last().clips.first().id;
+    }
     project.normalize();
-    selectedTrackId = project.tracks.last().id;
-    selectedClipId = project.tracks.last().clips.first().id;
     settingsDirty = true;
     refreshProjectUi();
     editorTabs->setCurrentWidget(arrangementEditor);
     refreshDirtyState();
 
+    const QString takeDestination = recordingIntoExistingTrack
+        ? tr(" to %1").arg(destinationTrackName) : tr(" to a new audio track");
     if (reachedLimit)
-        statusBar()->showMessage(tr("Recording stopped at the project audio memory or WAV size limit; the take was added."), 6000);
+        statusBar()->showMessage(tr("Recording stopped at the project audio memory or WAV size limit; the take was added%1.")
+                                     .arg(takeDestination), 6000);
     else if (!captureIssue.isEmpty())
-        statusBar()->showMessage(tr("A partial take was added after an input error: %1").arg(captureIssue), 6000);
+        statusBar()->showMessage(tr("A partial take was added%1 after an input error: %2")
+                                     .arg(takeDestination, captureIssue), 6000);
     else
-        statusBar()->showMessage(tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName()), 3500);
+        statusBar()->showMessage(recordingIntoExistingTrack
+            ? tr("Recorded %1 to %2").arg(QFileInfo(path).fileName(), destinationTrackName)
+            : tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName()), 3500);
 }
 
 void MainWindow::startMidiRecording()

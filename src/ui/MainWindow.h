@@ -376,6 +376,7 @@ private:
     QString pendingRecordingPath;
     QByteArray pendingRecordingDeviceId;
     QString pendingRecordingDeviceName;
+    quint64 recordingTargetTrackId = 0;
     double recordingStartBeat = 0.0;
     double recordingInputCompensationMs = 0.0;
     double recordingPunchInBeat = 0.0;
