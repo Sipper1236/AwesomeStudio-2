@@ -9,6 +9,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Add instrument tracks and patterns from the Browser or toolbar. Click an empty Playlist row to add a clip; drag clips in time or between tracks, and double-click a clip to open its piano roll.
 - Draw, move, resize, select, and delete notes across the full 128-note MIDI range in a scrollable piano roll. Shift-click to select notes for group movement.
 - Quantize selected note starts to the current piano-roll grid; when nothing is selected, quantize the whole clip. Quantize edits can be undone.
+- Choose a root key and scale to highlight in-scale pitches; enable **Scale snap** to constrain newly drawn notes and keyboard auditions. Existing notes are left as they are.
 - Set the grid to quarter, eighth, sixteenth, or thirty-second notes, edit velocity, and undo or redo note edits.
 - Play and loop the full arrangement at 20–300 BPM.
 - Enable an accented metronome and set a 1, 2, or 4 bar count-in. Count-in is included in WAV renders.

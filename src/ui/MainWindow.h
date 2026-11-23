@@ -169,6 +169,9 @@ private:
     QAction* automationWriteAction = nullptr;
     QComboBox* automationWriteModeControl = nullptr;
     QComboBox* automationLaneParameterControl = nullptr;
+    QComboBox* pianoRollKeyControl = nullptr;
+    QComboBox* pianoRollScaleControl = nullptr;
+    QAction* pianoRollScaleSnapAction = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
     std::unique_ptr<MidiInput> midiInput;
     QComboBox* midiInputControl = nullptr;

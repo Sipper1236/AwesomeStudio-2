@@ -811,6 +811,49 @@ void MainWindow::createToolBars()
         midiEditor->setSnap(snapControl->itemData(index).toDouble());
     });
     editorBar->addSeparator();
+    editorBar->addWidget(new QLabel(tr("KEY"), editorBar));
+    pianoRollKeyControl = new QComboBox(editorBar);
+    const QStringList pitchClassNames = {
+        tr("C"), tr("C♯"), tr("D"), tr("D♯"), tr("E"), tr("F"),
+        tr("F♯"), tr("G"), tr("G♯"), tr("A"), tr("A♯"), tr("B")
+    };
+    for (const QString& pitchClass : pitchClassNames)
+        pianoRollKeyControl->addItem(pitchClass);
+    pianoRollKeyControl->setFixedWidth(64);
+    pianoRollKeyControl->setToolTip(tr("Root note used to highlight and snap the selected scale"));
+    editorBar->addWidget(pianoRollKeyControl);
+    editorBar->addWidget(new QLabel(tr("SCALE"), editorBar));
+    pianoRollScaleControl = new QComboBox(editorBar);
+    pianoRollScaleControl->addItem(tr("Major"), QVariantList{0, 2, 4, 5, 7, 9, 11});
+    pianoRollScaleControl->addItem(tr("Natural minor"), QVariantList{0, 2, 3, 5, 7, 8, 10});
+    pianoRollScaleControl->addItem(tr("Dorian"), QVariantList{0, 2, 3, 5, 7, 9, 10});
+    pianoRollScaleControl->addItem(tr("Mixolydian"), QVariantList{0, 2, 4, 5, 7, 9, 10});
+    pianoRollScaleControl->addItem(tr("Major pentatonic"), QVariantList{0, 2, 4, 7, 9});
+    pianoRollScaleControl->addItem(tr("Minor pentatonic"), QVariantList{0, 3, 5, 7, 10});
+    pianoRollScaleControl->addItem(tr("Chromatic"), QVariantList{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+    pianoRollScaleControl->setFixedWidth(132);
+    pianoRollScaleControl->setToolTip(tr("Scale used to highlight piano-roll pitches"));
+    editorBar->addWidget(pianoRollScaleControl);
+    pianoRollScaleSnapAction = new QAction(tr("Scale snap"), this);
+    pianoRollScaleSnapAction->setCheckable(true);
+    pianoRollScaleSnapAction->setToolTip(tr("Snap newly drawn notes and keyboard auditions to the selected scale; existing notes are unchanged"));
+    editorBar->addAction(pianoRollScaleSnapAction);
+    const auto applyPianoRollScale = [this]
+    {
+        QVector<int> intervals;
+        for (const QVariant& value : pianoRollScaleControl->currentData().toList())
+            intervals.push_back(value.toInt());
+        midiEditor->setScale(pianoRollKeyControl->currentIndex(), intervals,
+                             pianoRollScaleSnapAction->isChecked());
+    };
+    connect(pianoRollKeyControl, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [applyPianoRollScale](int) { applyPianoRollScale(); });
+    connect(pianoRollScaleControl, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [applyPianoRollScale](int) { applyPianoRollScale(); });
+    connect(pianoRollScaleSnapAction, &QAction::toggled,
+            this, [applyPianoRollScale](bool) { applyPianoRollScale(); });
+    applyPianoRollScale();
+    editorBar->addSeparator();
     editorBar->addWidget(new QLabel(tr("ZOOM"), editorBar));
     zoomControl = new QSlider(Qt::Horizontal, editorBar);
     zoomControl->setRange(48, 132);

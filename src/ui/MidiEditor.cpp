@@ -92,6 +92,25 @@ public:
         snap = std::clamp(beatStep, 1.0 / 64.0, 4.0);
     }
 
+    void setScale(int root, const QVector<int>& intervals, bool snapNotes)
+    {
+        rootPitchClass = std::clamp(root, 0, 11);
+        scaleIntervals.clear();
+        for (const int interval : intervals)
+        {
+            if (interval >= 0 && interval < 12 && !scaleIntervals.contains(interval))
+                scaleIntervals.push_back(interval);
+        }
+        std::sort(scaleIntervals.begin(), scaleIntervals.end());
+        if (scaleIntervals.isEmpty())
+        {
+            for (int interval = 0; interval < 12; ++interval)
+                scaleIntervals.push_back(interval);
+        }
+        snapNewNotesToScale = snapNotes;
+        update();
+    }
+
     void quantizeNotesToGrid()
     {
         if (notes.isEmpty())
@@ -149,12 +168,19 @@ protected:
             const int pitch = highestPitch - row;
             const int y = gridTop + row * rowHeight;
             const bool blackKey = isBlackKey(pitch % 12);
-            const QColor lane = blackKey ? QColor(QStringLiteral("#171c23")) : QColor(QStringLiteral("#1b2129"));
+            const bool inScale = isScalePitch(pitch);
+            const bool rootNote = pitch % 12 == rootPitchClass;
+            const QColor lane = !inScale ? QColor(QStringLiteral("#151a21")) :
+                rootNote ? QColor(QStringLiteral("#213438")) :
+                blackKey ? QColor(QStringLiteral("#1a2429")) : QColor(QStringLiteral("#1d252c"));
             painter.fillRect(QRect(sidebarWidth, y, gridWidth, rowHeight), lane);
             painter.setPen(QColor(QStringLiteral("#29313b")));
             painter.drawLine(sidebarWidth, y + rowHeight - 1, sidebarWidth + gridWidth, y + rowHeight - 1);
 
-            const QColor key = blackKey ? QColor(QStringLiteral("#303944")) : QColor(QStringLiteral("#b9c1cc"));
+            const QColor key = !inScale ?
+                (blackKey ? QColor(QStringLiteral("#282f38")) : QColor(QStringLiteral("#7c8792"))) :
+                rootNote ? QColor(QStringLiteral("#63c9bb")) :
+                blackKey ? QColor(QStringLiteral("#405052")) : QColor(QStringLiteral("#c4cdd2"));
             painter.fillRect(QRect(0, y, sidebarWidth - (blackKey ? 0 : 1), rowHeight - 1), key);
             if (pitch % 12 == 0)
             {
@@ -424,7 +450,30 @@ private:
     int pitchAt(int y) const
     {
         const int row = std::clamp((y - rulerHeight) / rowHeight, 0, pitchCount - 1);
-        return std::clamp(highestPitch - row, 0, 127);
+        const int pitch = std::clamp(highestPitch - row, 0, 127);
+        if (!snapNewNotesToScale || isScalePitch(pitch))
+            return pitch;
+
+        int nearestPitch = pitch;
+        int nearestDistance = highestPitch + 1;
+        for (int candidate = 0; candidate <= highestPitch; ++candidate)
+        {
+            if (!isScalePitch(candidate))
+                continue;
+            const int distance = std::abs(candidate - pitch);
+            if (distance < nearestDistance)
+            {
+                nearestPitch = candidate;
+                nearestDistance = distance;
+            }
+        }
+        return nearestPitch;
+    }
+
+    bool isScalePitch(int pitch) const
+    {
+        const int pitchClass = ((pitch - rootPitchClass) % 12 + 12) % 12;
+        return scaleIntervals.contains(pitchClass);
     }
 
     double snapDown(double beat) const
@@ -506,6 +555,7 @@ private:
     QVector<MidiNote> notes;
     QVector<MidiNote> beforeEdit;
     QVector<MidiNote> originalNotes;
+    QVector<int> scaleIntervals{0, 2, 4, 5, 7, 9, 11};
     QSet<quint64> selected;
     QPoint dragStart;
     DragMode dragMode = DragMode::None;
@@ -515,6 +565,8 @@ private:
     double snap = 0.25;
     double playheadBeat = -1.0;
     int pixelsPerBeat = 84;
+    int rootPitchClass = 0;
+    bool snapNewNotesToScale = false;
 };
 
 MidiEditor::MidiEditor(QWidget* parent) : QScrollArea(parent)
@@ -547,6 +599,11 @@ void MidiEditor::setTimeSignature(int beatsPerBar, int beatUnit)
 void MidiEditor::setSnap(double beatStep)
 {
     canvas->setSnap(beatStep);
+}
+
+void MidiEditor::setScale(int rootPitchClass, const QVector<int>& intervals, bool snapNewNotes)
+{
+    canvas->setScale(rootPitchClass, intervals, snapNewNotes);
 }
 
 void MidiEditor::quantizeNotesToGrid()
