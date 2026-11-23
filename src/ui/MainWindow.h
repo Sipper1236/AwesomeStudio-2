@@ -170,6 +170,7 @@ private:
     void exportAudioOgg();
     void exportAudioMp3();
     void exportStems();
+    void showRenderQueue();
     void importAudio();
     void importMidi();
     void exportMidi();

@@ -2,6 +2,8 @@
 
 #include "Project.h"
 
+#include <functional>
+
 enum class WavSampleFormat
 {
     Pcm16,
@@ -29,10 +31,13 @@ struct WavExportOptions
 class WavExporter
 {
 public:
+    using ProgressCallback = std::function<bool(qint64 completedFrames, qint64 totalFrames)>;
+
     static bool exportProject(const ProjectData& project, const QString& path, QString* error = nullptr,
                               double startBeat = 0.0, double endBeat = -1.0,
                               const WavExportOptions& options = {},
-                              AudioExportContainer container = AudioExportContainer::Wav);
+                              AudioExportContainer container = AudioExportContainer::Wav,
+                              const ProgressCallback& progress = {});
     static bool exportStems(const ProjectData& project, const QString& directoryPath,
                             QString* error = nullptr, double startBeat = 0.0,
                             double endBeat = -1.0, const WavExportOptions& options = {});

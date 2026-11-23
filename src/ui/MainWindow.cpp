@@ -45,6 +45,7 @@
 #include <QPolygonF>
 #include <QPointer>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -52,6 +53,7 @@
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QSettings>
+#include <QStringList>
 #include <QSlider>
 #include <QStatusBar>
 #include <QStyle>
@@ -1305,7 +1307,7 @@ bool chooseExportRange(QWidget* parent, double songLengthBeats, bool& useRange,
 {
     const double maximumBeat = std::max(0.25, songLengthBeats);
     QDialog dialog(parent);
-    dialog.setWindowTitle(QObject::tr("WAV export range"));
+    dialog.setWindowTitle(QObject::tr("Arrangement export range"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* rangeEnabled = new QCheckBox(QObject::tr("Export a selected beat range"), &dialog);
     layout->addWidget(rangeEnabled);
@@ -3536,6 +3538,7 @@ void MainWindow::createMenus()
     fileMenu->addAction(tr("Export arrangement to MP3…"), this, &MainWindow::exportAudioMp3);
 #endif
     fileMenu->addAction(tr("Export track stems…"), this, &MainWindow::exportStems);
+    fileMenu->addAction(tr("Render queue…"), this, &MainWindow::showRenderQueue);
     fileMenu->addSeparator();
     auto* quitAction = fileMenu->addAction(tr("Quit"));
     quitAction->setShortcut(QKeySequence::Quit);
@@ -7454,6 +7457,290 @@ void MainWindow::exportStems()
     statusBar()->showMessage(tr("Exported %1 track stems to %2")
                                  .arg(project.tracks.size())
                                  .arg(QDir(directory).dirName()), 4000);
+}
+
+void MainWindow::showRenderQueue()
+{
+    struct RenderJob
+    {
+        enum class Status { Queued, Complete, Failed };
+        QString path;
+        AudioExportContainer container = AudioExportContainer::Wav;
+        WavExportOptions options;
+        double startBeat = 0.0;
+        double endBeat = -1.0;
+        Status status = Status::Queued;
+        QString error;
+    };
+
+    const auto containerName = [this](AudioExportContainer container)
+    {
+        switch (container)
+        {
+        case AudioExportContainer::Wav: return tr("WAV");
+        case AudioExportContainer::Flac: return tr("FLAC");
+        case AudioExportContainer::OggVorbis: return tr("Ogg Vorbis");
+        case AudioExportContainer::Mp3: return tr("MP3");
+        }
+        return tr("Audio");
+    };
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Render queue"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* addRow = new QHBoxLayout;
+    auto* containerControl = new QComboBox(&dialog);
+    containerControl->addItem(tr("WAV"), static_cast<int>(AudioExportContainer::Wav));
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+    containerControl->addItem(tr("FLAC"), static_cast<int>(AudioExportContainer::Flac));
+#endif
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+    containerControl->addItem(tr("Ogg Vorbis"), static_cast<int>(AudioExportContainer::OggVorbis));
+#endif
+#if defined(AWESOME_STUDIO_HAS_LAME)
+    containerControl->addItem(tr("MP3"), static_cast<int>(AudioExportContainer::Mp3));
+#endif
+    auto* addJobButton = new QPushButton(tr("Add render…"), &dialog);
+    addRow->addWidget(containerControl, 1);
+    addRow->addWidget(addJobButton);
+    layout->addLayout(addRow);
+
+    auto* emptyHint = new QLabel(tr("Queue is empty. Add a render to get started."), &dialog);
+    layout->addWidget(emptyHint);
+    auto* jobList = new QListWidget(&dialog);
+    jobList->setMinimumSize(520, 220);
+    layout->addWidget(jobList, 1);
+
+    auto* queueControls = new QHBoxLayout;
+    auto* removeJobButton = new QPushButton(tr("Remove"), &dialog);
+    auto* moveUpButton = new QPushButton(tr("Move up"), &dialog);
+    auto* moveDownButton = new QPushButton(tr("Move down"), &dialog);
+    queueControls->addWidget(removeJobButton);
+    queueControls->addStretch(1);
+    queueControls->addWidget(moveUpButton);
+    queueControls->addWidget(moveDownButton);
+    layout->addLayout(queueControls);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    auto* renderButton = new QPushButton(tr("Render queue"), &dialog);
+    buttons->addButton(renderButton, QDialogButtonBox::AcceptRole);
+    layout->addWidget(buttons);
+
+    QVector<RenderJob> jobs;
+    const auto refreshJobs = [&]
+    {
+        const int selectedRow = jobList->currentRow();
+        jobList->clear();
+        bool hasQueuedJobs = false;
+        for (const RenderJob& job : jobs)
+        {
+            QString state = tr("Queued");
+            if (job.status == RenderJob::Status::Complete)
+                state = tr("Complete");
+            else if (job.status == RenderJob::Status::Failed)
+                state = tr("Failed: %1").arg(job.error);
+            else
+                hasQueuedJobs = true;
+            const QString range = job.endBeat < 0.0
+                ? tr("Full arrangement")
+                : tr("Beats %1–%2").arg(job.startBeat, 0, 'f', 3).arg(job.endBeat, 0, 'f', 3);
+            QString settings = tr("%1 kHz").arg(job.options.sampleRate / 1000.0, 0, 'f', 1);
+            if (job.container == AudioExportContainer::Mp3)
+                settings += tr(" · %1 kbit/s").arg(job.options.mp3BitrateKbps);
+            else if (job.container == AudioExportContainer::OggVorbis)
+                settings += tr(" · quality %1").arg(job.options.vorbisQuality, 0, 'f', 1);
+            else
+            {
+                const QString format = job.options.sampleFormat == WavSampleFormat::Pcm16
+                    ? tr("16-bit PCM")
+                    : job.options.sampleFormat == WavSampleFormat::Pcm24
+                        ? tr("24-bit PCM") : tr("32-bit float");
+                settings += QStringLiteral(" · ") + format;
+                if (job.options.dither)
+                    settings += tr(" · dither");
+            }
+            jobList->addItem(QStringLiteral("%1 · %2 · %3 · %4 · %5")
+                .arg(state, QFileInfo(job.path).fileName(), containerName(job.container), range,
+                     settings));
+        }
+        emptyHint->setVisible(jobs.isEmpty());
+        renderButton->setEnabled(hasQueuedJobs);
+        const int row = jobList->currentRow() >= 0 ? jobList->currentRow() : selectedRow;
+        jobList->setCurrentRow(jobs.isEmpty() ? -1 : std::clamp(
+            row, 0, static_cast<int>(jobs.size() - 1)));
+        const int current = jobList->currentRow();
+        removeJobButton->setEnabled(current >= 0 && current < jobs.size());
+        moveUpButton->setEnabled(current > 0);
+        moveDownButton->setEnabled(current >= 0 && current + 1 < jobs.size());
+    };
+
+    connect(addJobButton, &QPushButton::clicked, &dialog, [&, this]
+    {
+        const auto container = static_cast<AudioExportContainer>(containerControl->currentData().toInt());
+        const bool flac = container == AudioExportContainer::Flac;
+        const bool ogg = container == AudioExportContainer::OggVorbis;
+        const bool mp3 = container == AudioExportContainer::Mp3;
+        WavExportOptions options;
+        if (!chooseAudioExportOptions(this, options, flac, ogg, mp3))
+            return;
+
+        bool useRange = false;
+        double startBeat = 0.0;
+        double endBeat = 0.0;
+        if (!chooseExportRange(this, project.songLengthBeats(), useRange, startBeat, endBeat))
+            return;
+
+        QString extension;
+        QString filter;
+        switch (container)
+        {
+        case AudioExportContainer::Wav:
+            extension = QStringLiteral(".wav");
+            filter = tr("WAV audio (*.wav)");
+            break;
+        case AudioExportContainer::Flac:
+            extension = QStringLiteral(".flac");
+            filter = tr("FLAC audio (*.flac)");
+            break;
+        case AudioExportContainer::OggVorbis:
+            extension = QStringLiteral(".ogg");
+            filter = tr("Ogg Vorbis audio (*.ogg)");
+            break;
+        case AudioExportContainer::Mp3:
+            extension = QStringLiteral(".mp3");
+            filter = tr("MP3 audio (*.mp3)");
+            break;
+        }
+        QString path = QFileDialog::getSaveFileName(&dialog,
+            tr("Add %1 render").arg(containerName(container)),
+            project.title + extension, filter);
+        if (path.isEmpty())
+            return;
+        if (QFileInfo(path).suffix().isEmpty())
+            path += extension;
+        else if (QFileInfo(path).suffix().compare(extension.mid(1), Qt::CaseInsensitive) != 0)
+        {
+            QMessageBox::warning(&dialog, tr("Unsupported export filename"),
+                tr("Choose a %1 filename for this render.").arg(extension));
+            return;
+        }
+        const QString absolutePath = QFileInfo(path).absoluteFilePath();
+        for (const RenderJob& queuedJob : jobs)
+        {
+            if (QFileInfo(queuedJob.path).absoluteFilePath() == absolutePath)
+            {
+                QMessageBox::warning(&dialog, tr("Output already queued"),
+                    tr("Each render needs its own destination file."));
+                return;
+            }
+        }
+
+        RenderJob job;
+        job.path = path;
+        job.container = container;
+        job.options = options;
+        job.startBeat = useRange ? startBeat : 0.0;
+        job.endBeat = useRange ? endBeat : -1.0;
+        jobs.push_back(std::move(job));
+        refreshJobs();
+        jobList->setCurrentRow(jobs.size() - 1);
+        refreshJobs();
+    });
+    connect(removeJobButton, &QPushButton::clicked, &dialog, [&, refreshJobs]
+    {
+        const int row = jobList->currentRow();
+        if (row >= 0 && row < jobs.size())
+            jobs.removeAt(row);
+        refreshJobs();
+    });
+    connect(moveUpButton, &QPushButton::clicked, &dialog, [&, refreshJobs]
+    {
+        const int row = jobList->currentRow();
+        if (row > 0 && row < jobs.size())
+        {
+            jobs.swapItemsAt(row, row - 1);
+            refreshJobs();
+            jobList->setCurrentRow(row - 1);
+            refreshJobs();
+        }
+    });
+    connect(moveDownButton, &QPushButton::clicked, &dialog, [&, refreshJobs]
+    {
+        const int row = jobList->currentRow();
+        if (row >= 0 && row + 1 < jobs.size())
+        {
+            jobs.swapItemsAt(row, row + 1);
+            refreshJobs();
+            jobList->setCurrentRow(row + 1);
+            refreshJobs();
+        }
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(renderButton, &QPushButton::clicked, &dialog, [&, this]
+    {
+        bool hasQueuedJobs = false;
+        for (const RenderJob& job : jobs)
+            hasQueuedJobs = hasQueuedJobs || job.status == RenderJob::Status::Queued;
+        if (!hasQueuedJobs)
+            return;
+
+        addJobButton->setEnabled(false);
+        removeJobButton->setEnabled(false);
+        moveUpButton->setEnabled(false);
+        moveDownButton->setEnabled(false);
+        renderButton->setEnabled(false);
+        QStringList failures;
+        bool canceled = false;
+        QProgressDialog progress(tr("Rendering queue…"), tr("Cancel"), 0, 100, &dialog);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.setMinimumDuration(0);
+        for (int index = 0; index < jobs.size(); ++index)
+        {
+            RenderJob& job = jobs[index];
+            if (job.status != RenderJob::Status::Queued)
+                continue;
+            progress.reset();
+            progress.setLabelText(tr("Rendering %1").arg(QFileInfo(job.path).fileName()));
+            progress.setValue(0);
+            QString error;
+            const bool success = WavExporter::exportProject(project, job.path, &error,
+                job.startBeat, job.endBeat, job.options, job.container,
+                [&progress](qint64 completedFrames, qint64 totalFrames)
+                {
+                    const int percent = totalFrames <= 0 ? 100 : static_cast<int>(std::clamp(
+                        completedFrames * 100.0 / totalFrames, 0.0, 100.0));
+                    progress.setValue(percent);
+                    return !progress.wasCanceled();
+                });
+            if (!success && progress.wasCanceled())
+            {
+                canceled = true;
+                break;
+            }
+            if (success)
+                job.status = RenderJob::Status::Complete;
+            else
+            {
+                job.status = RenderJob::Status::Failed;
+                job.error = error;
+                failures.push_back(tr("%1: %2").arg(QFileInfo(job.path).fileName(), error));
+            }
+            refreshJobs();
+        }
+        progress.close();
+        addJobButton->setEnabled(true);
+        refreshJobs();
+        if (!failures.isEmpty())
+            QMessageBox::warning(&dialog, tr("Render queue finished with errors"), failures.join(QLatin1Char('\n')));
+        if (canceled)
+            statusBar()->showMessage(tr("Render queue paused; remaining jobs are still queued."), 3500);
+        else if (failures.isEmpty())
+            statusBar()->showMessage(tr("Render queue complete"), 2500);
+    });
+
+    refreshJobs();
+    dialog.resize(760, 390);
+    dialog.exec();
 }
 
 void MainWindow::importAudio()

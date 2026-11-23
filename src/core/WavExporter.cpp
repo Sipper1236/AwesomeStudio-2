@@ -230,7 +230,7 @@ QString safeStemName(const QString& source)
 
 bool WavExporter::exportProject(const ProjectData& project, const QString& path, QString* error,
                                 double startBeat, double endBeat, const WavExportOptions& options,
-                                AudioExportContainer container)
+                                AudioExportContainer container, const ProgressCallback& progress)
 {
     ProjectData safeProject = project;
     safeProject.normalize();
@@ -606,6 +606,11 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             return false;
         }
         writtenFrames += frames;
+        if (progress && !progress(writtenFrames, frameCount))
+        {
+            setError(error, QStringLiteral("Audio export was canceled."));
+            return false;
+        }
     }
 
     if (flacContainer)
