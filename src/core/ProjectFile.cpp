@@ -1,6 +1,10 @@
 #include "ProjectFile.h"
 
+#include "AudioFile.h"
+
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -8,7 +12,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 5;
+constexpr int currentProjectVersion = 6;
 constexpr auto projectFormat = "awesome-studio-project";
 
 void setError(QString* error, const QString& message)
@@ -86,7 +90,9 @@ QJsonObject saveClip(const MidiClip& clip)
         {QStringLiteral("name"), clip.name},
         {QStringLiteral("startBeat"), clip.startBeat},
         {QStringLiteral("lengthBeats"), clip.lengthBeats},
-        {QStringLiteral("notes"), saveNotes(clip.notes)}
+        {QStringLiteral("notes"), saveNotes(clip.notes)},
+        {QStringLiteral("audioSourcePath"), clip.audioSourcePath},
+        {QStringLiteral("audioStartFrame"), static_cast<qint64>(clip.audioStartFrame)}
     };
 }
 
@@ -121,7 +127,7 @@ bool readId(const QJsonObject& object, const QString& key, quint64& id, QString*
     return true;
 }
 
-bool loadClip(const QJsonValue& value, MidiClip& clip, QString* error)
+bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseDir, QString* error)
 {
     if (!value.isObject())
     {
@@ -139,10 +145,28 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, QString* error)
         setError(error, QStringLiteral("The project contains an out-of-range MIDI clip."));
         return false;
     }
+    clip.audioSourcePath = object.value(QStringLiteral("audioSourcePath")).toString();
+    const qint64 storedAudioStart = object.value(QStringLiteral("audioStartFrame")).toInteger(0);
+    if (storedAudioStart < 0)
+    {
+        setError(error, QStringLiteral("The project contains an invalid audio trim position."));
+        return false;
+    }
+    clip.audioStartFrame = storedAudioStart;
+    if (!clip.audioSourcePath.isEmpty())
+    {
+        if (QDir::isRelativePath(clip.audioSourcePath))
+            clip.audioSourcePath = QDir(mediaBaseDir).absoluteFilePath(clip.audioSourcePath);
+        if (QFileInfo::exists(clip.audioSourcePath))
+        {
+            QString audioError;
+            AudioFile::loadWav(clip.audioSourcePath, clip.audioSource, &audioError);
+        }
+    }
     return loadNotes(object.value(QStringLiteral("notes")), clip.notes, error);
 }
 
-bool loadTrack(const QJsonValue& value, InstrumentTrack& track, QString* error)
+bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& mediaBaseDir, QString* error)
 {
     if (!value.isObject())
     {
@@ -168,7 +192,7 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, QString* error)
     for (const QJsonValue& clipJson : clipValue.toArray())
     {
         MidiClip clip;
-        if (!loadClip(clipJson, clip, error))
+        if (!loadClip(clipJson, clip, mediaBaseDir, error))
             return false;
         track.clips.push_back(std::move(clip));
     }
@@ -238,6 +262,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
         return false;
     }
 
+    const QString mediaBaseDir = QFileInfo(path).absoluteDir().absolutePath();
     const QJsonObject root = document.object();
     if (root.value(QStringLiteral("format")).toString() != QString::fromLatin1(projectFormat))
     {
@@ -290,7 +315,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
         for (const QJsonValue& trackJson : trackValue.toArray())
         {
             InstrumentTrack track;
-            if (!loadTrack(trackJson, track, error))
+            if (!loadTrack(trackJson, track, mediaBaseDir, error))
                 return false;
             loaded.tracks.push_back(std::move(track));
         }

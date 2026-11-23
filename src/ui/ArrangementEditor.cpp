@@ -99,7 +99,9 @@ protected:
                              track.muted ? tr("MUTED") :
                                  track.instrumentType == InstrumentType::DrumRack
                                      ? tr("DRUM · %1 clips").arg(track.clips.size())
-                                     : tr("MIDI · %1 clips").arg(track.clips.size()));
+                                     : track.instrumentType == InstrumentType::Audio
+                                         ? tr("AUDIO · %1 regions").arg(track.clips.size())
+                                         : tr("MIDI · %1 clips").arg(track.clips.size()));
         }
 
         const int totalBeats = static_cast<int>(std::ceil(visibleBeats));
@@ -147,7 +149,55 @@ protected:
                 painter.setPen(QColor(QStringLiteral("#102126")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
                 painter.drawText(bounds.adjusted(7, 3, -4, -3), Qt::AlignTop | Qt::AlignLeft,
-                                 QStringLiteral("%1\n%2 notes").arg(clip.name).arg(clip.notes.size()));
+                                 clip.isAudioRegion() ? clip.name :
+                                     QStringLiteral("%1\n%2 notes").arg(clip.name).arg(clip.notes.size()));
+
+                if (clip.isAudioRegion())
+                {
+                    if (clip.audioSource == nullptr || clip.audioSource->frameCount() <= clip.audioStartFrame)
+                    {
+                        painter.setPen(QColor(QStringLiteral("#3a2429")));
+                        painter.drawText(bounds.adjusted(7, 25, -4, -3), Qt::AlignLeft | Qt::AlignVCenter,
+                                         tr("OFFLINE AUDIO"));
+                    }
+                    else
+                    {
+                        const QRectF waveBounds = bounds.adjusted(6, 27, -6, -6);
+                        const int waveLeft = static_cast<int>(waveBounds.left());
+                        const int waveRight = static_cast<int>(waveBounds.right());
+                        const double framesPerPixel = clip.lengthBeats * 60.0 / project.tempoBpm *
+                            clip.audioSource->sampleRate / std::max(1.0, waveBounds.width());
+                        const qint64 sourceFrames = clip.audioSource->frameCount();
+                        const int centerY = static_cast<int>(waveBounds.center().y());
+                        const int amplitude = std::max(2, static_cast<int>(waveBounds.height() * 0.48));
+                        painter.setPen(QPen(QColor(QStringLiteral("#16323a")), 1));
+                        for (int x = waveLeft; x <= waveRight; ++x)
+                        {
+                            const qint64 firstFrame = clip.audioStartFrame + static_cast<qint64>(
+                                std::floor((x - waveLeft) * framesPerPixel));
+                            const qint64 lastFrame = std::min(sourceFrames, firstFrame +
+                                std::max<qint64>(1, static_cast<qint64>(std::ceil(framesPerPixel))));
+                            float peak = 0.0f;
+                            if (firstFrame < lastFrame)
+                            {
+                                const qint64 firstPeak = std::max<qint64>(0, firstFrame) /
+                                    AudioAsset::waveformBlockFrames;
+                                const qint64 lastPeak = (lastFrame + AudioAsset::waveformBlockFrames - 1) /
+                                    AudioAsset::waveformBlockFrames;
+                                for (qint64 peakIndex = firstPeak;
+                                     peakIndex < lastPeak && peakIndex < clip.audioSource->waveformPeaks.size();
+                                     ++peakIndex)
+                                {
+                                    peak = std::max(peak, clip.audioSource->waveformPeaks[
+                                        static_cast<qsizetype>(peakIndex)]);
+                                }
+                            }
+                            const int height = static_cast<int>(std::round(std::min(1.0f, peak) * amplitude));
+                            painter.drawLine(x, centerY - height, x, centerY + height);
+                        }
+                    }
+                    continue;
+                }
 
                 painter.setPen(QPen(QColor(15, 26, 31, 90), 1));
                 for (const MidiNote& note : clip.notes)

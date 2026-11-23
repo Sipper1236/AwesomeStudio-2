@@ -33,10 +33,23 @@ private:
         bool percussion = false;
     };
 
+    struct AudioRegion
+    {
+        qint64 startFrame = 0;
+        qint64 endFrame = 0;
+        qint64 sourceStartFrame = 0;
+        std::shared_ptr<const AudioAsset> source;
+        float leftGain = 0.70710678f;
+        float rightGain = 0.70710678f;
+    };
+
     std::shared_ptr<const ProjectData> project;
     std::vector<VoiceNote> notes;
     std::vector<size_t> activeNotes;
+    std::vector<AudioRegion> audioRegions;
+    std::vector<size_t> activeAudioRegions;
     size_t nextStartIndex = 0;
+    size_t nextAudioStartIndex = 0;
     qint64 lastFrame = -1;
     double sampleRate = 48000.0;
 };

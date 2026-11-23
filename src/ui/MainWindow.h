@@ -55,6 +55,7 @@ private:
     void refreshDirtyState();
     void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes);
     void exportAudio();
+    void importAudio();
     void importMidi();
     void exportMidi();
 
@@ -80,6 +81,7 @@ private:
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;
     QLabel* masterGainReadout = nullptr;
+    QLabel* instrumentHeading = nullptr;
     QLabel* playheadLabel = nullptr;
     QLabel* audioDeviceLabel = nullptr;
     QAction* playAction = nullptr;

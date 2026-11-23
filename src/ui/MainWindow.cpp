@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "core/AudioFile.h"
 #include "core/ProjectFile.h"
 #include "core/MidiFile.h"
 #include "core/WavExporter.h"
@@ -544,8 +545,11 @@ void MainWindow::createDocks()
     auto* addDrumButton = new QPushButton(tr("Add drum rack"), browser);
     connect(addDrumButton, &QPushButton::clicked, this, &MainWindow::addDrumTrack);
     browserLayout->addWidget(addDrumButton);
+    auto* importAudioButton = new QPushButton(tr("Import WAV audio"), browser);
+    connect(importAudioButton, &QPushButton::clicked, this, &MainWindow::importAudio);
+    browserLayout->addWidget(importAudioButton);
 
-    auto* instrumentHeading = new QLabel(tr("SELECTED INSTRUMENT"), browser);
+    instrumentHeading = new QLabel(tr("SELECTED INSTRUMENT"), browser);
     instrumentHeading->setStyleSheet(QStringLiteral("color: #8d9aa7; font-size: 10px; font-weight: 700; margin-top: 10px;"));
     browserLayout->addWidget(instrumentHeading);
     waveformControl = new QComboBox(browser);
@@ -564,7 +568,7 @@ void MainWindow::createDocks()
         refreshDirtyState();
     });
     browserLayout->addStretch();
-    auto* hint = new QLabel(tr("Click an empty Playlist row to add a pattern. Double-click an instrument clip for the piano roll or a drum clip for its step grid."), browser);
+    auto* hint = new QLabel(tr("Import a WAV to add an audio track. Double-click MIDI clips to edit notes or drum steps."), browser);
     hint->setWordWrap(true);
     hint->setStyleSheet(QStringLiteral("color: #8996a2; font-size: 11px;"));
     browserLayout->addWidget(hint);
@@ -610,6 +614,7 @@ void MainWindow::createMenus()
         }
     });
     fileMenu->addSeparator();
+    fileMenu->addAction(tr("Import WAV audio…"), this, &MainWindow::importAudio);
     fileMenu->addAction(tr("Import MIDI…"), this, &MainWindow::importMidi);
     fileMenu->addAction(tr("Export arrangement to MIDI…"), this, &MainWindow::exportMidi);
     fileMenu->addAction(tr("Export arrangement to WAV…"), this, &MainWindow::exportAudio);
@@ -684,6 +689,10 @@ void MainWindow::refreshProjectUi()
         waveformControl->findData(static_cast<int>(track->waveform));
     waveformControl->setCurrentIndex(std::max(0, waveformIndex));
     waveformControl->setEnabled(track != nullptr && track->instrumentType == InstrumentType::Synth);
+    instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
+                               track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
+                               track->instrumentType == InstrumentType::Audio ? tr("AUDIO SOURCE") :
+                               tr("SELECTED INSTRUMENT"));
 
     const MidiClip* clip = selectedClip();
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
@@ -851,6 +860,8 @@ void MainWindow::selectTrack(quint64 trackId)
     refreshProjectUi();
     if (track->instrumentType == InstrumentType::DrumRack)
         editorTabs->setCurrentWidget(stepSequencer);
+    else if (track->instrumentType == InstrumentType::Audio)
+        editorTabs->setCurrentWidget(arrangementEditor);
 }
 
 void MainWindow::selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll)
@@ -863,9 +874,12 @@ void MainWindow::selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll)
     if (openPianoRoll)
     {
         const InstrumentTrack* track = project.findTrack(trackId);
-        editorTabs->setCurrentWidget(track != nullptr && track->instrumentType == InstrumentType::DrumRack
-                                         ? static_cast<QWidget*>(stepSequencer)
-                                         : static_cast<QWidget*>(midiEditor));
+        if (track != nullptr && track->instrumentType == InstrumentType::Audio)
+            editorTabs->setCurrentWidget(arrangementEditor);
+        else
+            editorTabs->setCurrentWidget(track != nullptr && track->instrumentType == InstrumentType::DrumRack
+                                             ? static_cast<QWidget*>(stepSequencer)
+                                             : static_cast<QWidget*>(midiEditor));
     }
 }
 
@@ -918,6 +932,11 @@ void MainWindow::addClipAt(quint64 trackId, double startBeat)
     InstrumentTrack* track = project.findTrack(trackId);
     if (track == nullptr)
         return;
+    if (track->instrumentType == InstrumentType::Audio)
+    {
+        statusBar()->showMessage(tr("Import a WAV file to add an audio region to this track"), 2500);
+        return;
+    }
     MidiClip clip;
     clip.id = project.nextClipId();
     clip.name = tr("Pattern %1").arg(clip.id);
@@ -941,6 +960,11 @@ void MainWindow::addNewPattern()
     }
     if (track == nullptr)
         return;
+    if (track->instrumentType == InstrumentType::Audio)
+    {
+        statusBar()->showMessage(tr("Use Import WAV audio to add another audio region"), 2500);
+        return;
+    }
 
     double startBeat = 0.0;
     for (const MidiClip& clip : track->clips)
@@ -976,6 +1000,13 @@ void MainWindow::moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 
     InstrumentTrack* target = project.findTrack(targetTrackId);
     if (source == nullptr || target == nullptr)
         return;
+    const MidiClip* sourceClip = project.findClip(sourceTrackId, clipId);
+    if (sourceClip == nullptr || sourceClip->isAudioRegion() !=
+        (target->instrumentType == InstrumentType::Audio))
+    {
+        statusBar()->showMessage(tr("Audio regions stay on audio tracks; MIDI patterns stay on instrument tracks"), 2500);
+        return;
+    }
     MidiClip movedClip;
     bool found = false;
     for (auto it = source->clips.begin(); it != source->clips.end(); ++it)
@@ -1039,6 +1070,14 @@ void MainWindow::setProject(const ProjectData& incoming, const QString& path)
     midiEditor->setPlayheadBeat(0.0);
     arrangementEditor->setPlayheadBeat(0.0);
     updateProjectTitle();
+    int offlineRegions = 0;
+    for (const InstrumentTrack& track : project.tracks)
+        for (const MidiClip& clip : track.clips)
+            if (clip.isAudioRegion() && clip.audioSource == nullptr)
+                ++offlineRegions;
+    if (offlineRegions > 0)
+        statusBar()->showMessage(tr("Project opened with %1 offline WAV region(s); restore the source file to hear them.")
+                                     .arg(offlineRegions), 6000);
 }
 
 bool MainWindow::saveToPath(const QString& path)
@@ -1115,6 +1154,48 @@ void MainWindow::exportAudio()
         return;
     }
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
+}
+
+void MainWindow::importAudio()
+{
+    if (project.tracks.size() >= 256)
+    {
+        statusBar()->showMessage(tr("The project has reached the 256-track limit"), 3000);
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import WAV audio"), QString(),
+                                                       tr("WAV audio (*.wav)"));
+    if (path.isEmpty())
+        return;
+
+    std::shared_ptr<const AudioAsset> asset;
+    QString error;
+    if (!AudioFile::loadWav(path, asset, &error))
+    {
+        QMessageBox::critical(this, tr("Could not import WAV audio"), error);
+        return;
+    }
+
+    InstrumentTrack track;
+    track.id = project.nextTrackId();
+    track.name = QFileInfo(path).completeBaseName();
+    track.instrumentType = InstrumentType::Audio;
+    MidiClip clip;
+    clip.id = project.nextClipId();
+    clip.name = QFileInfo(path).fileName();
+    clip.audioSourcePath = asset->path;
+    clip.audioSource = std::move(asset);
+    const double durationBeats = static_cast<double>(clip.audioSource->frameCount()) /
+                                 clip.audioSource->sampleRate * project.tempoBpm / 60.0;
+    clip.lengthBeats = std::clamp(durationBeats, 0.25, 16384.0);
+    track.clips.push_back(std::move(clip));
+    project.tracks.push_back(std::move(track));
+    selectedTrackId = project.tracks.last().id;
+    selectedClipId = project.tracks.last().clips.first().id;
+    settingsDirty = true;
+    refreshProjectUi();
+    editorTabs->setCurrentWidget(arrangementEditor);
+    statusBar()->showMessage(tr("Imported %1 into an audio track").arg(QFileInfo(path).fileName()), 3000);
 }
 
 void MainWindow::importMidi()

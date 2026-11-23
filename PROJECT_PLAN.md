@@ -6,7 +6,7 @@ Build a pattern-first digital audio workstation with a fast MIDI workflow and a 
 
 ## Shipped foundation
 
-The current Qt 6 executable provides a multi-track Playlist with movable MIDI clips, per-clip piano rolls, a 16-step drum sequencer, a synthesized drum rack, editable clip lengths and common time signatures, MIDI import/export, basic track mixing, project save/open, and WAV export. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
+The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported WAV audio clips, per-clip piano rolls, waveform display, a 16-step drum sequencer, a synthesized drum rack, editable MIDI clip lengths and common time signatures, MIDI import/export, basic track mixing, project save/open, and WAV export. Imported audio is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
 
 ## Roadmap
 
@@ -21,11 +21,12 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI cl
 - [x] Editable clip length and common time signatures
 - [x] Standard MIDI File import/export (formats 0/1, PPQN)
 - [x] Count-in and metronome
+- [x] WAV audio import, Playlist playback, waveform display, and WAV render integration
 - [ ] Live MIDI recording
 
 ### 2. Arrangement and mixing
 
-- [ ] Audio-file clips, trimming, fades, markers, and comping
+- [ ] Audio clip trimming, fades, markers, comping, and portable media packaging
 - [ ] Mixer buses, routing, sends, inserts, and peak meters
 - [ ] Bundled EQ, delay, compression, and reverb in the playback graph
 - [ ] Automation lanes with undoable edits

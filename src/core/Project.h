@@ -4,6 +4,8 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <memory>
+
 enum class SynthWaveform
 {
     Sine,
@@ -15,7 +17,24 @@ enum class SynthWaveform
 enum class InstrumentType
 {
     Synth,
-    DrumRack
+    DrumRack,
+    Audio
+};
+
+struct AudioAsset
+{
+    static constexpr qint64 waveformBlockFrames = 256;
+
+    QString path;
+    int sampleRate = 44100;
+    int channelCount = 2;
+    QVector<float> samples;
+    QVector<float> waveformPeaks;
+
+    qint64 frameCount() const
+    {
+        return channelCount > 0 ? samples.size() / channelCount : 0;
+    }
 };
 
 struct MidiNote
@@ -36,6 +55,11 @@ struct MidiClip
     double startBeat = 0.0;
     double lengthBeats = 16.0;
     QVector<MidiNote> notes;
+    QString audioSourcePath;
+    std::shared_ptr<const AudioAsset> audioSource;
+    qint64 audioStartFrame = 0;
+
+    bool isAudioRegion() const { return !audioSourcePath.isEmpty(); }
 };
 
 struct InstrumentTrack

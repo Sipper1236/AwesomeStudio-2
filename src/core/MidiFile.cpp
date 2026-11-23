@@ -538,12 +538,17 @@ bool MidiFile::save(const QString& path, const ProjectData& project, QString* er
     file.append("MThd", 4);
     appendBigEndian32(file, 6);
     appendBigEndian16(file, 1);
-    appendBigEndian16(file, static_cast<quint16>(safeProject.tracks.size() + 1));
+    int midiTrackCount = 1;
+    for (const InstrumentTrack& track : safeProject.tracks)
+        if (track.instrumentType != InstrumentType::Audio) ++midiTrackCount;
+    appendBigEndian16(file, static_cast<quint16>(midiTrackCount));
     appendBigEndian16(file, exportPpqn);
     appendTrackChunk(file, makeConductorTrack(safeProject, songEndTick));
     int synthChannel = 0;
     for (const InstrumentTrack& track : safeProject.tracks)
     {
+        if (track.instrumentType == InstrumentType::Audio)
+            continue;
         int channel = 9;
         if (track.instrumentType != InstrumentType::DrumRack)
         {

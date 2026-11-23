@@ -16,6 +16,8 @@ add_executable(AwesomeStudio
     src/core/Project.h
     src/core/ProjectFile.cpp
     src/core/ProjectFile.h
+    src/core/AudioFile.cpp
+    src/core/AudioFile.h
     src/core/MidiFile.cpp
     src/core/MidiFile.h
     src/core/SynthRenderer.cpp

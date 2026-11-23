@@ -131,7 +131,7 @@ void ProjectData::normalize()
         }
         usedTrackIds.insert(track.id);
         track.instrumentType = static_cast<InstrumentType>(
-            std::clamp(static_cast<int>(track.instrumentType), 0, 1));
+            std::clamp(static_cast<int>(track.instrumentType), 0, 2));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));
@@ -154,6 +154,14 @@ void ProjectData::normalize()
             usedClipIds.insert(clip.id);
             clip.startBeat = std::clamp(clip.startBeat, 0.0, 16384.0);
             clip.lengthBeats = std::clamp(clip.lengthBeats, 0.25, 16384.0);
+            clip.audioStartFrame = std::max<qint64>(0, clip.audioStartFrame);
+            if (clip.audioSource != nullptr)
+            {
+                if (clip.audioSourcePath.isEmpty())
+                    clip.audioSourcePath = clip.audioSource->path;
+                clip.audioStartFrame = std::min(clip.audioStartFrame,
+                                                std::max<qint64>(0, clip.audioSource->frameCount() - 1));
+            }
             if (clip.notes.size() > 100000)
                 clip.notes.resize(100000);
 
