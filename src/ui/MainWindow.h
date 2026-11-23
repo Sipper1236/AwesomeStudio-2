@@ -115,6 +115,8 @@ private:
     void finishAutomationWrite();
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
+    void importLowVelocityDrumSample(int pad);
+    void clearLowVelocityDrumSample(int pad);
     void importHighVelocityDrumSample(int pad);
     void clearHighVelocityDrumSample(int pad);
     void setSelectedDrumSample(int pad, int parameter, double value);
@@ -231,6 +233,9 @@ private:
     QProgressBar* masterPeakMeter = nullptr;
     std::array<QPushButton*, 4> drumSampleButtons{};
     std::array<QPushButton*, 4> clearDrumSampleButtons{};
+    std::array<QPushButton*, 4> lowVelocityDrumSampleButtons{};
+    std::array<QPushButton*, 4> clearLowVelocityDrumSampleButtons{};
+    std::array<QSpinBox*, 4> lowVelocityThresholdControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleTuneControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleStartControls{};
     std::array<QCheckBox*, 4> drumSampleLoopControls{};

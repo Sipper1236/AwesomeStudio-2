@@ -94,6 +94,9 @@ struct DrumPadSample
 {
     QString path;
     std::shared_ptr<const AudioAsset> source;
+    QString lowVelocityPath;
+    std::shared_ptr<const AudioAsset> lowVelocitySource;
+    int lowVelocityThreshold = 48;
     QString highVelocityPath;
     std::shared_ptr<const AudioAsset> highVelocitySource;
     int highVelocityThreshold = 100;
@@ -105,11 +108,23 @@ struct DrumPadSample
     float sustainLevel = 1.0f;
     float releaseSeconds = 0.06f;
 
-    bool hasSampleAssignment() const { return !path.isEmpty() || !highVelocityPath.isEmpty(); }
+    bool hasSampleAssignment() const
+    {
+        return !path.isEmpty() || !lowVelocityPath.isEmpty() || !highVelocityPath.isEmpty();
+    }
     const std::shared_ptr<const AudioAsset>& sourceForVelocity(int velocity) const
     {
+        if (lowVelocitySource != nullptr && velocity < lowVelocityThreshold)
+            return lowVelocitySource;
         if (highVelocitySource != nullptr &&
-            (velocity >= highVelocityThreshold || source == nullptr))
+            velocity >= highVelocityThreshold)
+            return highVelocitySource;
+        if (source != nullptr)
+            return source;
+        if (lowVelocitySource != nullptr && (highVelocitySource == nullptr ||
+                                              velocity < highVelocityThreshold))
+            return lowVelocitySource;
+        if (highVelocitySource != nullptr)
             return highVelocitySource;
         return source;
     }
