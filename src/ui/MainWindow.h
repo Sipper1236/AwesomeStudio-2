@@ -230,6 +230,7 @@ private:
     std::array<QPushButton*, 4> clearDrumSampleButtons{};
     std::array<QDoubleSpinBox*, 4> drumSampleTuneControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleStartControls{};
+    std::array<QCheckBox*, 4> drumSampleLoopControls{};
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
     QLabel* playheadLabel = nullptr;

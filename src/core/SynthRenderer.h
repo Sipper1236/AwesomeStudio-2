@@ -75,6 +75,7 @@ private:
         float sourceGain = 1.0f;
         double playbackRate = 1.0;
         bool drumSamplePlayback = false;
+        bool drumSampleLoop = false;
         std::shared_ptr<const AudioAsset> source;
     };
 

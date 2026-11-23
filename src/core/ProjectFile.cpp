@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 26;
+constexpr int currentProjectVersion = 27;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -403,7 +403,8 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                  samples.push_back(QJsonObject{
                      {QStringLiteral("path"), sample.path},
                      {QStringLiteral("tuningSemitones"), sample.tuningSemitones},
-                     {QStringLiteral("startPositionPercent"), sample.startPositionPercent}
+                     {QStringLiteral("startPositionPercent"), sample.startPositionPercent},
+                     {QStringLiteral("loopEnabled"), sample.loopEnabled}
                  });
              return samples;
          }()},
@@ -612,6 +613,8 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                 }
                 sample.tuningSemitones = static_cast<float>(tuningSemitones);
                 sample.startPositionPercent = static_cast<float>(startPositionPercent);
+                if (version >= 27)
+                    sample.loopEnabled = sampleObject.value(QStringLiteral("loopEnabled")).toBool(false);
             }
             else
             {

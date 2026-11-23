@@ -94,6 +94,7 @@ struct DrumPadSample
     std::shared_ptr<const AudioAsset> source;
     float tuningSemitones = 0.0f;
     float startPositionPercent = 0.0f;
+    bool loopEnabled = false;
 };
 
 struct AutomationPoint

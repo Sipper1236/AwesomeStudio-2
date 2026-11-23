@@ -447,15 +447,28 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             region.trackIndex = trackIndex;
                             region.drumSamplePlayback = true;
                             const DrumPadSample& padSample = track.drumSamples[static_cast<size_t>(pad)];
+                            region.drumSampleLoop = padSample.loopEnabled;
                             region.sourceStartFrame = static_cast<qint64>(std::llround(
                                 static_cast<double>(source->frameCount() - 1) *
                                 padSample.startPositionPercent / 100.0));
                             region.playbackRate = std::pow(2.0,
                                 static_cast<double>(padSample.tuningSemitones) / 12.0);
-                            const qint64 remainingSourceFrames = source->frameCount() - region.sourceStartFrame;
-                            const qint64 duration = static_cast<qint64>(std::ceil(
-                                static_cast<double>(remainingSourceFrames) * sampleRate /
-                                (source->sampleRate * region.playbackRate)));
+                            qint64 duration = 0;
+                            if (region.drumSampleLoop)
+                            {
+                                duration = static_cast<qint64>(std::llround(
+                                    note.lengthBeats * sampleRate * 60.0 / project->tempoBpm));
+                                region.fadeOutFrames = std::min<qint64>(
+                                    std::max<qint64>(1, duration),
+                                    std::max<qint64>(1, static_cast<qint64>(std::llround(sampleRate * 0.008))));
+                            }
+                            else
+                            {
+                                const qint64 remainingSourceFrames = source->frameCount() - region.sourceStartFrame;
+                                duration = static_cast<qint64>(std::ceil(
+                                    static_cast<double>(remainingSourceFrames) * sampleRate /
+                                    (source->sampleRate * region.playbackRate)));
+                            }
                             region.endFrame = region.startFrame + std::max<qint64>(1, duration);
                             const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
                             region.sourceGain = velocityGain;
@@ -1212,10 +1225,21 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     {
         const AudioRegion& region = audioRegions[index];
         const qint64 age = projectFrame - region.startFrame;
-        const double sourcePosition = region.sourceStartFrame +
+        double sourcePosition = region.sourceStartFrame +
             static_cast<double>(age) * region.source->sampleRate * region.playbackRate / sampleRate;
+        const qint64 loopStartFrame = std::clamp<qint64>(region.sourceStartFrame, 0,
+                                                          region.source->frameCount() - 1);
+        if (region.drumSampleLoop)
+        {
+            const double loopLengthFrames = std::max<qint64>(1,
+                region.source->frameCount() - loopStartFrame);
+            sourcePosition = loopStartFrame + std::fmod(
+                std::max(0.0, sourcePosition - loopStartFrame), loopLengthFrames);
+        }
         const qint64 firstFrame = static_cast<qint64>(sourcePosition);
-        const qint64 secondFrame = std::min(firstFrame + 1, region.source->frameCount() - 1);
+        const qint64 secondFrame = firstFrame + 1 < region.source->frameCount()
+            ? firstFrame + 1
+            : region.drumSampleLoop ? loopStartFrame : region.source->frameCount() - 1;
         if (firstFrame < 0 || firstFrame >= region.source->frameCount())
             continue;
         const float fraction = static_cast<float>(sourcePosition - firstFrame);

@@ -452,7 +452,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                 const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
                 if (sample.source != nullptr)
                     audioEngine.triggerSamplePreview(sample.source, 96, track->pan, track->gain,
-                                                     sample.startPositionPercent, sample.tuningSemitones);
+                                                     sample.startPositionPercent, sample.tuningSemitones,
+                                                     sample.loopEnabled);
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -483,7 +484,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                 const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
                 if (sample.source != nullptr)
                     audioEngine.triggerSamplePreview(sample.source, 100, track->pan, track->gain,
-                                                     sample.startPositionPercent, sample.tuningSemitones);
+                                                     sample.startPositionPercent, sample.tuningSemitones,
+                                                     sample.loopEnabled);
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -1462,6 +1464,10 @@ void MainWindow::createDocks()
         drumSampleStartControls[static_cast<size_t>(pad)]->setSuffix(QStringLiteral("%"));
         parameterForm->addRow(tr("%1 sample start").arg(drumPadNames[static_cast<size_t>(pad)]),
                               drumSampleStartControls[static_cast<size_t>(pad)]);
+        drumSampleLoopControls[static_cast<size_t>(pad)] = new QCheckBox(
+            tr("%1 loop while note is held").arg(drumPadNames[static_cast<size_t>(pad)]),
+            drumSampleControls);
+        parameterForm->addRow(drumSampleLoopControls[static_cast<size_t>(pad)]);
         drumSampleLayout->addLayout(parameterForm);
         connect(drumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
                 [this, pad] { importDrumSample(pad); });
@@ -1473,6 +1479,8 @@ void MainWindow::createDocks()
         connect(drumSampleStartControls[static_cast<size_t>(pad)],
                 qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, pad](double value) { setSelectedDrumSample(pad, 1, value); });
+        connect(drumSampleLoopControls[static_cast<size_t>(pad)], &QCheckBox::toggled, this,
+                [this, pad](bool enabled) { setSelectedDrumSample(pad, 2, enabled ? 1.0 : 0.0); });
     }
     browserLayout->addWidget(drumSampleControls);
     drumSampleControls->hide();
@@ -1839,12 +1847,15 @@ void MainWindow::refreshProjectUi()
                                                 !sample->path.isEmpty());
         const QSignalBlocker tuneBlocker(drumSampleTuneControls[pad]);
         const QSignalBlocker startBlocker(drumSampleStartControls[pad]);
+        const QSignalBlocker loopBlocker(drumSampleLoopControls[pad]);
         drumSampleTuneControls[pad]->setValue(sample == nullptr ? 0.0 : sample->tuningSemitones);
         drumSampleStartControls[pad]->setValue(
             sample == nullptr ? 0.0 : sample->startPositionPercent);
+        drumSampleLoopControls[pad]->setChecked(sample != nullptr && sample->loopEnabled);
         const bool sampleAssigned = drumRackSelected && sample != nullptr && !sample->path.isEmpty();
         drumSampleTuneControls[pad]->setEnabled(sampleAssigned);
         drumSampleStartControls[pad]->setEnabled(sampleAssigned);
+        drumSampleLoopControls[pad]->setEnabled(sampleAssigned);
     }
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
@@ -4088,6 +4099,7 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
     {
         case 0: sample.tuningSemitones = static_cast<float>(std::clamp(value, -24.0, 24.0)); break;
         case 1: sample.startPositionPercent = static_cast<float>(std::clamp(value, 0.0, 99.0)); break;
+        case 2: sample.loopEnabled = value >= 0.5; break;
         default: return;
     }
     audioEngine.setProject(project);
