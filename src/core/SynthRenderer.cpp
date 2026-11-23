@@ -170,6 +170,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackEqualizerStates.clear();
     trackInstrumentFilterStates.clear();
     trackInstrumentFilterHasTail.clear();
+    synthFilterEnvelopeSemitoneOffsets.clear();
+    synthFilterEnvelopeAppliedOffsets.clear();
     trackEffectStates.clear();
     clapInstruments.clear();
     clapInstrumentLiveParameterOverrides.clear();
@@ -203,6 +205,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     nextAudioStartIndex = 0;
     playbackCycle = 0;
     lastFrame = -1;
+    mixerFrameNumber = 0;
     nextClapArrangementNoteId = 1;
     if (!project)
         return;
@@ -215,6 +218,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
     trackInstrumentFilterStates.resize(static_cast<size_t>(project->tracks.size()));
     trackInstrumentFilterHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
+    synthFilterEnvelopeSemitoneOffsets.assign(static_cast<size_t>(project->tracks.size()), 0.0f);
+    synthFilterEnvelopeAppliedOffsets.assign(static_cast<size_t>(project->tracks.size()), 0.0f);
     trackEffectStates.resize(static_cast<size_t>(project->tracks.size()));
     clapInstruments.resize(static_cast<size_t>(project->tracks.size()));
     clapInstrumentLiveParameterOverrides.resize(static_cast<size_t>(project->tracks.size()));
@@ -620,6 +625,19 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     voice.secondOscillatorMix = track.secondOscillatorMix;
                     voice.secondOscillatorEnabled = track.instrumentType == InstrumentType::Synth &&
                                                     track.secondOscillatorEnabled;
+                    voice.filterEnvelopeEnabled = track.instrumentType == InstrumentType::Synth &&
+                        track.synthFilterEnabled && track.synthFilterEnvelopeEnabled;
+                    voice.filterEnvelopeAttackFrames = std::max<qint64>(0,
+                        static_cast<qint64>(std::llround(
+                            track.synthFilterEnvelopeAttackSeconds * sampleRate)));
+                    voice.filterEnvelopeDecayFrames = std::max<qint64>(0,
+                        static_cast<qint64>(std::llround(
+                            track.synthFilterEnvelopeDecaySeconds * sampleRate)));
+                    voice.filterEnvelopeReleaseFrames = std::max<qint64>(0,
+                        static_cast<qint64>(std::llround(
+                            track.synthFilterEnvelopeReleaseSeconds * sampleRate)));
+                    voice.filterEnvelopeAmountSemitones = track.synthFilterEnvelopeAmountSemitones;
+                    voice.filterEnvelopeSustainLevel = track.synthFilterEnvelopeSustainLevel;
                     voice.midiPitch = note.pitch;
                     voice.midiChannel = note.channel >= 0 ? note.channel : trackMidiChannel;
                     voice.probabilityPercent = note.probabilityPercent;
@@ -683,13 +701,27 @@ void SynthRenderer::resetTransport()
     resetTrackEqualizers();
     for (std::vector<EffectState>& effects : trackEffectStates)
         resetEffectChain(effects);
-    for (std::vector<EffectState>& effects : trackInstrumentFilterStates)
+    for (size_t trackIndex = 0; trackIndex < trackInstrumentFilterStates.size(); ++trackIndex)
+    {
+        std::vector<EffectState>& effects = trackInstrumentFilterStates[trackIndex];
         resetEffectChain(effects);
+        if (!effects.empty() && project != nullptr &&
+            trackIndex < static_cast<size_t>(project->tracks.size()))
+        {
+            const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+            effects.front().settings.cutoffHz = track.synthFilterCutoffHz;
+            configureFilter(effects.front(), track.synthFilterType);
+        }
+    }
     for (std::vector<EffectState>& effects : busEffectStates)
         resetEffectChain(effects);
     resetEffectChain(masterEffectStates);
     std::fill(trackEffectHasTail.begin(), trackEffectHasTail.end(), 0);
     std::fill(trackInstrumentFilterHasTail.begin(), trackInstrumentFilterHasTail.end(), 0);
+    std::fill(synthFilterEnvelopeSemitoneOffsets.begin(),
+              synthFilterEnvelopeSemitoneOffsets.end(), 0.0f);
+    std::fill(synthFilterEnvelopeAppliedOffsets.begin(),
+              synthFilterEnvelopeAppliedOffsets.end(), 0.0f);
     std::fill(busEffectHasTail.begin(), busEffectHasTail.end(), 0);
     std::fill(trackFrameSamples.begin(), trackFrameSamples.end(), StereoSample{});
     std::fill(trackFrameTouched.begin(), trackFrameTouched.end(), 0);
@@ -705,12 +737,16 @@ void SynthRenderer::resetTransport()
     playbackCycle = 0;
     for (std::array<float, 16>& bends : trackPitchBends)
         bends.fill(0.0f);
+    mixerFrameNumber = 0;
     lastFrame = -1;
 }
 
 void SynthRenderer::beginMixerFrame()
 {
     std::fill(lastBusOutputSamples.begin(), lastBusOutputSamples.end(), StereoSample{});
+    std::fill(synthFilterEnvelopeSemitoneOffsets.begin(),
+              synthFilterEnvelopeSemitoneOffsets.end(), 0.0f);
+    ++mixerFrameNumber;
 }
 
 void SynthRenderer::setCurrentBeat(double beat)
@@ -724,6 +760,15 @@ StereoSample SynthRenderer::addLiveTrackSample(size_t trackIndex, StereoSample i
         return {};
     addTrackSample(trackIndex, input.left, input.right);
     return {};
+}
+
+void SynthRenderer::setSynthFilterEnvelope(size_t trackIndex, float semitoneOffset)
+{
+    if (trackIndex >= synthFilterEnvelopeSemitoneOffsets.size() || !std::isfinite(semitoneOffset))
+        return;
+    float& current = synthFilterEnvelopeSemitoneOffsets[trackIndex];
+    if (std::abs(semitoneOffset) > std::abs(current))
+        current = std::clamp(semitoneOffset, -48.0f, 48.0f);
 }
 
 bool SynthRenderer::isClapInstrumentTrack(size_t trackIndex) const
@@ -822,6 +867,27 @@ StereoSample SynthRenderer::finishMixerFrame()
         StereoSample trackSample = trackFrameSamples[trackIndex];
         if (!trackInstrumentFilterStates[trackIndex].empty())
         {
+            const bool filterControlTick = (mixerFrameNumber & 0x0fU) == 0U;
+            const bool envelopeChange = std::abs(
+                synthFilterEnvelopeSemitoneOffsets[trackIndex] -
+                synthFilterEnvelopeAppliedOffsets[trackIndex]) >= 0.1f;
+            if ((filterControlTick || envelopeChange) &&
+                trackIndex < static_cast<size_t>(project->tracks.size()))
+            {
+                const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+                const double cutoff = std::clamp(
+                    static_cast<double>(track.synthFilterCutoffHz) * std::exp2(
+                        static_cast<double>(synthFilterEnvelopeSemitoneOffsets[trackIndex]) / 12.0),
+                    20.0, std::max(20.0, sampleRate * 0.49));
+                EffectState& filter = trackInstrumentFilterStates[trackIndex].front();
+                if (std::abs(filter.settings.cutoffHz - cutoff) > 0.01)
+                {
+                    filter.settings.cutoffHz = static_cast<float>(cutoff);
+                    configureFilter(filter, track.synthFilterType);
+                }
+                synthFilterEnvelopeAppliedOffsets[trackIndex] =
+                    synthFilterEnvelopeSemitoneOffsets[trackIndex];
+            }
             trackSample = processEffectChain(trackInstrumentFilterStates[trackIndex], trackSample);
             trackInstrumentFilterHasTail[trackIndex] =
                 effectChainHasTail(trackInstrumentFilterStates[trackIndex]) ? 1 : 0;
@@ -1591,9 +1657,20 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         activeNotes.clear();
         activeAudioRegions.clear();
         resetTrackEqualizers();
-        for (std::vector<EffectState>& effects : trackInstrumentFilterStates)
+        for (size_t trackIndex = 0; trackIndex < trackInstrumentFilterStates.size(); ++trackIndex)
+        {
+            std::vector<EffectState>& effects = trackInstrumentFilterStates[trackIndex];
             resetEffectChain(effects);
+            if (!effects.empty() && trackIndex < static_cast<size_t>(project->tracks.size()))
+            {
+                const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+                effects.front().settings.cutoffHz = track.synthFilterCutoffHz;
+                configureFilter(effects.front(), track.synthFilterType);
+            }
+        }
         std::fill(trackInstrumentFilterHasTail.begin(), trackInstrumentFilterHasTail.end(), 0);
+        std::fill(synthFilterEnvelopeAppliedOffsets.begin(),
+                  synthFilterEnvelopeAppliedOffsets.end(), 0.0f);
         nextStartIndex = 0;
         nextPitchBendIndex = 0;
         nextClapInstrumentEventIndex = 0;
@@ -1661,7 +1738,11 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
 
     activeNotes.erase(std::remove_if(activeNotes.begin(), activeNotes.end(), [&](size_t index)
     {
-        return projectFrame >= notes[index].endFrame + notes[index].releaseFrames;
+        const VoiceNote& voice = notes[index];
+        const qint64 releaseFrames = voice.filterEnvelopeEnabled
+            ? std::max(voice.releaseFrames, voice.filterEnvelopeReleaseFrames)
+            : voice.releaseFrames;
+        return projectFrame >= voice.endFrame + releaseFrames;
     }), activeNotes.end());
 
     while (nextAudioStartIndex < audioRegions.size() &&
@@ -1678,10 +1759,30 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     for (const size_t index : activeNotes)
     {
         const VoiceNote& note = notes[index];
-        if (projectFrame < note.startFrame || projectFrame >= note.endFrame + note.releaseFrames)
+        const qint64 voiceReleaseFrames = note.filterEnvelopeEnabled
+            ? std::max(note.releaseFrames, note.filterEnvelopeReleaseFrames)
+            : note.releaseFrames;
+        if (projectFrame < note.startFrame || projectFrame >= note.endFrame + voiceReleaseFrames)
             continue;
 
         const qint64 age = projectFrame - note.startFrame;
+        if (note.filterEnvelopeEnabled)
+        {
+            const qint64 gateDuration = note.endFrame - note.startFrame;
+            const float filterEnvelope = age < gateDuration
+                ? envelopeLevel(age, note.filterEnvelopeAttackFrames,
+                                note.filterEnvelopeDecayFrames,
+                                note.filterEnvelopeSustainLevel)
+                : note.filterEnvelopeReleaseFrames > 0
+                    ? envelopeLevel(gateDuration, note.filterEnvelopeAttackFrames,
+                                    note.filterEnvelopeDecayFrames,
+                                    note.filterEnvelopeSustainLevel) * std::max(0.0f, 1.0f -
+                        static_cast<float>(age - gateDuration) /
+                        static_cast<float>(note.filterEnvelopeReleaseFrames))
+                    : 0.0f;
+            setSynthFilterEnvelope(note.trackIndex,
+                note.filterEnvelopeAmountSemitones * filterEnvelope);
+        }
         if (note.percussion)
         {
             const TrackMixValue& mix = trackMixAt(note.trackIndex, projectFrame, projectBeat);

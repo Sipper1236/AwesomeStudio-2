@@ -106,6 +106,7 @@ private:
     void setSelectedSynthEnvelope(int parameter, double value);
     void setSelectedSynthOscillator(int parameter, double value);
     void setSelectedSynthFilter(int parameter, double value);
+    void setSelectedSynthFilterEnvelope(int parameter, double value);
     void setSelectedTrackEqualizer(int band, double gainDb);
     void refreshAutomationEditor();
     void refreshArrangementAutomationView();
@@ -213,6 +214,7 @@ private:
     QComboBox* synthFilterTypeControl = nullptr;
     QDoubleSpinBox* synthFilterCutoffControl = nullptr;
     QDoubleSpinBox* synthFilterResonanceControl = nullptr;
+    QCheckBox* synthFilterEnvelopeEnabledControl = nullptr;
     QComboBox* timeSignatureControl = nullptr;
     QComboBox* countInControl = nullptr;
     QComboBox* snapControl = nullptr;
@@ -221,11 +223,13 @@ private:
     QWidget* audioRegionControls = nullptr;
     QWidget* oscillatorPanel = nullptr;
     QWidget* synthFilterPanel = nullptr;
+    QWidget* synthFilterEnvelopePanel = nullptr;
     QWidget* synthEnvelopePanel = nullptr;
     QWidget* equalizerControls = nullptr;
     QWidget* automationEditorPanel = nullptr;
     QWidget* drumSampleControls = nullptr;
     std::array<QDoubleSpinBox*, 4> envelopeControls{};
+    std::array<QDoubleSpinBox*, 5> synthFilterEnvelopeControls{};
     std::array<QDoubleSpinBox*, 3> equalizerGainControls{};
     QDoubleSpinBox* audioFadeInControl = nullptr;
     QDoubleSpinBox* audioFadeOutControl = nullptr;

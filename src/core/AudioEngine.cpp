@@ -57,6 +57,54 @@ float envelopeLevel(qint64 ageFrames, qint64 attackFrames, qint64 decayFrames, f
     }
     return sustainLevel;
 }
+
+struct BiquadCoefficients
+{
+    float b0 = 1.0f;
+    float b1 = 0.0f;
+    float b2 = 0.0f;
+    float a1 = 0.0f;
+    float a2 = 0.0f;
+};
+
+BiquadCoefficients synthFilterCoefficients(SynthFilterType type, double cutoff,
+                                           double resonance, double sampleRate)
+{
+    cutoff = std::clamp(cutoff, 20.0, std::max(20.0, sampleRate * 0.49));
+    resonance = std::clamp(resonance, 0.1, 10.0);
+    const double omega = twoPi * cutoff / sampleRate;
+    const double cosine = std::cos(omega);
+    const double alpha = std::sin(omega) / (2.0 * resonance);
+    const double a0 = 1.0 + alpha;
+    BiquadCoefficients coefficients;
+    switch (type)
+    {
+        case SynthFilterType::HighPass:
+            coefficients.b0 = static_cast<float>(((1.0 + cosine) * 0.5) / a0);
+            coefficients.b1 = static_cast<float>(-(1.0 + cosine) / a0);
+            coefficients.b2 = coefficients.b0;
+            break;
+        case SynthFilterType::BandPass:
+            coefficients.b0 = static_cast<float>(alpha / a0);
+            coefficients.b1 = 0.0f;
+            coefficients.b2 = -coefficients.b0;
+            break;
+        case SynthFilterType::Notch:
+            coefficients.b0 = static_cast<float>(1.0 / a0);
+            coefficients.b1 = static_cast<float>((-2.0 * cosine) / a0);
+            coefficients.b2 = coefficients.b0;
+            break;
+        case SynthFilterType::LowPass:
+        default:
+            coefficients.b0 = static_cast<float>(((1.0 - cosine) * 0.5) / a0);
+            coefficients.b1 = static_cast<float>((1.0 - cosine) / a0);
+            coefficients.b2 = coefficients.b0;
+            break;
+    }
+    coefficients.a1 = static_cast<float>((-2.0 * cosine) / a0);
+    coefficients.a2 = static_cast<float>((1.0 - alpha) / a0);
+    return coefficients;
+}
 }
 
 class AudioEngine::AudioStream final : public QIODevice
@@ -413,6 +461,23 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
     event.secondOscillatorMix = track.secondOscillatorMix;
     event.secondOscillatorEnabled = track.instrumentType == InstrumentType::Synth &&
                                     track.secondOscillatorEnabled;
+    event.filterEnvelopeEnabled = track.instrumentType == InstrumentType::Synth &&
+                                  track.synthFilterEnabled && track.synthFilterEnvelopeEnabled;
+    event.filterEnvelopeAmountSemitones = std::clamp(
+        std::isfinite(track.synthFilterEnvelopeAmountSemitones)
+            ? track.synthFilterEnvelopeAmountSemitones : 24.0f, -48.0f, 48.0f);
+    event.filterEnvelopeAttackSeconds = std::clamp(
+        std::isfinite(track.synthFilterEnvelopeAttackSeconds)
+            ? track.synthFilterEnvelopeAttackSeconds : 0.008f, 0.0f, 5.0f);
+    event.filterEnvelopeDecaySeconds = std::clamp(
+        std::isfinite(track.synthFilterEnvelopeDecaySeconds)
+            ? track.synthFilterEnvelopeDecaySeconds : 0.2f, 0.0f, 5.0f);
+    event.filterEnvelopeSustainLevel = std::clamp(
+        std::isfinite(track.synthFilterEnvelopeSustainLevel)
+            ? track.synthFilterEnvelopeSustainLevel : 0.0f, 0.0f, 1.0f);
+    event.filterEnvelopeReleaseSeconds = std::clamp(
+        std::isfinite(track.synthFilterEnvelopeReleaseSeconds)
+            ? track.synthFilterEnvelopeReleaseSeconds : 0.2f, 0.0f, 5.0f);
     const bool suppressedBySolo = hasSolo && !track.solo;
     event.gain = track.muted || suppressedBySolo ? 0.0f : std::clamp(track.gain, 0.0f, 1.0f);
     event.pan = std::clamp(track.pan, -1.0f, 1.0f);
@@ -658,6 +723,10 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
         matchedVoice->held = false;
         matchedVoice->releaseFrame = releaseFrame;
         matchedVoice->releaseStartLevel = envelope;
+        matchedVoice->filterEnvelopeReleaseStartLevel = envelopeLevel(age,
+            matchedVoice->filterEnvelopeAttackFrames,
+            matchedVoice->filterEnvelopeDecayFrames,
+            matchedVoice->filterEnvelopeSustainLevel);
         return;
     }
 
@@ -696,6 +765,15 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
         event.decaySeconds * outputSampleRate)));
     target->releaseFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
         event.releaseSeconds * outputSampleRate)));
+    target->filterEnvelopeEnabled = event.filterEnvelopeEnabled;
+    target->filterEnvelopeAmountSemitones = event.filterEnvelopeAmountSemitones;
+    target->filterEnvelopeAttackFrames = std::max<qint64>(0,
+        static_cast<qint64>(std::llround(event.filterEnvelopeAttackSeconds * outputSampleRate)));
+    target->filterEnvelopeDecayFrames = std::max<qint64>(0,
+        static_cast<qint64>(std::llround(event.filterEnvelopeDecaySeconds * outputSampleRate)));
+    target->filterEnvelopeSustainLevel = std::clamp(event.filterEnvelopeSustainLevel, 0.0f, 1.0f);
+    target->filterEnvelopeReleaseFrames = std::max<qint64>(0,
+        static_cast<qint64>(std::llround(event.filterEnvelopeReleaseSeconds * outputSampleRate)));
     target->serial = nextLiveMidiSerial++;
     if (target->clapInstrument)
     {
@@ -855,13 +933,18 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer)
         else if (voice.releaseFrame >= 0 && frame >= voice.releaseFrame)
         {
             const qint64 releaseAge = frame - voice.releaseFrame;
-            if (releaseAge >= voice.releaseFrames)
+            const qint64 activeReleaseFrames = voice.filterEnvelopeEnabled
+                ? std::max(voice.releaseFrames, voice.filterEnvelopeReleaseFrames)
+                : voice.releaseFrames;
+            if (releaseAge >= activeReleaseFrames)
             {
                 voice = LiveMidiVoice{};
                 continue;
             }
-            envelope = voice.releaseStartLevel * std::max(0.0f, 1.0f -
-                static_cast<float>(releaseAge) / static_cast<float>(voice.releaseFrames));
+            envelope = voice.releaseFrames > 0
+                ? voice.releaseStartLevel * std::max(0.0f, 1.0f -
+                    static_cast<float>(releaseAge) / static_cast<float>(voice.releaseFrames))
+                : 0.0f;
         }
         else if (age < voice.attackFrames)
             envelope = static_cast<float>(age) / static_cast<float>(voice.attackFrames);
@@ -873,6 +956,21 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer)
         }
         else
             envelope = voice.sustainLevel;
+
+        if (voice.filterEnvelopeEnabled)
+        {
+            const float filterEnvelope = voice.releaseFrame >= 0 && frame >= voice.releaseFrame
+                ? voice.filterEnvelopeReleaseFrames > 0
+                    ? voice.filterEnvelopeReleaseStartLevel * std::max(0.0f, 1.0f -
+                        static_cast<float>(frame - voice.releaseFrame) /
+                        static_cast<float>(voice.filterEnvelopeReleaseFrames))
+                    : 0.0f
+                : envelopeLevel(age, voice.filterEnvelopeAttackFrames,
+                                voice.filterEnvelopeDecayFrames,
+                                voice.filterEnvelopeSustainLevel);
+            renderer.setSynthFilterEnvelope(voice.trackIndex,
+                voice.filterEnvelopeAmountSemitones * filterEnvelope);
+        }
 
         float voiceSample = 0.0f;
         if (voice.percussion)
@@ -918,7 +1016,13 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
                                  SynthWaveform secondOscillatorWaveform,
                                  float secondOscillatorDetuneCents, float secondOscillatorMix,
                                  bool synthFilterEnabled, float synthFilterCutoffHz,
-                                 float synthFilterResonance, float attackSeconds,
+                                 float synthFilterResonance, SynthFilterType synthFilterType,
+                                 bool synthFilterEnvelopeEnabled,
+                                 float synthFilterEnvelopeAmountSemitones,
+                                 float synthFilterEnvelopeAttackSeconds,
+                                 float synthFilterEnvelopeDecaySeconds,
+                                 float synthFilterEnvelopeSustainLevel,
+                                 float synthFilterEnvelopeReleaseSeconds, float attackSeconds,
                                  float decaySeconds, float sustainLevel, float releaseSeconds)
 {
     std::atomic_store_explicit(&previewSampleAsset, std::shared_ptr<const AudioAsset>{},
@@ -939,18 +1043,42 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
     const double cutoff = std::clamp(safeCutoff, 20.0, std::max(20.0, outputSampleRate * 0.49));
     const double safeResonance = std::isfinite(synthFilterResonance) ? synthFilterResonance : 0.707f;
     const double resonance = std::clamp(safeResonance, 0.1, 10.0);
-    const double omega = 6.28318530717958647692 * cutoff / outputSampleRate;
-    const double cosine = std::cos(omega);
-    const double alpha = std::sin(omega) / (2.0 * resonance);
-    const double a0 = 1.0 + alpha;
-    previewFilterB0.store(static_cast<float>(((1.0 - cosine) * 0.5) / a0),
-                          std::memory_order_relaxed);
-    previewFilterB1.store(static_cast<float>((1.0 - cosine) / a0), std::memory_order_relaxed);
-    previewFilterB2.store(static_cast<float>(((1.0 - cosine) * 0.5) / a0),
-                          std::memory_order_relaxed);
-    previewFilterA1.store(static_cast<float>((-2.0 * cosine) / a0), std::memory_order_relaxed);
-    previewFilterA2.store(static_cast<float>((1.0 - alpha) / a0), std::memory_order_relaxed);
+    const BiquadCoefficients coefficients = synthFilterCoefficients(
+        synthFilterType, cutoff, resonance, outputSampleRate);
+    previewFilterB0.store(coefficients.b0, std::memory_order_relaxed);
+    previewFilterB1.store(coefficients.b1, std::memory_order_relaxed);
+    previewFilterB2.store(coefficients.b2, std::memory_order_relaxed);
+    previewFilterA1.store(coefficients.a1, std::memory_order_relaxed);
+    previewFilterA2.store(coefficients.a2, std::memory_order_relaxed);
     previewSynthFilterEnabled.store(filterEnabled, std::memory_order_relaxed);
+    previewFilterType.store(static_cast<int>(synthFilterType), std::memory_order_relaxed);
+    previewFilterCutoffHz.store(static_cast<float>(cutoff), std::memory_order_relaxed);
+    previewFilterResonance.store(static_cast<float>(resonance), std::memory_order_relaxed);
+    const bool filterEnvelopeEnabled = filterEnabled && synthFilterEnvelopeEnabled;
+    previewFilterEnvelopeEnabled.store(filterEnvelopeEnabled, std::memory_order_relaxed);
+    previewFilterEnvelopeAmountSemitones.store(std::clamp(
+        std::isfinite(synthFilterEnvelopeAmountSemitones)
+            ? synthFilterEnvelopeAmountSemitones : 24.0f, -48.0f, 48.0f),
+        std::memory_order_relaxed);
+    previewFilterEnvelopeAttackFrames.store(std::max<qint64>(0,
+        static_cast<qint64>(std::llround(std::clamp(
+            std::isfinite(synthFilterEnvelopeAttackSeconds)
+                ? synthFilterEnvelopeAttackSeconds : 0.008f, 0.0f, 5.0f) * outputSampleRate))),
+        std::memory_order_relaxed);
+    previewFilterEnvelopeDecayFrames.store(std::max<qint64>(0,
+        static_cast<qint64>(std::llround(std::clamp(
+            std::isfinite(synthFilterEnvelopeDecaySeconds)
+                ? synthFilterEnvelopeDecaySeconds : 0.2f, 0.0f, 5.0f) * outputSampleRate))),
+        std::memory_order_relaxed);
+    previewFilterEnvelopeSustainLevel.store(std::clamp(
+        std::isfinite(synthFilterEnvelopeSustainLevel)
+            ? synthFilterEnvelopeSustainLevel : 0.0f, 0.0f, 1.0f),
+        std::memory_order_relaxed);
+    previewFilterEnvelopeReleaseFrames.store(std::max<qint64>(0,
+        static_cast<qint64>(std::llround(std::clamp(
+            std::isfinite(synthFilterEnvelopeReleaseSeconds)
+                ? synthFilterEnvelopeReleaseSeconds : 0.2f, 0.0f, 5.0f) * outputSampleRate))),
+        std::memory_order_relaxed);
     previewFilterResetSerial.fetch_add(1, std::memory_order_release);
     previewPercussion.store(percussion, std::memory_order_relaxed);
     previewAttackFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
@@ -972,8 +1100,13 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
     const double filterTailSeconds = filterEnabled
         ? std::min(4.0, 7.0 * resonance / (3.14159265358979323846 * cutoff)) : 0.0;
     const qint64 percussionTailFrames = percussion ? previewReleaseFrames.load(std::memory_order_relaxed) : 0;
-    previewEndFrame.store(noteEnd + static_cast<qint64>(outputSampleRate * filterTailSeconds) +
-                          percussionTailFrames,
+    const qint64 amplitudeReleaseFrames = percussion ? percussionTailFrames :
+        previewReleaseFrames.load(std::memory_order_relaxed);
+    const qint64 filterReleaseFrames = filterEnvelopeEnabled
+        ? previewFilterEnvelopeReleaseFrames.load(std::memory_order_relaxed) : 0;
+    const qint64 synthReleaseFrames = std::max(amplitudeReleaseFrames, filterReleaseFrames);
+    previewEndFrame.store(noteEnd + synthReleaseFrames +
+                          static_cast<qint64>(outputSampleRate * filterTailSeconds),
                           std::memory_order_release);
 }
 
@@ -1326,8 +1459,6 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             else
             {
                 const bool percussion = previewPercussion.load(std::memory_order_relaxed);
-                const float attack = std::min(1.0f, static_cast<float>(age) /
-                    std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
                 float preview = 0.0f;
                 if (percussion)
                 {
@@ -1367,7 +1498,16 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                         previewFilterCachedA2 = previewFilterA2.load(std::memory_order_relaxed);
                     }
                     const qint64 noteEnd = previewNoteEndFrame.load(std::memory_order_relaxed);
-                    if (clockFrame < noteEnd)
+                    const qint64 gateEndAge = std::max<qint64>(0, noteEnd - previewStart);
+                    const qint64 amplitudeReleaseFrames =
+                        previewReleaseFrames.load(std::memory_order_relaxed);
+                    const qint64 amplitudeAttackFrames =
+                        previewAttackFrames.load(std::memory_order_relaxed);
+                    const qint64 amplitudeDecayFrames =
+                        previewDecayFrames.load(std::memory_order_relaxed);
+                    const float amplitudeSustainLevel =
+                        previewSustainLevel.load(std::memory_order_relaxed);
+                    if (clockFrame < noteEnd + amplitudeReleaseFrames)
                     {
                         const double frequency = previewFrequency.load(std::memory_order_relaxed);
                         const double phase = static_cast<double>(age) * frequency / outputSampleRate;
@@ -1384,9 +1524,51 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                             const float mix = previewSecondOscillatorMix.load(std::memory_order_relaxed);
                             oscillator = oscillator * (1.0f - mix) + secondOscillator * mix;
                         }
-                        const float release = std::min(1.0f, static_cast<float>(noteEnd - clockFrame) /
-                                                               std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
-                        preview = oscillator * (0.2f * velocity) * attack * release;
+                        const float amplitudeEnvelope = age < gateEndAge
+                            ? envelopeLevel(age, amplitudeAttackFrames, amplitudeDecayFrames,
+                                            amplitudeSustainLevel)
+                            : amplitudeReleaseFrames > 0
+                                ? envelopeLevel(gateEndAge, amplitudeAttackFrames,
+                                    amplitudeDecayFrames, amplitudeSustainLevel) * std::max(0.0f, 1.0f -
+                                    static_cast<float>(age - gateEndAge) /
+                                    static_cast<float>(amplitudeReleaseFrames))
+                                : 0.0f;
+                        preview = oscillator * (0.2f * velocity) * amplitudeEnvelope;
+                    }
+                    if (previewFilterActive &&
+                        previewFilterEnvelopeEnabled.load(std::memory_order_relaxed) &&
+                        (clockFrame & 0x0f) == 0)
+                    {
+                        const qint64 filterAttackFrames =
+                            previewFilterEnvelopeAttackFrames.load(std::memory_order_relaxed);
+                        const qint64 filterDecayFrames =
+                            previewFilterEnvelopeDecayFrames.load(std::memory_order_relaxed);
+                        const qint64 filterReleaseFrames =
+                            previewFilterEnvelopeReleaseFrames.load(std::memory_order_relaxed);
+                        const float filterSustainLevel =
+                            previewFilterEnvelopeSustainLevel.load(std::memory_order_relaxed);
+                        const float envelope = age < gateEndAge
+                            ? envelopeLevel(age, filterAttackFrames, filterDecayFrames,
+                                            filterSustainLevel)
+                            : filterReleaseFrames > 0
+                                ? envelopeLevel(gateEndAge, filterAttackFrames,
+                                    filterDecayFrames, filterSustainLevel) * std::max(0.0f, 1.0f -
+                                    static_cast<float>(age - gateEndAge) /
+                                    static_cast<float>(filterReleaseFrames))
+                                : 0.0f;
+                        const double modulatedCutoff =
+                            previewFilterCutoffHz.load(std::memory_order_relaxed) * std::exp2(
+                                static_cast<double>(previewFilterEnvelopeAmountSemitones.load(
+                                    std::memory_order_relaxed)) * envelope / 12.0);
+                        const BiquadCoefficients coefficients = synthFilterCoefficients(
+                            static_cast<SynthFilterType>(previewFilterType.load(
+                                std::memory_order_relaxed)), modulatedCutoff,
+                            previewFilterResonance.load(std::memory_order_relaxed), outputSampleRate);
+                        previewFilterCachedB0 = coefficients.b0;
+                        previewFilterCachedB1 = coefficients.b1;
+                        previewFilterCachedB2 = coefficients.b2;
+                        previewFilterCachedA1 = coefficients.a1;
+                        previewFilterCachedA2 = coefficients.a2;
                     }
                     if (previewFilterActive)
                     {

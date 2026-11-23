@@ -1158,10 +1158,32 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                                        track->synthFilterEnabled,
                                    track == nullptr ? 20000.0f : track->synthFilterCutoffHz,
                                    track == nullptr ? 0.707f : track->synthFilterResonance,
-                                   padSample == nullptr ? 0.008f : padSample->attackSeconds,
-                                   padSample == nullptr ? 0.0f : padSample->decaySeconds,
-                                   padSample == nullptr ? 1.0f : padSample->sustainLevel,
-                                   padSample == nullptr ? 0.06f : padSample->releaseSeconds);
+                                   track == nullptr ? SynthFilterType::LowPass : track->synthFilterType,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth &&
+                                       track->synthFilterEnabled &&
+                                       track->synthFilterEnvelopeEnabled,
+                                   track == nullptr ? 24.0f :
+                                       track->synthFilterEnvelopeAmountSemitones,
+                                   track == nullptr ? 0.008f :
+                                       track->synthFilterEnvelopeAttackSeconds,
+                                   track == nullptr ? 0.2f :
+                                       track->synthFilterEnvelopeDecaySeconds,
+                                   track == nullptr ? 0.0f :
+                                       track->synthFilterEnvelopeSustainLevel,
+                                   track == nullptr ? 0.2f :
+                                       track->synthFilterEnvelopeReleaseSeconds,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->attackSeconds
+                                       : padSample == nullptr ? 0.008f : padSample->attackSeconds,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->decaySeconds
+                                       : padSample == nullptr ? 0.0f : padSample->decaySeconds,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->sustainLevel
+                                       : padSample == nullptr ? 1.0f : padSample->sustainLevel,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->releaseSeconds
+                                       : padSample == nullptr ? 0.06f : padSample->releaseSeconds);
     });
     connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
     {
@@ -1204,10 +1226,32 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                                        track->synthFilterEnabled,
                                    track == nullptr ? 20000.0f : track->synthFilterCutoffHz,
                                    track == nullptr ? 0.707f : track->synthFilterResonance,
-                                   padSample == nullptr ? 0.008f : padSample->attackSeconds,
-                                   padSample == nullptr ? 0.0f : padSample->decaySeconds,
-                                   padSample == nullptr ? 1.0f : padSample->sustainLevel,
-                                   padSample == nullptr ? 0.06f : padSample->releaseSeconds);
+                                   track == nullptr ? SynthFilterType::LowPass : track->synthFilterType,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth &&
+                                       track->synthFilterEnabled &&
+                                       track->synthFilterEnvelopeEnabled,
+                                   track == nullptr ? 24.0f :
+                                       track->synthFilterEnvelopeAmountSemitones,
+                                   track == nullptr ? 0.008f :
+                                       track->synthFilterEnvelopeAttackSeconds,
+                                   track == nullptr ? 0.2f :
+                                       track->synthFilterEnvelopeDecaySeconds,
+                                   track == nullptr ? 0.0f :
+                                       track->synthFilterEnvelopeSustainLevel,
+                                   track == nullptr ? 0.2f :
+                                       track->synthFilterEnvelopeReleaseSeconds,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->attackSeconds
+                                       : padSample == nullptr ? 0.008f : padSample->attackSeconds,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->decaySeconds
+                                       : padSample == nullptr ? 0.0f : padSample->decaySeconds,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->sustainLevel
+                                       : padSample == nullptr ? 1.0f : padSample->sustainLevel,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth
+                                       ? track->releaseSeconds
+                                       : padSample == nullptr ? 0.06f : padSample->releaseSeconds);
     });
     connect(arrangementEditor, &ArrangementEditor::clipActivated, this,
             [this](quint64 trackId, quint64 clipId) { selectClip(trackId, clipId, true); });
@@ -2100,6 +2144,72 @@ void MainWindow::createDocks()
             [this](double value) { setSelectedSynthFilter(2, value); });
     browserLayout->addWidget(synthFilterGroup);
 
+    auto* synthFilterEnvelopeGroup = new QGroupBox(tr("FILTER ENVELOPE"), browser);
+    synthFilterEnvelopePanel = synthFilterEnvelopeGroup;
+    auto* synthFilterEnvelopeForm = new QFormLayout(synthFilterEnvelopeGroup);
+    synthFilterEnvelopeEnabledControl = new QCheckBox(tr("Enable filter envelope"),
+                                                       synthFilterEnvelopeGroup);
+    synthFilterEnvelopeForm->addRow(synthFilterEnvelopeEnabledControl);
+    const std::array<QString, 5> filterEnvelopeLabels = {
+        tr("Amount"), tr("Attack (s)"), tr("Decay (s)"), tr("Sustain"), tr("Release (s)")
+    };
+    for (int parameter = 0; parameter < static_cast<int>(synthFilterEnvelopeControls.size());
+         ++parameter)
+    {
+        QDoubleSpinBox* control = new QDoubleSpinBox(synthFilterEnvelopeGroup);
+        if (parameter == 0)
+        {
+            control->setRange(-48.0, 48.0);
+            control->setDecimals(1);
+            control->setSingleStep(1.0);
+            control->setSuffix(tr(" st"));
+            control->setToolTip(tr("Positive values raise the cutoff as the envelope opens."));
+        }
+        else if (parameter == 4)
+        {
+            control->setRange(0.0, 5.0);
+            control->setDecimals(3);
+            control->setSingleStep(0.01);
+            control->setSuffix(tr(" s"));
+        }
+        else if (parameter == 3)
+        {
+            control->setRange(0.0, 1.0);
+            control->setDecimals(2);
+            control->setSingleStep(0.05);
+        }
+        else
+        {
+            control->setRange(0.0, 5.0);
+            control->setDecimals(3);
+            control->setSingleStep(0.01);
+            control->setSuffix(tr(" s"));
+        }
+        synthFilterEnvelopeControls[static_cast<size_t>(parameter)] = control;
+        synthFilterEnvelopeForm->addRow(filterEnvelopeLabels[static_cast<size_t>(parameter)],
+                                        control);
+        connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, parameter](double value)
+        {
+            setSelectedSynthFilterEnvelope(parameter + 1, value);
+        });
+    }
+    connect(synthFilterEnvelopeEnabledControl, &QCheckBox::toggled, this,
+            [this](bool enabled)
+    {
+        setSelectedSynthFilterEnvelope(0, enabled ? 1.0 : 0.0);
+        for (QDoubleSpinBox* control : synthFilterEnvelopeControls)
+            control->setEnabled(enabled && synthFilterEnvelopePanel->isEnabled());
+    });
+    connect(synthFilterEnabledControl, &QCheckBox::toggled, this,
+            [this](bool enabled)
+    {
+        synthFilterEnvelopePanel->setEnabled(enabled);
+        for (QDoubleSpinBox* control : synthFilterEnvelopeControls)
+            control->setEnabled(enabled && synthFilterEnvelopeEnabledControl->isChecked());
+    });
+    browserLayout->addWidget(synthFilterEnvelopeGroup);
+
     auto* synthEnvelopeGroup = new QGroupBox(tr("SYNTH ENVELOPE"), browser);
     synthEnvelopePanel = synthEnvelopeGroup;
     auto* synthEnvelopeForm = new QFormLayout(synthEnvelopeGroup);
@@ -2697,6 +2807,12 @@ void MainWindow::refreshProjectUi()
     const QSignalBlocker synthFilterTypeBlocker(synthFilterTypeControl);
     const QSignalBlocker synthFilterCutoffBlocker(synthFilterCutoffControl);
     const QSignalBlocker synthFilterResonanceBlocker(synthFilterResonanceControl);
+    const QSignalBlocker synthFilterEnvelopeEnabledBlocker(synthFilterEnvelopeEnabledControl);
+    const QSignalBlocker synthFilterEnvelopeBlocker0(synthFilterEnvelopeControls[0]);
+    const QSignalBlocker synthFilterEnvelopeBlocker1(synthFilterEnvelopeControls[1]);
+    const QSignalBlocker synthFilterEnvelopeBlocker2(synthFilterEnvelopeControls[2]);
+    const QSignalBlocker synthFilterEnvelopeBlocker3(synthFilterEnvelopeControls[3]);
+    const QSignalBlocker synthFilterEnvelopeBlocker4(synthFilterEnvelopeControls[4]);
     const int waveformIndex = track == nullptr ? 0 :
         waveformControl->findData(static_cast<int>(track->waveform));
     waveformControl->setCurrentIndex(std::max(0, waveformIndex));
@@ -2727,6 +2843,22 @@ void MainWindow::refreshProjectUi()
     synthFilterResonanceControl->setValue(track == nullptr ? 0.707 : track->synthFilterResonance);
     synthFilterCutoffControl->setEnabled(synthFilterEnabled);
     synthFilterResonanceControl->setEnabled(synthFilterEnabled);
+    synthFilterEnvelopePanel->setVisible(synthTrackSelected);
+    synthFilterEnvelopePanel->setEnabled(synthFilterEnabled);
+    const bool synthFilterEnvelopeEnabled = synthTrackSelected &&
+        track->synthFilterEnvelopeEnabled;
+    synthFilterEnvelopeEnabledControl->setChecked(synthFilterEnvelopeEnabled);
+    const std::array<float, 5> filterEnvelopeValues = track == nullptr
+        ? std::array<float, 5>{24.0f, 0.008f, 0.2f, 0.0f, 0.2f}
+        : std::array<float, 5>{track->synthFilterEnvelopeAmountSemitones,
+            track->synthFilterEnvelopeAttackSeconds, track->synthFilterEnvelopeDecaySeconds,
+            track->synthFilterEnvelopeSustainLevel, track->synthFilterEnvelopeReleaseSeconds};
+    for (size_t index = 0; index < synthFilterEnvelopeControls.size(); ++index)
+    {
+        synthFilterEnvelopeControls[index]->setValue(filterEnvelopeValues[index]);
+        synthFilterEnvelopeControls[index]->setEnabled(
+            synthFilterEnabled && synthFilterEnvelopeEnabled);
+    }
     const std::array<float, 4> envelopeValues = track == nullptr
         ? std::array<float, 4>{0.008f, 0.0f, 1.0f, 0.06f}
         : std::array<float, 4>{track->attackSeconds, track->decaySeconds,
@@ -4905,6 +5037,31 @@ void MainWindow::setSelectedSynthFilter(int parameter, double value)
         case 2: track->synthFilterResonance = static_cast<float>(std::clamp(value, 0.1, 10.0)); break;
         case 3: track->synthFilterType = static_cast<SynthFilterType>(
                     std::clamp(static_cast<int>(value), 0, 3)); break;
+        default: return;
+    }
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::setSelectedSynthFilterEnvelope(int parameter, double value)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::Synth)
+        return;
+    switch (parameter)
+    {
+        case 0: track->synthFilterEnvelopeEnabled = value >= 0.5; break;
+        case 1: track->synthFilterEnvelopeAmountSemitones = static_cast<float>(
+                    std::clamp(value, -48.0, 48.0)); break;
+        case 2: track->synthFilterEnvelopeAttackSeconds = static_cast<float>(
+                    std::clamp(value, 0.0, 5.0)); break;
+        case 3: track->synthFilterEnvelopeDecaySeconds = static_cast<float>(
+                    std::clamp(value, 0.0, 5.0)); break;
+        case 4: track->synthFilterEnvelopeSustainLevel = static_cast<float>(
+                    std::clamp(value, 0.0, 1.0)); break;
+        case 5: track->synthFilterEnvelopeReleaseSeconds = static_cast<float>(
+                    std::clamp(value, 0.0, 5.0)); break;
         default: return;
     }
     audioEngine.setProject(project);

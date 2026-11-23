@@ -579,6 +579,26 @@ void ProjectData::normalize()
             track.synthFilterResonance = 0.707f;
         track.synthFilterCutoffHz = std::clamp(track.synthFilterCutoffHz, 20.0f, 20000.0f);
         track.synthFilterResonance = std::clamp(track.synthFilterResonance, 0.1f, 10.0f);
+        if (!std::isfinite(track.synthFilterEnvelopeAmountSemitones))
+            track.synthFilterEnvelopeAmountSemitones = 24.0f;
+        if (!std::isfinite(track.synthFilterEnvelopeAttackSeconds))
+            track.synthFilterEnvelopeAttackSeconds = 0.008f;
+        if (!std::isfinite(track.synthFilterEnvelopeDecaySeconds))
+            track.synthFilterEnvelopeDecaySeconds = 0.2f;
+        if (!std::isfinite(track.synthFilterEnvelopeSustainLevel))
+            track.synthFilterEnvelopeSustainLevel = 0.0f;
+        if (!std::isfinite(track.synthFilterEnvelopeReleaseSeconds))
+            track.synthFilterEnvelopeReleaseSeconds = 0.2f;
+        track.synthFilterEnvelopeAmountSemitones = std::clamp(
+            track.synthFilterEnvelopeAmountSemitones, -48.0f, 48.0f);
+        track.synthFilterEnvelopeAttackSeconds = std::clamp(
+            track.synthFilterEnvelopeAttackSeconds, 0.0f, 5.0f);
+        track.synthFilterEnvelopeDecaySeconds = std::clamp(
+            track.synthFilterEnvelopeDecaySeconds, 0.0f, 5.0f);
+        track.synthFilterEnvelopeSustainLevel = std::clamp(
+            track.synthFilterEnvelopeSustainLevel, 0.0f, 1.0f);
+        track.synthFilterEnvelopeReleaseSeconds = std::clamp(
+            track.synthFilterEnvelopeReleaseSeconds, 0.0f, 5.0f);
         if (!std::isfinite(track.attackSeconds)) track.attackSeconds = 0.008f;
         if (!std::isfinite(track.decaySeconds)) track.decaySeconds = 0.0f;
         if (!std::isfinite(track.sustainLevel)) track.sustainLevel = 1.0f;

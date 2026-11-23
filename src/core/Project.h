@@ -274,6 +274,12 @@ struct InstrumentTrack
     SynthFilterType synthFilterType = SynthFilterType::LowPass;
     float synthFilterCutoffHz = 20000.0f;
     float synthFilterResonance = 0.707f;
+    bool synthFilterEnvelopeEnabled = false;
+    float synthFilterEnvelopeAmountSemitones = 24.0f;
+    float synthFilterEnvelopeAttackSeconds = 0.008f;
+    float synthFilterEnvelopeDecaySeconds = 0.2f;
+    float synthFilterEnvelopeSustainLevel = 0.0f;
+    float synthFilterEnvelopeReleaseSeconds = 0.2f;
     float attackSeconds = 0.008f;
     float decaySeconds = 0.0f;
     float sustainLevel = 1.0f;

@@ -25,6 +25,7 @@ public:
     void beginMixerFrame();
     void setCurrentBeat(double beat);
     StereoSample addLiveTrackSample(size_t trackIndex, StereoSample input);
+    void setSynthFilterEnvelope(size_t trackIndex, float semitoneOffset);
     bool isClapInstrumentTrack(size_t trackIndex) const;
     void clapInstrumentNoteOn(size_t trackIndex, std::int32_t noteId,
                               int channel, int key, float velocity);
@@ -65,12 +66,18 @@ private:
         SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
         float secondOscillatorDetuneCents = 0.0f;
         float secondOscillatorMix = 0.5f;
+        qint64 filterEnvelopeAttackFrames = 1;
+        qint64 filterEnvelopeDecayFrames = 0;
+        qint64 filterEnvelopeReleaseFrames = 1;
+        float filterEnvelopeAmountSemitones = 24.0f;
+        float filterEnvelopeSustainLevel = 0.0f;
         int midiPitch = 60;
         int midiChannel = 0;
         int probabilityPercent = 100;
         quint64 probabilitySeed = 0;
         bool percussion = false;
         bool secondOscillatorEnabled = false;
+        bool filterEnvelopeEnabled = false;
     };
 
     struct PitchBendEvent
@@ -211,6 +218,9 @@ private:
     std::vector<TrackEqualizerState> trackEqualizerStates;
     std::vector<std::vector<EffectState>> trackInstrumentFilterStates;
     std::vector<unsigned char> trackInstrumentFilterHasTail;
+    std::vector<float> synthFilterEnvelopeSemitoneOffsets;
+    std::vector<float> synthFilterEnvelopeAppliedOffsets;
+    quint64 mixerFrameNumber = 0;
     std::vector<std::vector<EffectState>> trackEffectStates;
     std::vector<std::unique_ptr<ClapAudioPluginInstance>> clapInstruments;
     std::vector<std::vector<float>> clapInstrumentLiveParameterOverrides;

@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 42;
+constexpr int currentProjectVersion = 43;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -506,6 +506,17 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("synthFilterType"), static_cast<int>(track.synthFilterType)},
         {QStringLiteral("synthFilterCutoffHz"), track.synthFilterCutoffHz},
         {QStringLiteral("synthFilterResonance"), track.synthFilterResonance},
+        {QStringLiteral("synthFilterEnvelopeEnabled"), track.synthFilterEnvelopeEnabled},
+        {QStringLiteral("synthFilterEnvelopeAmountSemitones"),
+         track.synthFilterEnvelopeAmountSemitones},
+        {QStringLiteral("synthFilterEnvelopeAttackSeconds"),
+         track.synthFilterEnvelopeAttackSeconds},
+        {QStringLiteral("synthFilterEnvelopeDecaySeconds"),
+         track.synthFilterEnvelopeDecaySeconds},
+        {QStringLiteral("synthFilterEnvelopeSustainLevel"),
+         track.synthFilterEnvelopeSustainLevel},
+        {QStringLiteral("synthFilterEnvelopeReleaseSeconds"),
+         track.synthFilterEnvelopeReleaseSeconds},
         {QStringLiteral("attackSeconds"), track.attackSeconds},
         {QStringLiteral("decaySeconds"), track.decaySeconds},
         {QStringLiteral("sustainLevel"), track.sustainLevel},
@@ -721,6 +732,21 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         if (version >= 42)
             track.synthFilterType = static_cast<SynthFilterType>(
                 object.value(QStringLiteral("synthFilterType")).toInt(0));
+        if (version >= 43)
+        {
+            track.synthFilterEnvelopeEnabled =
+                object.value(QStringLiteral("synthFilterEnvelopeEnabled")).toBool(false);
+            track.synthFilterEnvelopeAmountSemitones = static_cast<float>(
+                object.value(QStringLiteral("synthFilterEnvelopeAmountSemitones")).toDouble(24.0));
+            track.synthFilterEnvelopeAttackSeconds = static_cast<float>(
+                object.value(QStringLiteral("synthFilterEnvelopeAttackSeconds")).toDouble(0.008));
+            track.synthFilterEnvelopeDecaySeconds = static_cast<float>(
+                object.value(QStringLiteral("synthFilterEnvelopeDecaySeconds")).toDouble(0.2));
+            track.synthFilterEnvelopeSustainLevel = static_cast<float>(
+                object.value(QStringLiteral("synthFilterEnvelopeSustainLevel")).toDouble(0.0));
+            track.synthFilterEnvelopeReleaseSeconds = static_cast<float>(
+                object.value(QStringLiteral("synthFilterEnvelopeReleaseSeconds")).toDouble(0.2));
+        }
         track.synthFilterCutoffHz = static_cast<float>(
             object.value(QStringLiteral("synthFilterCutoffHz")).toDouble(20000.0));
         track.synthFilterResonance = static_cast<float>(

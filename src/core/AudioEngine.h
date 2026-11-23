@@ -56,6 +56,13 @@ public:
                         bool synthFilterEnabled = false,
                         float synthFilterCutoffHz = 20000.0f,
                         float synthFilterResonance = 0.707f,
+                        SynthFilterType synthFilterType = SynthFilterType::LowPass,
+                        bool synthFilterEnvelopeEnabled = false,
+                        float synthFilterEnvelopeAmountSemitones = 24.0f,
+                        float synthFilterEnvelopeAttackSeconds = 0.008f,
+                        float synthFilterEnvelopeDecaySeconds = 0.2f,
+                        float synthFilterEnvelopeSustainLevel = 0.0f,
+                        float synthFilterEnvelopeReleaseSeconds = 0.2f,
                         float attackSeconds = 0.008f,
                         float decaySeconds = 0.0f,
                         float sustainLevel = 1.0f,
@@ -95,6 +102,7 @@ private:
         bool pitchBend = false;
         bool clapInstrument = false;
         bool preview = false;
+        bool filterEnvelopeEnabled = false;
         SynthWaveform waveform = SynthWaveform::Sine;
         SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
         float secondOscillatorDetuneCents = 0.0f;
@@ -106,6 +114,11 @@ private:
         float decaySeconds = 0.0f;
         float sustainLevel = 1.0f;
         float releaseSeconds = 0.06f;
+        float filterEnvelopeAmountSemitones = 24.0f;
+        float filterEnvelopeAttackSeconds = 0.008f;
+        float filterEnvelopeDecaySeconds = 0.2f;
+        float filterEnvelopeSustainLevel = 0.0f;
+        float filterEnvelopeReleaseSeconds = 0.2f;
         std::shared_ptr<const AudioAsset> sample;
         qint64 sampleStartFrame = 0;
         double samplePlaybackRate = 1.0;
@@ -119,6 +132,7 @@ private:
         bool percussion = false;
         bool clapInstrument = false;
         bool preview = false;
+        bool filterEnvelopeEnabled = false;
         int channel = 0;
         int pitch = 0;
         std::int32_t clapNoteId = 0;
@@ -128,12 +142,18 @@ private:
         qint64 attackFrames = 1;
         qint64 decayFrames = 0;
         qint64 releaseFrames = 1;
+        qint64 filterEnvelopeAttackFrames = 1;
+        qint64 filterEnvelopeDecayFrames = 0;
+        qint64 filterEnvelopeReleaseFrames = 1;
         quint64 serial = 0;
         double frequency = 440.0;
         double baseFrequency = 440.0;
         float amplitude = 0.0f;
         float sustainLevel = 1.0f;
         float releaseStartLevel = 1.0f;
+        float filterEnvelopeAmountSemitones = 24.0f;
+        float filterEnvelopeSustainLevel = 0.0f;
+        float filterEnvelopeReleaseStartLevel = 1.0f;
         float leftGain = 0.70710678f;
         float rightGain = 0.70710678f;
         SynthWaveform waveform = SynthWaveform::Sine;
@@ -234,6 +254,15 @@ private:
     std::atomic<float> previewSecondOscillatorDetuneCents{0.0f};
     std::atomic<float> previewSecondOscillatorMix{0.5f};
     std::atomic<bool> previewSynthFilterEnabled{false};
+    std::atomic<int> previewFilterType{static_cast<int>(SynthFilterType::LowPass)};
+    std::atomic<float> previewFilterCutoffHz{20000.0f};
+    std::atomic<float> previewFilterResonance{0.707f};
+    std::atomic<bool> previewFilterEnvelopeEnabled{false};
+    std::atomic<float> previewFilterEnvelopeAmountSemitones{24.0f};
+    std::atomic<qint64> previewFilterEnvelopeAttackFrames{1};
+    std::atomic<qint64> previewFilterEnvelopeDecayFrames{0};
+    std::atomic<qint64> previewFilterEnvelopeReleaseFrames{1};
+    std::atomic<float> previewFilterEnvelopeSustainLevel{0.0f};
     std::atomic<float> previewFilterB0{1.0f};
     std::atomic<float> previewFilterB1{0.0f};
     std::atomic<float> previewFilterB2{0.0f};
