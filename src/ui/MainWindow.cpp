@@ -69,6 +69,25 @@ int drumSamplePadForPitch(int pitch)
     return -1;
 }
 
+int midiExportChannelForTrack(const ProjectData& project, quint64 targetTrackId)
+{
+    int synthChannel = 0;
+    for (const InstrumentTrack& track : project.tracks)
+    {
+        if (track.instrumentType == InstrumentType::Audio)
+            continue;
+        int channel = 9;
+        if (track.instrumentType == InstrumentType::Synth)
+        {
+            const int channelSlot = synthChannel++ % 15;
+            channel = channelSlot < 9 ? channelSlot : channelSlot + 1;
+        }
+        if (track.id == targetTrackId)
+            return channel;
+    }
+    return 0;
+}
+
 bool sameAutomationPoints(const QVector<AutomationPoint>& left, const QVector<AutomationPoint>& right)
 {
     if (left.size() != right.size())
@@ -148,15 +167,18 @@ public:
                     QVector<MidiNote> before, QVector<MidiNote> after,
                     double beforeLengthBeats = -1.0, double afterLengthBeats = -1.0,
                     QVector<MidiPitchBend> beforePitchBends = {},
-                    QVector<MidiPitchBend> afterPitchBends = {}, bool includePitchBends = false)
+                    QVector<MidiPitchBend> afterPitchBends = {}, bool includePitchBends = false,
+                    QString commandText = {})
         : window(window), trackId(trackId), clipId(clipId),
           before(std::move(before)), after(std::move(after)),
           beforeLengthBeats(beforeLengthBeats), afterLengthBeats(afterLengthBeats),
           beforePitchBends(std::move(beforePitchBends)),
           afterPitchBends(std::move(afterPitchBends)), includePitchBends(includePitchBends)
     {
-        setText(includePitchBends ? QObject::tr("Record MIDI take")
-                                  : QObject::tr("Edit MIDI notes"));
+        if (commandText.isEmpty())
+            commandText = includePitchBends ? QObject::tr("Record MIDI take")
+                                            : QObject::tr("Edit MIDI notes");
+        setText(commandText);
     }
 
     void undo() override
@@ -321,6 +343,24 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     };
     connect(midiEditor, &MidiEditor::notesEdited, this, applyEditedNotes);
     connect(stepSequencer, &StepSequencer::notesEdited, this, applyEditedNotes);
+    connect(midiEditor, &MidiEditor::pitchBendsEdited, this,
+            [this](const QVector<MidiPitchBend>& before, const QVector<MidiPitchBend>& after)
+    {
+        MidiClip* clip = selectedClip();
+        if (clip == nullptr || clip->isAudioRegion() || selectedTrackId == 0)
+            return;
+        const quint64 trackId = selectedTrackId;
+        const quint64 clipId = selectedClipId;
+        const QVector<MidiNote> notes = clip->notes;
+        clip->pitchBends = after;
+        audioEngine.setProject(project);
+        arrangementEditor->setProject(project);
+        arrangementEditor->setSelection(trackId, clipId);
+        undoStack.push(new NoteEditCommand(this, trackId, clipId, notes, notes,
+            -1.0, -1.0, before, after, true, tr("Edit MIDI pitch bend")));
+        refreshDirtyState();
+        statusBar()->showMessage(tr("MIDI pitch bend updated"), 1600);
+    });
     connect(midiEditor, &MidiEditor::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
@@ -748,6 +788,8 @@ void MainWindow::createToolBars()
         const MidiClip* updatedClip = selectedClip();
         midiEditor->setPatternLengthBeats(updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats);
         midiEditor->setNotes(updatedClip == nullptr ? QVector<MidiNote>{} : updatedClip->notes);
+        midiEditor->setPitchBends(updatedClip == nullptr ? QVector<MidiPitchBend>{} : updatedClip->pitchBends);
+        midiEditor->setPitchBendLaneEnabled(updatedClip != nullptr && !updatedClip->isAudioRegion());
         stepSequencer->setPattern(updatedClip == nullptr ? QVector<MidiNote>{} : updatedClip->notes,
                                   updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats,
                                   project.quarterNotesPerBar(), project.nextNoteId(), updatedClip != nullptr);
@@ -1556,6 +1598,9 @@ void MainWindow::refreshProjectUi()
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     midiEditor->setNotes(clip == nullptr ? QVector<MidiNote>{} : clip->notes);
+    midiEditor->setPitchBends(clip == nullptr ? QVector<MidiPitchBend>{} : clip->pitchBends);
+    midiEditor->setPitchBendLaneEnabled(clip != nullptr && !clip->isAudioRegion());
+    midiEditor->setDefaultPitchBendChannel(midiExportChannelForTrack(project, selectedTrackId));
     refreshPianoRollGhostNotes();
     const bool drumTrack = track != nullptr && track->instrumentType == InstrumentType::DrumRack;
     editorTabs->setTabEnabled(editorTabs->indexOf(stepSequencer), drumTrack);
@@ -3536,6 +3581,8 @@ void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector
             clipLengthControl->setValue(clip->lengthBeats);
         }
         midiEditor->setNotes(notes);
+        if (pitchBends != nullptr)
+            midiEditor->setPitchBends(*pitchBends);
     }
     else if (clipLengthBeats >= 0.0)
     {
@@ -4907,7 +4954,8 @@ void MainWindow::finishMidiRecording(bool keepTake)
     refreshProjectUi();
     undoStack.push(new NoteEditCommand(this, targetTrackId, targetClipId,
                                        beforeNotes, afterNotes, beforeLength, afterLength,
-                                       beforePitchBends, afterPitchBends, true));
+                                       beforePitchBends, afterPitchBends, true,
+                                       tr("Record MIDI take")));
     editorTabs->setCurrentWidget(targetInstrumentType == InstrumentType::DrumRack
                                      ? static_cast<QWidget*>(stepSequencer)
                                      : static_cast<QWidget*>(midiEditor));

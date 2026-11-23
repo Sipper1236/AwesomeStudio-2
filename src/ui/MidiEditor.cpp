@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -22,6 +23,7 @@ constexpr int sidebarWidth = 58;
 constexpr int rulerHeight = 30;
 constexpr int rowHeight = 18;
 constexpr int velocityHeight = 100;
+constexpr int pitchBendHeight = 78;
 constexpr int lowestPitch = 0;
 constexpr int highestPitch = 127;
 constexpr int pitchCount = highestPitch - lowestPitch + 1;
@@ -46,6 +48,7 @@ public:
     {
         setFocusPolicy(Qt::StrongFocus);
         setMouseTracking(true);
+        setToolTip(tr("Pitch bend: click to add a point, drag to shape it, and right-click or press Delete to remove it. Range: ±2 semitones."));
         setLengthBeats(16.0);
     }
 
@@ -77,6 +80,29 @@ public:
         {
             owner->verticalScrollBar()->setValue(scrollTo);
         });
+    }
+
+    void setPitchBends(const QVector<MidiPitchBend>& newPitchBends)
+    {
+        pitchBends = newPitchBends;
+        std::stable_sort(pitchBends.begin(), pitchBends.end(),
+            [](const MidiPitchBend& left, const MidiPitchBend& right)
+            {
+                return left.beat < right.beat;
+            });
+        selectedPitchBendIndex = -1;
+        update();
+    }
+
+    void setDefaultPitchBendChannel(int channel)
+    {
+        defaultPitchBendChannel = std::clamp(channel, 0, 15);
+    }
+
+    void setPitchBendLaneEnabled(bool enabled)
+    {
+        pitchBendLaneEnabled = enabled;
+        update();
     }
 
     void setLengthBeats(double beats)
@@ -390,12 +416,17 @@ protected:
         const int gridTop = rulerHeight;
         const int gridBottom = gridTop + pitchCount * rowHeight;
         const int velocityTop = gridBottom;
+        const int pitchBendTop = velocityTop + velocityHeight;
+        const int contentBottom = pitchBendTop + pitchBendHeight;
         const int gridWidth = static_cast<int>(std::ceil(patternLength * pixelsPerBeat));
 
         painter.fillRect(QRect(sidebarWidth, 0, gridWidth, rulerHeight), QColor(QStringLiteral("#1c222a")));
         painter.fillRect(QRect(0, 0, sidebarWidth, rulerHeight), QColor(QStringLiteral("#202731")));
         painter.fillRect(QRect(0, gridTop, sidebarWidth, pitchCount * rowHeight), QColor(QStringLiteral("#303844")));
         painter.fillRect(QRect(sidebarWidth, velocityTop, gridWidth, velocityHeight), QColor(QStringLiteral("#171c23")));
+        painter.fillRect(QRect(0, velocityTop, sidebarWidth, velocityHeight), QColor(QStringLiteral("#202731")));
+        painter.fillRect(QRect(sidebarWidth, pitchBendTop, gridWidth, pitchBendHeight), QColor(QStringLiteral("#171c23")));
+        painter.fillRect(QRect(0, pitchBendTop, sidebarWidth, pitchBendHeight), QColor(QStringLiteral("#202731")));
 
         for (int row = 0; row < pitchCount; ++row)
         {
@@ -433,7 +464,7 @@ protected:
             if (std::min(barOffset, quarterNotesPerBar - barOffset) > 0.02)
             {
                 painter.setPen(QColor(QStringLiteral("#303944")));
-                painter.drawLine(x, rulerHeight, x, velocityTop + velocityHeight);
+                painter.drawLine(x, rulerHeight, x, contentBottom);
             }
         }
         const int totalBars = static_cast<int>(std::ceil(patternLength / quarterNotesPerBar));
@@ -442,7 +473,7 @@ protected:
             const double beat = bar * quarterNotesPerBar;
             const int x = sidebarWidth + static_cast<int>(std::round(beat * pixelsPerBeat));
             painter.setPen(QColor(QStringLiteral("#56616e")));
-            painter.drawLine(x, rulerHeight, x, velocityTop + velocityHeight);
+            painter.drawLine(x, rulerHeight, x, contentBottom);
             if (beat < patternLength)
             {
                 painter.setPen(QColor(QStringLiteral("#e3e9ef")));
@@ -472,6 +503,76 @@ protected:
         painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
         painter.drawText(QRect(8, velocityTop + 7, sidebarWidth - 12, 20), Qt::AlignLeft | Qt::AlignVCenter,
                          QStringLiteral("VELOCITY"));
+
+        const int bendUsableHeight = pitchBendHeight - 20;
+        const int bendCenterY = pitchBendTop + 10 + bendUsableHeight / 2;
+        painter.setPen(QPen(QColor(QStringLiteral("#35434b")), 1.0, Qt::DashLine));
+        painter.drawLine(sidebarWidth, bendCenterY, sidebarWidth + gridWidth, bendCenterY);
+        painter.setPen(QColor(QStringLiteral("#75818e")));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 7));
+        painter.drawText(QRect(8, pitchBendTop + 4, sidebarWidth - 12, 12),
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("PITCH BEND"));
+        painter.drawText(QRect(8, pitchBendTop + 18, sidebarWidth - 12, 9),
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("+2 st"));
+        painter.drawText(QRect(8, bendCenterY - 4, sidebarWidth - 12, 9),
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("0"));
+        painter.drawText(QRect(8, pitchBendTop + pitchBendHeight - 14, sidebarWidth - 12, 9),
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("-2 st"));
+
+        if (!pitchBendLaneEnabled)
+        {
+            painter.fillRect(QRect(sidebarWidth, pitchBendTop, gridWidth, pitchBendHeight),
+                             QColor(QStringLiteral("#141920")));
+            painter.setPen(QColor(QStringLiteral("#66717d")));
+            painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
+            painter.drawText(QRect(sidebarWidth + 10, pitchBendTop + 6,
+                                   std::max(0, gridWidth - 20), pitchBendHeight - 12),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             tr("Select a MIDI clip to edit pitch bend."));
+        }
+        else if (pitchBends.isEmpty())
+        {
+            painter.setPen(QColor(QStringLiteral("#85919e")));
+            painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
+            painter.drawText(QRect(sidebarWidth + 10, pitchBendTop + 6,
+                                   std::max(0, gridWidth - 20), pitchBendHeight - 12),
+                             Qt::AlignLeft | Qt::AlignVCenter,
+                             tr("Click to add pitch bend points; drag to shape the curve."));
+        }
+
+        for (int channel = 0; channel < 16; ++channel)
+        {
+            if (!pitchBendLaneEnabled)
+                break;
+            bool hasPrevious = false;
+            QPoint previousPoint;
+            for (int index = 0; index < pitchBends.size(); ++index)
+            {
+                const MidiPitchBend& bend = pitchBends[index];
+                if (bend.channel != channel)
+                    continue;
+                const QPoint currentPoint(
+                    sidebarWidth + static_cast<int>(std::round(bend.beat * pixelsPerBeat)),
+                    pitchBendY(bend.value, pitchBendTop));
+                const bool selectedBend = index == selectedPitchBendIndex;
+                const QColor bendColor = QColor(QStringLiteral("#63c9bb"));
+                painter.setPen(QPen(QColor(bendColor.red(), bendColor.green(), bendColor.blue(), 115), 1.0));
+                painter.drawLine(currentPoint.x(), bendCenterY, currentPoint.x(), currentPoint.y());
+                if (hasPrevious)
+                {
+                    painter.setPen(QPen(bendColor, 1.5));
+                    painter.drawLine(previousPoint.x(), previousPoint.y(), currentPoint.x(), previousPoint.y());
+                    painter.drawLine(currentPoint.x(), previousPoint.y(), currentPoint.x(), currentPoint.y());
+                }
+                painter.setPen(QPen(selectedBend ? QColor(QStringLiteral("#d7fff8")) : bendColor,
+                                    selectedBend ? 1.5 : 1.0));
+                painter.setBrush(selectedBend ? QColor(QStringLiteral("#a7f2e5")) : bendColor);
+                painter.drawEllipse(QPointF(currentPoint), selectedBend ? 4.5 : 3.5,
+                                    selectedBend ? 4.5 : 3.5);
+                previousPoint = currentPoint;
+                hasPrevious = true;
+            }
+        }
 
         if (notes.isEmpty())
         {
@@ -511,7 +612,7 @@ protected:
         {
             const int x = sidebarWidth + static_cast<int>(std::round(playheadBeat * pixelsPerBeat));
             painter.setPen(QPen(QColor(QStringLiteral("#f1a85c")), 2.0));
-            painter.drawLine(x, rulerHeight, x, velocityTop + velocityHeight);
+            painter.drawLine(x, rulerHeight, x, contentBottom);
             painter.setBrush(QColor(QStringLiteral("#f1a85c")));
             painter.setPen(Qt::NoPen);
             painter.drawPolygon(QPolygon{QPoint(x - 5, 0), QPoint(x + 5, 0), QPoint(x, 7)});
@@ -522,6 +623,12 @@ protected:
     {
         setFocus(Qt::MouseFocusReason);
         const QPoint point = event->position().toPoint();
+        const int pitchBendTop = rulerHeight + pitchCount * rowHeight + velocityHeight;
+        const bool inPitchBendLane = point.y() >= pitchBendTop &&
+                                     point.y() < pitchBendTop + pitchBendHeight;
+        if (!inPitchBendLane)
+            selectedPitchBendIndex = -1;
+
         if (event->button() == Qt::LeftButton && point.x() < sidebarWidth &&
             point.y() >= rulerHeight && point.y() < rulerHeight + pitchCount * rowHeight)
         {
@@ -531,6 +638,21 @@ protected:
 
         if (event->button() == Qt::RightButton)
         {
+            if (inPitchBendLane)
+            {
+                if (!pitchBendLaneEnabled)
+                    return;
+                const int hit = pitchBendAt(point, pitchBendTop);
+                if (hit >= 0)
+                {
+                    beforePitchBends = pitchBends;
+                    pitchBends.removeAt(hit);
+                    selectedPitchBendIndex = -1;
+                    commitPitchBendsIfChanged(beforePitchBends);
+                    update();
+                }
+                return;
+            }
             const int hit = noteAt(point);
             if (hit >= 0)
             {
@@ -544,6 +666,29 @@ protected:
         }
         if (event->button() != Qt::LeftButton)
             return;
+
+        if (inPitchBendLane)
+        {
+            if (!pitchBendLaneEnabled)
+                return;
+            if (point.x() < sidebarWidth)
+                return;
+            beforePitchBends = pitchBends;
+            selectedPitchBendIndex = pitchBendAt(point, pitchBendTop);
+            if (selectedPitchBendIndex < 0)
+            {
+                MidiPitchBend bend;
+                bend.beat = std::clamp(snapNearest(beatAt(point.x())), 0.0, patternLength);
+                bend.channel = preferredPitchBendChannel(bend.beat);
+                bend.value = pitchBendValueAt(point.y(), pitchBendTop);
+                pitchBends.push_back(bend);
+                selectedPitchBendIndex = pitchBends.size() - 1;
+            }
+            draggedPitchBendIndex = selectedPitchBendIndex;
+            dragMode = DragMode::PitchBend;
+            update();
+            return;
+        }
 
         const int velocityTop = rulerHeight + pitchCount * rowHeight;
         if (point.y() >= velocityTop && point.y() < velocityTop + velocityHeight)
@@ -616,6 +761,13 @@ protected:
             return;
         }
 
+        if (dragMode == DragMode::PitchBend)
+        {
+            setPitchBendAt(point, rulerHeight + pitchCount * rowHeight + velocityHeight);
+            update();
+            return;
+        }
+
         if (dragMode == DragMode::Move)
         {
             const double deltaBeat = std::round(((point.x() - dragStart.x()) / static_cast<double>(pixelsPerBeat)) / snap) * snap;
@@ -650,8 +802,39 @@ protected:
     {
         if (event->button() == Qt::LeftButton && dragMode != DragMode::None)
         {
+            const bool editedPitchBend = dragMode == DragMode::PitchBend;
             dragMode = DragMode::None;
-            commitIfChanged(beforeEdit);
+            if (editedPitchBend)
+            {
+                MidiPitchBend selectedBend;
+                const bool hadSelectedBend = draggedPitchBendIndex >= 0 &&
+                                             draggedPitchBendIndex < pitchBends.size();
+                if (hadSelectedBend)
+                    selectedBend = pitchBends[draggedPitchBendIndex];
+                std::stable_sort(pitchBends.begin(), pitchBends.end(),
+                    [](const MidiPitchBend& left, const MidiPitchBend& right)
+                    {
+                        return left.beat < right.beat;
+                    });
+                selectedPitchBendIndex = -1;
+                if (hadSelectedBend)
+                {
+                    for (int index = 0; index < pitchBends.size(); ++index)
+                    {
+                        if (pitchBends[index] == selectedBend)
+                        {
+                            selectedPitchBendIndex = index;
+                            break;
+                        }
+                    }
+                }
+                draggedPitchBendIndex = -1;
+                commitPitchBendsIfChanged(beforePitchBends);
+            }
+            else
+            {
+                commitIfChanged(beforeEdit);
+            }
             update();
         }
     }
@@ -673,6 +856,16 @@ protected:
 
     void keyPressEvent(QKeyEvent* event) override
     {
+        if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
+            selectedPitchBendIndex >= 0 && selectedPitchBendIndex < pitchBends.size())
+        {
+            beforePitchBends = pitchBends;
+            pitchBends.removeAt(selectedPitchBendIndex);
+            selectedPitchBendIndex = -1;
+            commitPitchBendsIfChanged(beforePitchBends);
+            update();
+            return;
+        }
         if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !selected.isEmpty())
         {
             const QVector<MidiNote> before = notes;
@@ -688,6 +881,7 @@ protected:
         if (event->key() == Qt::Key_Escape)
         {
             selected.clear();
+            selectedPitchBendIndex = -1;
             update();
             return;
         }
@@ -695,7 +889,7 @@ protected:
     }
 
 private:
-    enum class DragMode { None, Create, Move, Resize, Velocity };
+    enum class DragMode { None, Create, Move, Resize, Velocity, PitchBend };
 
     void editNoteProperties(int index)
     {
@@ -768,7 +962,7 @@ private:
     void updateCanvasSize()
     {
         const int width = sidebarWidth + static_cast<int>(std::ceil(patternLength * pixelsPerBeat)) + 40;
-        const int height = rulerHeight + pitchCount * rowHeight + velocityHeight;
+        const int height = rulerHeight + pitchCount * rowHeight + velocityHeight + pitchBendHeight;
         setMinimumSize(width, height);
         resize(width, height);
         update();
@@ -869,6 +1063,76 @@ private:
         }
     }
 
+    int pitchBendY(int value, int laneTop) const
+    {
+        const int usableHeight = pitchBendHeight - 20;
+        const int boundedValue = std::clamp(value, 0, 16383);
+        return laneTop + 10 + (16383 - boundedValue) * usableHeight / 16383;
+    }
+
+    int pitchBendValueAt(int y, int laneTop) const
+    {
+        const int usableHeight = pitchBendHeight - 20;
+        const int offset = std::clamp(y - (laneTop + 10), 0, usableHeight);
+        return std::clamp(static_cast<int>(std::llround(
+            static_cast<double>(usableHeight - offset) * 16383.0 / usableHeight)), 0, 16383);
+    }
+
+    int pitchBendAt(const QPoint& point, int laneTop) const
+    {
+        int nearest = -1;
+        int nearestDistance = 9 * 9 + 1;
+        for (int index = 0; index < pitchBends.size(); ++index)
+        {
+            const QPoint bendPoint(sidebarWidth + static_cast<int>(std::round(
+                pitchBends[index].beat * pixelsPerBeat)),
+                pitchBendY(pitchBends[index].value, laneTop));
+            const int dx = bendPoint.x() - point.x();
+            const int dy = bendPoint.y() - point.y();
+            const int distance = dx * dx + dy * dy;
+            if (distance <= 9 * 9 && distance < nearestDistance)
+            {
+                nearest = index;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    int preferredPitchBendChannel(double beat) const
+    {
+        int nearestChannel = -1;
+        double nearestDistance = std::numeric_limits<double>::max();
+        for (const MidiNote& note : notes)
+        {
+            if (note.channel < 0)
+                continue;
+            if (beat >= note.startBeat && beat <= note.startBeat + note.lengthBeats)
+                return note.channel;
+            const double distance = std::min(std::abs(beat - note.startBeat),
+                std::abs(beat - note.startBeat - note.lengthBeats));
+            if (distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearestChannel = note.channel;
+            }
+        }
+        if (nearestChannel >= 0)
+            return nearestChannel;
+        if (!pitchBends.isEmpty())
+            return pitchBends.front().channel;
+        return defaultPitchBendChannel;
+    }
+
+    void setPitchBendAt(const QPoint& point, int laneTop)
+    {
+        if (draggedPitchBendIndex < 0 || draggedPitchBendIndex >= pitchBends.size())
+            return;
+        MidiPitchBend& bend = pitchBends[draggedPitchBendIndex];
+        bend.beat = std::clamp(snapNearest(beatAt(point.x())), 0.0, patternLength);
+        bend.value = pitchBendValueAt(point.y(), laneTop);
+    }
+
     quint64 nextId() const
     {
         quint64 id = 1;
@@ -883,16 +1147,28 @@ private:
             emit owner->notesEdited(before, notes);
     }
 
+    void commitPitchBendsIfChanged(const QVector<MidiPitchBend>& before)
+    {
+        if (before != pitchBends)
+            emit owner->pitchBendsEdited(before, pitchBends);
+    }
+
     MidiEditor* owner;
     QVector<MidiNote> notes;
+    QVector<MidiPitchBend> pitchBends;
     QVector<MidiNote> ghostNotes;
     QVector<MidiNote> beforeEdit;
     QVector<MidiNote> originalNotes;
+    QVector<MidiPitchBend> beforePitchBends;
     QVector<int> scaleIntervals{0, 2, 4, 5, 7, 9, 11};
     QSet<quint64> selected;
     QPoint dragStart;
     DragMode dragMode = DragMode::None;
     quint64 draggedNoteId = 0;
+    int selectedPitchBendIndex = -1;
+    int draggedPitchBendIndex = -1;
+    int defaultPitchBendChannel = 0;
+    bool pitchBendLaneEnabled = false;
     double patternLength = 16.0;
     double quarterNotesPerBar = 4.0;
     double snap = 0.25;
@@ -918,6 +1194,21 @@ MidiEditor::MidiEditor(QWidget* parent) : QScrollArea(parent)
 void MidiEditor::setNotes(const QVector<MidiNote>& notes)
 {
     canvas->setNotes(notes);
+}
+
+void MidiEditor::setPitchBends(const QVector<MidiPitchBend>& pitchBends)
+{
+    canvas->setPitchBends(pitchBends);
+}
+
+void MidiEditor::setDefaultPitchBendChannel(int channel)
+{
+    canvas->setDefaultPitchBendChannel(channel);
+}
+
+void MidiEditor::setPitchBendLaneEnabled(bool enabled)
+{
+    canvas->setPitchBendLaneEnabled(enabled);
 }
 
 void MidiEditor::setPatternLengthBeats(double beats)

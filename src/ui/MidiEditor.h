@@ -12,6 +12,9 @@ public:
     explicit MidiEditor(QWidget* parent = nullptr);
 
     void setNotes(const QVector<MidiNote>& notes);
+    void setPitchBends(const QVector<MidiPitchBend>& pitchBends);
+    void setDefaultPitchBendChannel(int channel);
+    void setPitchBendLaneEnabled(bool enabled);
     void setPatternLengthBeats(double beats);
     void setTimeSignature(int beatsPerBar, int beatUnit);
     void setSnap(double beatStep);
@@ -28,6 +31,7 @@ public:
 
 signals:
     void notesEdited(QVector<MidiNote> before, QVector<MidiNote> after);
+    void pitchBendsEdited(QVector<MidiPitchBend> before, QVector<MidiPitchBend> after);
     void previewRequested(int midiPitch);
 
 private:

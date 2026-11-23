@@ -62,6 +62,8 @@ struct MidiPitchBend
     int channel = 0;
     int value = 8192;
     double beat = 0.0;
+
+    bool operator==(const MidiPitchBend& other) const;
 };
 
 struct MidiClip

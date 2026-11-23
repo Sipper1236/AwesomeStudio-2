@@ -114,6 +114,12 @@ bool MidiNote::operator==(const MidiNote& other) const
            std::abs(lengthBeats - other.lengthBeats) < 1.0e-9 && channel == other.channel;
 }
 
+bool MidiPitchBend::operator==(const MidiPitchBend& other) const
+{
+    return channel == other.channel && value == other.value &&
+           std::abs(beat - other.beat) < 1.0e-9;
+}
+
 bool TimelineMarker::operator==(const TimelineMarker& other) const
 {
     return std::abs(beat - other.beat) < 1.0e-9 && name == other.name;
