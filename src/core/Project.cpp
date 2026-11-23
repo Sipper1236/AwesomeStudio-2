@@ -155,6 +155,12 @@ void ProjectData::normalize()
             clip.startBeat = std::clamp(clip.startBeat, 0.0, 16384.0);
             clip.lengthBeats = std::clamp(clip.lengthBeats, 0.25, 16384.0);
             clip.audioStartFrame = std::max<qint64>(0, clip.audioStartFrame);
+            if (!std::isfinite(clip.audioFadeInBeats))
+                clip.audioFadeInBeats = 0.0;
+            if (!std::isfinite(clip.audioFadeOutBeats))
+                clip.audioFadeOutBeats = 0.0;
+            clip.audioFadeInBeats = std::clamp(clip.audioFadeInBeats, 0.0, clip.lengthBeats);
+            clip.audioFadeOutBeats = std::clamp(clip.audioFadeOutBeats, 0.0, clip.lengthBeats);
             if (clip.audioSource != nullptr)
             {
                 if (clip.audioSourcePath.isEmpty())

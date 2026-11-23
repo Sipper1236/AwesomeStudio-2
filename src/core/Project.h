@@ -58,6 +58,8 @@ struct MidiClip
     QString audioSourcePath;
     std::shared_ptr<const AudioAsset> audioSource;
     qint64 audioStartFrame = 0;
+    double audioFadeInBeats = 0.0;
+    double audioFadeOutBeats = 0.0;
 
     bool isAudioRegion() const { return !audioSourcePath.isEmpty(); }
 };

@@ -12,7 +12,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 6;
+constexpr int currentProjectVersion = 7;
 constexpr auto projectFormat = "awesome-studio-project";
 
 void setError(QString* error, const QString& message)
@@ -92,7 +92,9 @@ QJsonObject saveClip(const MidiClip& clip)
         {QStringLiteral("lengthBeats"), clip.lengthBeats},
         {QStringLiteral("notes"), saveNotes(clip.notes)},
         {QStringLiteral("audioSourcePath"), clip.audioSourcePath},
-        {QStringLiteral("audioStartFrame"), static_cast<qint64>(clip.audioStartFrame)}
+        {QStringLiteral("audioStartFrame"), static_cast<qint64>(clip.audioStartFrame)},
+        {QStringLiteral("audioFadeInBeats"), clip.audioFadeInBeats},
+        {QStringLiteral("audioFadeOutBeats"), clip.audioFadeOutBeats}
     };
 }
 
@@ -153,6 +155,8 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
         return false;
     }
     clip.audioStartFrame = storedAudioStart;
+    clip.audioFadeInBeats = object.value(QStringLiteral("audioFadeInBeats")).toDouble(0.0);
+    clip.audioFadeOutBeats = object.value(QStringLiteral("audioFadeOutBeats")).toDouble(0.0);
     if (!clip.audioSourcePath.isEmpty())
     {
         if (QDir::isRelativePath(clip.audioSourcePath))

@@ -570,6 +570,27 @@ void MainWindow::createDocks()
         settingsDirty = true;
         refreshDirtyState();
     });
+
+    audioRegionControls = new QGroupBox(tr("AUDIO REGION"), browser);
+    auto* audioFadeForm = new QFormLayout(audioRegionControls);
+    audioFadeInControl = new QDoubleSpinBox(audioRegionControls);
+    audioFadeOutControl = new QDoubleSpinBox(audioRegionControls);
+    for (QDoubleSpinBox* control : {audioFadeInControl, audioFadeOutControl})
+    {
+        control->setRange(0.0, 16384.0);
+        control->setDecimals(2);
+        control->setSingleStep(0.25);
+        control->setSuffix(tr(" beats"));
+    }
+    audioFadeForm->addRow(tr("Fade in"), audioFadeInControl);
+    audioFadeForm->addRow(tr("Fade out"), audioFadeOutControl);
+    browserLayout->addWidget(audioRegionControls);
+    audioRegionControls->hide();
+    connect(audioFadeInControl, &QDoubleSpinBox::valueChanged, this,
+            [this](double beats) { setSelectedAudioFade(true, beats); });
+    connect(audioFadeOutControl, &QDoubleSpinBox::valueChanged, this,
+            [this](double beats) { setSelectedAudioFade(false, beats); });
+
     browserLayout->addStretch();
     auto* hint = new QLabel(tr("Import a WAV to add an audio track. Double-click MIDI clips to edit notes or drum steps."), browser);
     hint->setWordWrap(true);
@@ -698,6 +719,16 @@ void MainWindow::refreshProjectUi()
                                tr("SELECTED INSTRUMENT"));
 
     const MidiClip* clip = selectedClip();
+    const QSignalBlocker audioFadeInBlocker(audioFadeInControl);
+    const QSignalBlocker audioFadeOutBlocker(audioFadeOutControl);
+    const bool audioRegionSelected = clip != nullptr && clip->isAudioRegion();
+    audioRegionControls->setVisible(audioRegionSelected);
+    audioFadeInControl->setMaximum(audioRegionSelected ? clip->lengthBeats : 0.0);
+    audioFadeOutControl->setMaximum(audioRegionSelected ? clip->lengthBeats : 0.0);
+    audioFadeInControl->setValue(audioRegionSelected ? clip->audioFadeInBeats : 0.0);
+    audioFadeOutControl->setValue(audioRegionSelected ? clip->audioFadeOutBeats : 0.0);
+    audioFadeInControl->setEnabled(audioRegionSelected);
+    audioFadeOutControl->setEnabled(audioRegionSelected);
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     midiEditor->setNotes(clip == nullptr ? QVector<MidiNote>{} : clip->notes);
@@ -1050,6 +1081,24 @@ void MainWindow::trimAudioRegion(quint64 trackId, quint64 clipId, double startBe
     refreshProjectUi();
     refreshDirtyState();
     statusBar()->showMessage(tr("Audio region trimmed"), 1800);
+}
+
+void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
+{
+    MidiClip* clip = selectedClip();
+    if (clip == nullptr || !clip->isAudioRegion())
+        return;
+
+    const double fadeBeats = std::clamp(beats, 0.0, clip->lengthBeats);
+    if (fadeIn)
+        clip->audioFadeInBeats = fadeBeats;
+    else
+        clip->audioFadeOutBeats = fadeBeats;
+    audioEngine.setProject(project);
+    arrangementEditor->setProject(project);
+    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+    settingsDirty = true;
+    refreshDirtyState();
 }
 
 bool MainWindow::maybeSave()

@@ -205,6 +205,24 @@ protected:
                             const int height = static_cast<int>(std::round(std::min(1.0f, peak) * amplitude));
                             painter.drawLine(x, centerY - height, x, centerY + height);
                         }
+                        if (clip.audioFadeInBeats > 0.0 || clip.audioFadeOutBeats > 0.0)
+                        {
+                            painter.setPen(QPen(QColor(QStringLiteral("#f0cf82")), 2));
+                            if (clip.audioFadeInBeats > 0.0)
+                            {
+                                const double fadeWidth = std::min(waveBounds.width(),
+                                    clip.audioFadeInBeats / clip.lengthBeats * waveBounds.width());
+                                painter.drawLine(QPointF(waveBounds.left(), centerY),
+                                                 QPointF(waveBounds.left() + fadeWidth, waveBounds.top() + 1));
+                            }
+                            if (clip.audioFadeOutBeats > 0.0)
+                            {
+                                const double fadeWidth = std::min(waveBounds.width(),
+                                    clip.audioFadeOutBeats / clip.lengthBeats * waveBounds.width());
+                                painter.drawLine(QPointF(waveBounds.right() - fadeWidth, waveBounds.top() + 1),
+                                                 QPointF(waveBounds.right(), centerY));
+                            }
+                        }
                     }
                     continue;
                 }

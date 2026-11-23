@@ -49,6 +49,7 @@ private:
     void moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
                          double lengthBeats, qint64 audioStartFrame);
+    void setSelectedAudioFade(bool fadeIn, double beats);
     InstrumentTrack* selectedTrack();
     MidiClip* selectedClip();
     bool maybeSave();
@@ -82,6 +83,9 @@ private:
     QComboBox* snapControl = nullptr;
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;
+    QWidget* audioRegionControls = nullptr;
+    QDoubleSpinBox* audioFadeInControl = nullptr;
+    QDoubleSpinBox* audioFadeOutControl = nullptr;
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
     QLabel* playheadLabel = nullptr;

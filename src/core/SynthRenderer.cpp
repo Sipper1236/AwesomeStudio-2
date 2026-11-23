@@ -103,6 +103,10 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 region.startFrame = static_cast<qint64>(std::llround(clip.startBeat * sampleRate *
                                                                     60.0 / project->tempoBpm));
                 region.sourceStartFrame = clip.audioStartFrame;
+                region.fadeInFrames = static_cast<qint64>(std::llround(
+                    clip.audioFadeInBeats * sampleRate * 60.0 / project->tempoBpm));
+                region.fadeOutFrames = static_cast<qint64>(std::llround(
+                    clip.audioFadeOutBeats * sampleRate * 60.0 / project->tempoBpm));
                 region.source = clip.audioSource;
                 const qint64 clipDuration = static_cast<qint64>(std::llround(
                     clip.lengthBeats * sampleRate * 60.0 / project->tempoBpm));
@@ -111,6 +115,9 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     static_cast<double>(sourceFrames) * sampleRate / clip.audioSource->sampleRate));
                 region.endFrame = region.startFrame + std::max<qint64>(1,
                     std::min(clipDuration, sourceDuration));
+                const qint64 regionFrames = region.endFrame - region.startFrame;
+                region.fadeInFrames = std::min(region.fadeInFrames, regionFrames);
+                region.fadeOutFrames = std::min(region.fadeOutFrames, regionFrames);
                 region.leftGain = leftGain * track.gain;
                 region.rightGain = rightGain * track.gain;
                 audioRegions.push_back(std::move(region));
@@ -237,8 +244,19 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         const float left = sampleAt(firstFrame, 0) * (1.0f - fraction) + sampleAt(secondFrame, 0) * fraction;
         const float right = channels == 1 ? left :
             sampleAt(firstFrame, 1) * (1.0f - fraction) + sampleAt(secondFrame, 1) * fraction;
-        sample.left += left * region.leftGain;
-        sample.right += right * region.rightGain;
+        float fadeEnvelope = 1.0f;
+        if (region.fadeInFrames > 1)
+            fadeEnvelope *= static_cast<float>(std::clamp(
+                static_cast<double>(age) / (region.fadeInFrames - 1), 0.0, 1.0));
+        if (region.fadeOutFrames > 0)
+        {
+            const qint64 remainingFadeFrames = std::max<qint64>(0, region.endFrame - projectFrame - 1);
+            const qint64 fadeOutLength = std::max<qint64>(1, region.fadeOutFrames - 1);
+            fadeEnvelope *= static_cast<float>(std::clamp(
+                static_cast<double>(remainingFadeFrames) / fadeOutLength, 0.0, 1.0));
+        }
+        sample.left += left * region.leftGain * fadeEnvelope;
+        sample.right += right * region.rightGain * fadeEnvelope;
     }
 
     const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
