@@ -20,7 +20,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI cl
 - [x] 16-step sequencer and synthesized drum rack
 - [x] Editable clip length and common time signatures
 - [x] Standard MIDI File import/export (formats 0/1, PPQN)
-- [ ] Count-in and metronome
+- [x] Count-in and metronome
 - [ ] Live MIDI recording
 
 ### 2. Arrangement and mixing

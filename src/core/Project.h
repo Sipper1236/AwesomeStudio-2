@@ -61,6 +61,8 @@ struct ProjectData
     int beatUnit = 4;
     int bars = 4;
     bool loopEnabled = true;
+    bool metronomeEnabled = false;
+    int countInBars = 0;
     float masterGain = 0.8f;
     QVector<InstrumentTrack> tracks;
 

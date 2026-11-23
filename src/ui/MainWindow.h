@@ -75,6 +75,7 @@ private:
     QDoubleSpinBox* clipLengthControl = nullptr;
     QComboBox* waveformControl = nullptr;
     QComboBox* timeSignatureControl = nullptr;
+    QComboBox* countInControl = nullptr;
     QComboBox* snapControl = nullptr;
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;
@@ -84,6 +85,7 @@ private:
     QAction* playAction = nullptr;
     QAction* stopAction = nullptr;
     QAction* loopAction = nullptr;
+    QAction* metronomeAction = nullptr;
     QAction* addTrackAction = nullptr;
     QAction* addDrumTrackAction = nullptr;
     QAction* addPatternAction = nullptr;

@@ -181,5 +181,28 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         sample.left += voice * note.leftGain;
         sample.right += voice * note.rightGain;
     }
+
+    const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+        sampleRate * 60.0 / project->tempoBpm * 4.0 / project->beatUnit)));
+    const qint64 countInTicks = static_cast<qint64>(project->countInBars) * project->beatsPerBar;
+    const qint64 countInFrames = countInTicks * beatUnitFrames;
+    const qint64 metronomeFrame = projectFrame + countInFrames;
+    if (metronomeFrame >= 0 && (project->metronomeEnabled || projectFrame < 0))
+    {
+        const qint64 tick = metronomeFrame / beatUnitFrames;
+        const qint64 age = metronomeFrame % beatUnitFrames;
+        const bool downbeat = tick % project->beatsPerBar == 0;
+        const qint64 clickLength = static_cast<qint64>(sampleRate * (downbeat ? 0.045 : 0.032));
+        if (age < clickLength)
+        {
+            const double time = static_cast<double>(age) / sampleRate;
+            const double frequency = downbeat ? 1480.0 : 960.0;
+            const float click = static_cast<float>(std::sin(time * twoPi * frequency) *
+                                                   std::exp(-time * (downbeat ? 78.0 : 96.0)) *
+                                                   (downbeat ? 0.20 : 0.13));
+            sample.left += click;
+            sample.right += click;
+        }
+    }
     return sample;
 }

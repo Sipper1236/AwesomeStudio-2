@@ -111,6 +111,7 @@ void ProjectData::normalize()
     if (beatUnit != 1 && beatUnit != 2 && beatUnit != 4 && beatUnit != 8 && beatUnit != 16)
         beatUnit = 4;
     bars = std::clamp(bars, 1, 64);
+    countInBars = std::clamp(countInBars, 0, 4);
     masterGain = std::clamp(masterGain, 0.0f, 1.0f);
     if (tracks.size() > 256)
         tracks.resize(256);

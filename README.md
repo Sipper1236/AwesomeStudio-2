@@ -10,6 +10,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Draw, move, resize, select, and delete notes across the full 128-note MIDI range in a scrollable piano roll. Shift-click to select notes for group movement.
 - Set the grid to quarter, eighth, sixteenth, or thirty-second notes, edit velocity, and undo or redo note edits.
 - Play and loop the full arrangement at 20–300 BPM.
+- Enable an accented metronome and set a 1, 2, or 4 bar count-in. Count-in is included in WAV renders.
 - Set a common time signature and edit MIDI clip lengths in quarter-note beats.
 - Choose sine, triangle, saw, or square per instrument track.
 - Add a drum rack with synthesized kick, snare, closed-hat, and open-hat voices, then program 16 steps per bar. Step edits and piano-roll notes share undo and redo.
@@ -18,7 +19,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Save and reopen `.aws` projects.
 - Use the editor without an audio device; connect an output device to audition notes.
 
-Version 4 project files are JSON written atomically. Version 1 projects migrate to one instrument track and one MIDI clip; versions 2 and 3 open with a 4/4 meter and synth tracks. MIDI import reads note events and the first tempo and time-signature events in format 0 or 1 PPQN files. MIDI export writes a format 1 file with a conductor track. WAV export renders the synths and synthesized drum rack at 44.1 kHz.
+Version 5 project files are JSON written atomically. Versions 1–4 migrate with compatible synth, meter, metronome, and count-in defaults. MIDI import reads note events and the first tempo and time-signature events in format 0 or 1 PPQN files, and maps channel 10 tracks to the drum rack. MIDI export writes a format 1 file with a conductor track and places drum racks on channel 10. WAV export renders the synths, synthesized drum rack, metronome, and configured count-in at 44.1 kHz.
 
 ## Build
 

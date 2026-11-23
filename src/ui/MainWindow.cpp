@@ -203,16 +203,24 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(uiTimer, &QTimer::timeout, this, [this]
     {
         const double beat = audioEngine.positionBeats();
-        const double quarterNotesPerBar = project.quarterNotesPerBar();
-        const double denominatorUnit = 4.0 / project.beatUnit;
-        const int bar = static_cast<int>(beat / quarterNotesPerBar) + 1;
-        const double beatInBar = std::fmod(beat, quarterNotesPerBar) / denominatorUnit + 1.0;
-        playheadLabel->setText(tr("BAR %1  ·  BEAT %2")
-                                   .arg(bar, 2, 10, QLatin1Char('0'))
-                                   .arg(beatInBar, 0, 'f', 2));
-        arrangementEditor->setPlayheadBeat(beat);
+        if (beat < 0.0)
+        {
+            playheadLabel->setText(tr("COUNT-IN"));
+            arrangementEditor->setPlayheadBeat(-1.0);
+        }
+        else
+        {
+            const double quarterNotesPerBar = project.quarterNotesPerBar();
+            const double denominatorUnit = 4.0 / project.beatUnit;
+            const int bar = static_cast<int>(beat / quarterNotesPerBar) + 1;
+            const double beatInBar = std::fmod(beat, quarterNotesPerBar) / denominatorUnit + 1.0;
+            playheadLabel->setText(tr("BAR %1  ·  BEAT %2")
+                                       .arg(bar, 2, 10, QLatin1Char('0'))
+                                       .arg(beatInBar, 0, 'f', 2));
+            arrangementEditor->setPlayheadBeat(beat);
+        }
         const MidiClip* clip = selectedClip();
-        if (clip != nullptr && clip->lengthBeats > 0.0)
+        if (beat >= 0.0 && clip != nullptr && clip->lengthBeats > 0.0)
             midiEditor->setPlayheadBeat(std::fmod(std::max(0.0, beat - clip->startBeat), clip->lengthBeats));
         else
             midiEditor->setPlayheadBeat(0.0);
@@ -333,6 +341,18 @@ void MainWindow::createActions()
         refreshDirtyState();
     });
 
+    metronomeAction = new QAction(tr("Metronome"), this);
+    metronomeAction->setCheckable(true);
+    metronomeAction->setChecked(project.metronomeEnabled);
+    metronomeAction->setToolTip(tr("Play an accented click on each beat"));
+    connect(metronomeAction, &QAction::toggled, this, [this](bool enabled)
+    {
+        project.metronomeEnabled = enabled;
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+    });
+
     undoAction = undoStack.createUndoAction(this, tr("Undo"));
     undoAction->setShortcut(QKeySequence::Undo);
     redoAction = undoStack.createRedoAction(this, tr("Redo"));
@@ -438,6 +458,28 @@ void MainWindow::createToolBars()
                                   clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
                                   project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr);
         arrangementEditor->setProject(project);
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+    });
+    transportBar->addSeparator();
+    transportBar->addAction(metronomeAction);
+    transportBar->addWidget(new QLabel(tr("COUNT-IN"), transportBar));
+    countInControl = new QComboBox(transportBar);
+    countInControl->addItem(tr("Off"), 0);
+    countInControl->addItem(tr("1 bar"), 1);
+    countInControl->addItem(tr("2 bars"), 2);
+    countInControl->addItem(tr("3 bars"), 3);
+    countInControl->addItem(tr("4 bars"), 4);
+    countInControl->setCurrentIndex(0);
+    countInControl->setFixedWidth(78);
+    countInControl->setToolTip(tr("Bars of metronome count-in before playback"));
+    transportBar->addWidget(countInControl);
+    connect(countInControl, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index)
+    {
+        if (index < 0)
+            return;
+        project.countInBars = countInControl->itemData(index).toInt();
         audioEngine.setProject(project);
         settingsDirty = true;
         refreshDirtyState();
@@ -593,6 +635,7 @@ void MainWindow::createMenus()
     transportMenu->addAction(playAction);
     transportMenu->addAction(stopAction);
     transportMenu->addAction(loopAction);
+    transportMenu->addAction(metronomeAction);
 
     QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(tr("About Awesome Studio"), this, [this]
@@ -657,8 +700,10 @@ void MainWindow::refreshProjectUi()
 
     const QSignalBlocker tempoBlocker(tempoControl);
     const QSignalBlocker meterBlocker(timeSignatureControl);
+    const QSignalBlocker countInBlocker(countInControl);
     const QSignalBlocker clipLengthBlocker(clipLengthControl);
     const QSignalBlocker loopBlocker(loopAction);
+    const QSignalBlocker metronomeBlocker(metronomeAction);
     tempoControl->setValue(project.tempoBpm);
     const QVariantList currentMeter{project.beatsPerBar, project.beatUnit};
     int meterIndex = timeSignatureControl->findData(currentMeter);
@@ -669,6 +714,9 @@ void MainWindow::refreshProjectUi()
         meterIndex = timeSignatureControl->count() - 1;
     }
     timeSignatureControl->setCurrentIndex(meterIndex);
+    const int countInIndex = countInControl->findData(project.countInBars);
+    countInControl->setCurrentIndex(countInIndex < 0 ? 0 : countInIndex);
+    metronomeAction->setChecked(project.metronomeEnabled);
     clipLengthControl->setEnabled(clip != nullptr);
     clipLengthControl->setValue(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     loopAction->setChecked(project.loopEnabled);

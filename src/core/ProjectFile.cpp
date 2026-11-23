@@ -8,7 +8,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 4;
+constexpr int currentProjectVersion = 5;
 constexpr auto projectFormat = "awesome-studio-project";
 
 void setError(QString* error, const QString& message)
@@ -194,6 +194,8 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("beatUnit"), safeProject.beatUnit},
         {QStringLiteral("bars"), safeProject.bars},
         {QStringLiteral("loopEnabled"), safeProject.loopEnabled},
+        {QStringLiteral("metronomeEnabled"), safeProject.metronomeEnabled},
+        {QStringLiteral("countInBars"), safeProject.countInBars},
         {QStringLiteral("masterGain"), safeProject.masterGain},
         {QStringLiteral("tracks"), tracks}
     };
@@ -257,6 +259,8 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     loaded.beatUnit = version >= 3 ? root.value(QStringLiteral("beatUnit")).toInt(4) : 4;
     loaded.bars = root.value(QStringLiteral("bars")).toInt(4);
     loaded.loopEnabled = root.value(QStringLiteral("loopEnabled")).toBool(true);
+    loaded.metronomeEnabled = version >= 5 ? root.value(QStringLiteral("metronomeEnabled")).toBool(false) : false;
+    loaded.countInBars = version >= 5 ? root.value(QStringLiteral("countInBars")).toInt(0) : 0;
     loaded.masterGain = static_cast<float>(root.value(QStringLiteral("masterGain")).toDouble(0.8));
 
     if (version == 1)

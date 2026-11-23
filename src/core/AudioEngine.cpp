@@ -215,7 +215,13 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     prepareNotes(project);
 
     if (resetPosition.exchange(false, std::memory_order_acq_rel))
-        playbackFrame = 0;
+    {
+        const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+            outputSampleRate * 60.0 / project->tempoBpm * 4.0 / project->beatUnit)));
+        const qint64 countInFrames = static_cast<qint64>(project->countInBars) *
+                                     project->beatsPerBar * beatUnitFrames;
+        playbackFrame = -countInFrames;
+    }
 
     bool playingState = playing.load(std::memory_order_acquire);
     const qint64 patternFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
@@ -232,7 +238,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             playing.store(false, std::memory_order_release);
         }
         qint64 currentFrame = playbackFrame;
-        if (project->loopEnabled)
+        if (project->loopEnabled && playbackFrame >= 0)
             currentFrame %= patternFrames;
 
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
