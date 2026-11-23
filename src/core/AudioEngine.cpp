@@ -40,6 +40,21 @@ int drumPadForPitch(int pitch)
     if (pitch == 46) return 3;
     return -1;
 }
+
+float envelopeLevel(qint64 ageFrames, qint64 attackFrames, qint64 decayFrames, float sustainLevel)
+{
+    if (ageFrames < 0)
+        return 0.0f;
+    if (attackFrames > 0 && ageFrames < attackFrames)
+        return static_cast<float>(ageFrames) / static_cast<float>(attackFrames);
+    const qint64 decayAge = ageFrames - attackFrames;
+    if (decayFrames > 0 && decayAge < decayFrames)
+    {
+        const float progress = static_cast<float>(decayAge) / static_cast<float>(decayFrames);
+        return 1.0f - progress * (1.0f - sustainLevel);
+    }
+    return sustainLevel;
+}
 }
 
 class AudioEngine::AudioStream final : public QIODevice
@@ -319,6 +334,10 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
         if (pad >= 0)
         {
             const DrumPadSample& sample = track.drumSamples[static_cast<size_t>(pad)];
+            event.attackSeconds = sample.attackSeconds;
+            event.decaySeconds = sample.decaySeconds;
+            event.sustainLevel = sample.sustainLevel;
+            event.releaseSeconds = sample.releaseSeconds;
             event.sample = sample.sourceForVelocity(velocity);
             event.sampleLoopEnabled = sample.loopEnabled;
             if (event.sample != nullptr && event.sample->frameCount() > 0)
@@ -418,10 +437,8 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
             matchedVoice->held = false;
             matchedVoice->releaseFrame = frame;
             const qint64 age = std::max<qint64>(0, frame - matchedVoice->startFrame);
-            matchedVoice->releaseStartLevel = std::min(1.0f, static_cast<float>(age) /
-                std::max(1.0f, static_cast<float>(matchedVoice->attackFrames)));
-            matchedVoice->releaseFrames = std::max<qint64>(1,
-                static_cast<qint64>(std::llround(outputSampleRate * 0.008)));
+            matchedVoice->releaseStartLevel = envelopeLevel(age, matchedVoice->attackFrames,
+                matchedVoice->decayFrames, matchedVoice->sustainLevel);
             return;
         }
 
@@ -474,7 +491,7 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
         event.attackSeconds * outputSampleRate)));
     target->decayFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
         event.decaySeconds * outputSampleRate)));
-    target->releaseFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+    target->releaseFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
         event.releaseSeconds * outputSampleRate)));
     target->serial = nextLiveMidiSerial++;
     target->baseFrequency = 440.0 * std::pow(2.0, (event.pitch - 69) / 12.0);
@@ -494,6 +511,15 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     target->sampleStartFrame = event.sampleStartFrame;
     target->samplePlaybackRate = event.samplePlaybackRate;
     target->sampleLoopEnabled = event.sampleLoopEnabled;
+    if (target->sample != nullptr && !target->sampleLoopEnabled &&
+        target->sample->sampleRate > 0 && target->samplePlaybackRate > 0.0)
+    {
+        const double sourceDuration = static_cast<double>(target->sample->frameCount() -
+            target->sampleStartFrame) * outputSampleRate /
+            (target->sample->sampleRate * target->samplePlaybackRate);
+        target->sampleDurationFrames = std::max<qint64>(1,
+            static_cast<qint64>(std::ceil(sourceDuration)));
+    }
 }
 
 void AudioEngine::renderLiveMidiVoices(qint64 frame)
@@ -557,7 +583,8 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame)
                                sampleAt(secondFrame, 0) * fraction;
             const float right = channels == 1 ? left :
                 sampleAt(firstFrame, 1) * (1.0f - fraction) + sampleAt(secondFrame, 1) * fraction;
-            float envelope = 1.0f;
+            float envelope = envelopeLevel(age, voice.attackFrames, voice.decayFrames,
+                                           voice.sustainLevel);
             if (voice.sampleLoopEnabled && voice.releaseFrame >= 0 && frame >= voice.releaseFrame)
             {
                 const qint64 releaseAge = frame - voice.releaseFrame;
@@ -569,9 +596,19 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame)
                 envelope = voice.releaseStartLevel * std::max(0.0f, 1.0f -
                     static_cast<float>(releaseAge) / static_cast<float>(voice.releaseFrames));
             }
-            else if (voice.sampleLoopEnabled)
-                envelope = std::min(1.0f, static_cast<float>(age) /
-                    std::max(1.0f, static_cast<float>(voice.attackFrames)));
+            else if (!voice.sampleLoopEnabled && voice.releaseFrames > 0)
+            {
+                const qint64 releaseStartAge = std::max<qint64>(0,
+                    voice.sampleDurationFrames - voice.releaseFrames);
+                if (age >= releaseStartAge)
+                {
+                    const qint64 releaseAge = age - releaseStartAge;
+                    const float releaseStartLevel = envelopeLevel(releaseStartAge,
+                        voice.attackFrames, voice.decayFrames, voice.sustainLevel);
+                    envelope = releaseStartLevel * std::max(0.0f, 1.0f -
+                        static_cast<float>(releaseAge) / static_cast<float>(voice.releaseFrames));
+                }
+            }
             const float leftContribution = left * voice.amplitude * voice.leftGain * envelope;
             const float rightContribution = right * voice.amplitude * voice.rightGain * envelope;
             addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
@@ -581,14 +618,24 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame)
         float envelope = 1.0f;
         if (voice.percussion)
         {
-            envelope = std::min(1.0f, static_cast<float>(age) /
-                                       std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
             const double duration = voice.pitch == 46 ? 0.72 :
                 (voice.pitch == 42 || voice.pitch == 44 ? 0.22 : 0.48);
-            if (age >= static_cast<qint64>(outputSampleRate * duration))
+            const qint64 durationFrames = static_cast<qint64>(outputSampleRate * duration);
+            if (age >= durationFrames + voice.releaseFrames)
             {
                 voice = LiveMidiVoice{};
                 continue;
+            }
+            if (age < durationFrames)
+                envelope = envelopeLevel(age, voice.attackFrames, voice.decayFrames,
+                                         voice.sustainLevel);
+            else
+            {
+                const qint64 releaseAge = age - durationFrames;
+                const float releaseStartLevel = envelopeLevel(durationFrames, voice.attackFrames,
+                    voice.decayFrames, voice.sustainLevel);
+                envelope = voice.releaseFrames > 0 ? releaseStartLevel * std::max(0.0f, 1.0f -
+                    static_cast<float>(releaseAge) / static_cast<float>(voice.releaseFrames)) : 0.0f;
             }
         }
         else if (voice.releaseFrame >= 0 && frame >= voice.releaseFrame)
@@ -657,7 +704,8 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
                                  SynthWaveform secondOscillatorWaveform,
                                  float secondOscillatorDetuneCents, float secondOscillatorMix,
                                  bool synthFilterEnabled, float synthFilterCutoffHz,
-                                 float synthFilterResonance)
+                                 float synthFilterResonance, float attackSeconds,
+                                 float decaySeconds, float sustainLevel, float releaseSeconds)
 {
     std::atomic_store_explicit(&previewSampleAsset, std::shared_ptr<const AudioAsset>{},
                                std::memory_order_release);
@@ -691,6 +739,13 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
     previewSynthFilterEnabled.store(filterEnabled, std::memory_order_relaxed);
     previewFilterResetSerial.fetch_add(1, std::memory_order_release);
     previewPercussion.store(percussion, std::memory_order_relaxed);
+    previewAttackFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
+        std::clamp(attackSeconds, 0.0f, 5.0f) * outputSampleRate))), std::memory_order_relaxed);
+    previewDecayFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
+        std::clamp(decaySeconds, 0.0f, 5.0f) * outputSampleRate))), std::memory_order_relaxed);
+    previewSustainLevel.store(std::clamp(sustainLevel, 0.0f, 1.0f), std::memory_order_relaxed);
+    previewReleaseFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
+        std::clamp(releaseSeconds, 0.0f, 5.0f) * outputSampleRate))), std::memory_order_relaxed);
     previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
     previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
     previewPitch.store(clampedPitch, std::memory_order_release);
@@ -702,13 +757,17 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
     previewNoteEndFrame.store(noteEnd, std::memory_order_release);
     const double filterTailSeconds = filterEnabled
         ? std::min(4.0, 7.0 * resonance / (3.14159265358979323846 * cutoff)) : 0.0;
-    previewEndFrame.store(noteEnd + static_cast<qint64>(outputSampleRate * filterTailSeconds),
+    const qint64 percussionTailFrames = percussion ? previewReleaseFrames.load(std::memory_order_relaxed) : 0;
+    previewEndFrame.store(noteEnd + static_cast<qint64>(outputSampleRate * filterTailSeconds) +
+                          percussionTailFrames,
                           std::memory_order_release);
 }
 
 void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity,
                                        float pan, float gain, float startPositionPercent,
-                                       float tuningSemitones, bool loopEnabled)
+                                       float tuningSemitones, bool loopEnabled,
+                                       float attackSeconds, float decaySeconds,
+                                       float sustainLevel, float releaseSeconds)
 {
     if (sample == nullptr || sample->sampleRate <= 0 || sample->channelCount < 1 ||
         sample->channelCount > 2 || sample->frameCount() <= 0)
@@ -727,6 +786,13 @@ void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample,
     previewSampleStartFrame.store(startFrame, std::memory_order_relaxed);
     previewSamplePlaybackRate.store(playbackRate, std::memory_order_relaxed);
     previewSampleLoopEnabled.store(loopEnabled, std::memory_order_relaxed);
+    previewAttackFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
+        std::clamp(attackSeconds, 0.0f, 5.0f) * outputSampleRate))), std::memory_order_relaxed);
+    previewDecayFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
+        std::clamp(decaySeconds, 0.0f, 5.0f) * outputSampleRate))), std::memory_order_relaxed);
+    previewSustainLevel.store(std::clamp(sustainLevel, 0.0f, 1.0f), std::memory_order_relaxed);
+    previewReleaseFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
+        std::clamp(releaseSeconds, 0.0f, 5.0f) * outputSampleRate))), std::memory_order_relaxed);
     previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
     previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
     const qint64 start = audioClockFrames.load(std::memory_order_acquire);
@@ -738,7 +804,8 @@ void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample,
     previewStartFrame.store(start, std::memory_order_release);
     const qint64 end = start + std::max<qint64>(1, duration);
     previewNoteEndFrame.store(end, std::memory_order_release);
-    previewEndFrame.store(end, std::memory_order_release);
+    previewEndFrame.store(end + (loopEnabled
+        ? previewReleaseFrames.load(std::memory_order_relaxed) : 0), std::memory_order_release);
     std::atomic_store_explicit(&previewSampleAsset, std::move(sample), std::memory_order_release);
     previewPitch.store(0, std::memory_order_release);
 }
@@ -968,17 +1035,25 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                     const float right = channels == 1 ? left :
                         sampleAt(firstFrame, 1) * (1.0f - fraction) +
                         sampleAt(secondFrame, 1) * fraction;
-                    float loopEnvelope = 1.0f;
-                    if (loopEnabled)
+                    const qint64 attackFrames = previewAttackFrames.load(std::memory_order_relaxed);
+                    const qint64 decayFrames = previewDecayFrames.load(std::memory_order_relaxed);
+                    const qint64 releaseFrames = previewReleaseFrames.load(std::memory_order_relaxed);
+                    const float sustainLevel = previewSustainLevel.load(std::memory_order_relaxed);
+                    float sampleEnvelope = envelopeLevel(age, attackFrames, decayFrames, sustainLevel);
+                    qint64 releaseStartAge = std::max<qint64>(0,
+                        previewNoteEndFrame.load(std::memory_order_relaxed) - previewStart);
+                    if (!loopEnabled && releaseFrames > 0)
+                        releaseStartAge = std::max<qint64>(0,
+                            releaseStartAge - releaseFrames);
+                    if (releaseFrames > 0 && age >= releaseStartAge)
                     {
-                        const qint64 fadeFrames = std::max<qint64>(1,
-                            static_cast<qint64>(std::llround(outputSampleRate * 0.008)));
-                        const qint64 fadeStartAge = std::max<qint64>(0, previewEnd - previewStart - fadeFrames);
-                        if (age >= fadeStartAge)
-                            loopEnvelope = std::clamp(1.0f - static_cast<float>(age - fadeStartAge) /
-                                static_cast<float>(fadeFrames), 0.0f, 1.0f);
+                        const qint64 releaseAge = age - releaseStartAge;
+                        const float releaseStartLevel = envelopeLevel(releaseStartAge,
+                            attackFrames, decayFrames, sustainLevel);
+                        sampleEnvelope = releaseStartLevel * std::max(0.0f, 1.0f -
+                            static_cast<float>(releaseAge) / static_cast<float>(releaseFrames));
                     }
-                    const float sampleGain = 0.48f * velocity * loopEnvelope *
+                    const float sampleGain = 0.48f * velocity * sampleEnvelope *
                                              previewSampleGain.load(std::memory_order_relaxed);
                     mixed.left += left * sampleGain * previewLeftGain.load(std::memory_order_relaxed);
                     mixed.right += right * sampleGain * previewRightGain.load(std::memory_order_relaxed);
@@ -988,13 +1063,26 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             {
                 const bool percussion = previewPercussion.load(std::memory_order_relaxed);
                 const float attack = std::min(1.0f, static_cast<float>(age) /
-                                                      std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
+                    std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
                 float preview = 0.0f;
                 if (percussion)
                 {
+                    const qint64 gateEndAge = std::max<qint64>(0,
+                        previewNoteEndFrame.load(std::memory_order_relaxed) - previewStart);
+                    const qint64 attackFrames = previewAttackFrames.load(std::memory_order_relaxed);
+                    const qint64 decayFrames = previewDecayFrames.load(std::memory_order_relaxed);
+                    const qint64 releaseFrames = previewReleaseFrames.load(std::memory_order_relaxed);
+                    const float sustainLevel = previewSustainLevel.load(std::memory_order_relaxed);
+                    const float envelope = age < gateEndAge
+                        ? envelopeLevel(age, attackFrames, decayFrames, sustainLevel)
+                        : releaseFrames > 0
+                            ? envelopeLevel(gateEndAge, attackFrames, decayFrames, sustainLevel) *
+                                std::max(0.0f, 1.0f - static_cast<float>(age - gateEndAge) /
+                                    static_cast<float>(releaseFrames))
+                            : 0.0f;
                     preview = renderPercussionSample(previewPitch.load(std::memory_order_relaxed), age,
                                                      previewStart, outputSampleRate) *
-                              (0.48f * velocity) * attack;
+                              (0.48f * velocity) * envelope;
                 }
                 else
                 {

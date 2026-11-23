@@ -462,6 +462,14 @@ void ProjectData::normalize()
                 drumSample.startPositionPercent = 0.0f;
             drumSample.tuningSemitones = std::clamp(drumSample.tuningSemitones, -24.0f, 24.0f);
             drumSample.startPositionPercent = std::clamp(drumSample.startPositionPercent, 0.0f, 99.0f);
+            if (!std::isfinite(drumSample.attackSeconds)) drumSample.attackSeconds = 0.008f;
+            if (!std::isfinite(drumSample.decaySeconds)) drumSample.decaySeconds = 0.0f;
+            if (!std::isfinite(drumSample.sustainLevel)) drumSample.sustainLevel = 1.0f;
+            if (!std::isfinite(drumSample.releaseSeconds)) drumSample.releaseSeconds = 0.06f;
+            drumSample.attackSeconds = std::clamp(drumSample.attackSeconds, 0.0f, 5.0f);
+            drumSample.decaySeconds = std::clamp(drumSample.decaySeconds, 0.0f, 5.0f);
+            drumSample.sustainLevel = std::clamp(drumSample.sustainLevel, 0.0f, 1.0f);
+            drumSample.releaseSeconds = std::clamp(drumSample.releaseSeconds, 0.0f, 5.0f);
         }
         if (track.clips.size() > 10000)
             track.clips.resize(10000);

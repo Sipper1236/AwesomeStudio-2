@@ -444,17 +444,21 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(midiEditor, &MidiEditor::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
-        if (track != nullptr && track->instrumentType == InstrumentType::DrumRack)
+        const int pad = track != nullptr && track->instrumentType == InstrumentType::DrumRack
+            ? drumSamplePadForPitch(pitch) : -1;
+        const DrumPadSample* padSample = pad >= 0
+            ? &track->drumSamples[static_cast<size_t>(pad)] : nullptr;
+        if (padSample != nullptr)
         {
-            const int pad = drumSamplePadForPitch(pitch);
-            if (pad >= 0 && track->drumSamples[static_cast<size_t>(pad)].hasSampleAssignment())
+            if (padSample->hasSampleAssignment())
             {
-                const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
-                const auto& previewSample = sample.sourceForVelocity(96);
+                const auto& previewSample = padSample->sourceForVelocity(96);
                 if (previewSample != nullptr)
                     audioEngine.triggerSamplePreview(previewSample, 96, track->pan, track->gain,
-                                                     sample.startPositionPercent, sample.tuningSemitones,
-                                                     sample.loopEnabled);
+                                                     padSample->startPositionPercent,
+                                                     padSample->tuningSemitones, padSample->loopEnabled,
+                                                     padSample->attackSeconds, padSample->decaySeconds,
+                                                     padSample->sustainLevel, padSample->releaseSeconds);
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -472,22 +476,30 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                                    track != nullptr && track->instrumentType == InstrumentType::Synth &&
                                        track->synthFilterEnabled,
                                    track == nullptr ? 20000.0f : track->synthFilterCutoffHz,
-                                   track == nullptr ? 0.707f : track->synthFilterResonance);
+                                   track == nullptr ? 0.707f : track->synthFilterResonance,
+                                   padSample == nullptr ? 0.008f : padSample->attackSeconds,
+                                   padSample == nullptr ? 0.0f : padSample->decaySeconds,
+                                   padSample == nullptr ? 1.0f : padSample->sustainLevel,
+                                   padSample == nullptr ? 0.06f : padSample->releaseSeconds);
     });
     connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
-        if (track != nullptr && track->instrumentType == InstrumentType::DrumRack)
+        const int pad = track != nullptr && track->instrumentType == InstrumentType::DrumRack
+            ? drumSamplePadForPitch(pitch) : -1;
+        const DrumPadSample* padSample = pad >= 0
+            ? &track->drumSamples[static_cast<size_t>(pad)] : nullptr;
+        if (padSample != nullptr)
         {
-            const int pad = drumSamplePadForPitch(pitch);
-            if (pad >= 0 && track->drumSamples[static_cast<size_t>(pad)].hasSampleAssignment())
+            if (padSample->hasSampleAssignment())
             {
-                const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
-                const auto& previewSample = sample.sourceForVelocity(100);
+                const auto& previewSample = padSample->sourceForVelocity(100);
                 if (previewSample != nullptr)
                     audioEngine.triggerSamplePreview(previewSample, 100, track->pan, track->gain,
-                                                     sample.startPositionPercent, sample.tuningSemitones,
-                                                     sample.loopEnabled);
+                                                     padSample->startPositionPercent,
+                                                     padSample->tuningSemitones, padSample->loopEnabled,
+                                                     padSample->attackSeconds, padSample->decaySeconds,
+                                                     padSample->sustainLevel, padSample->releaseSeconds);
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -505,7 +517,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                                    track != nullptr && track->instrumentType == InstrumentType::Synth &&
                                        track->synthFilterEnabled,
                                    track == nullptr ? 20000.0f : track->synthFilterCutoffHz,
-                                   track == nullptr ? 0.707f : track->synthFilterResonance);
+                                   track == nullptr ? 0.707f : track->synthFilterResonance,
+                                   padSample == nullptr ? 0.008f : padSample->attackSeconds,
+                                   padSample == nullptr ? 0.0f : padSample->decaySeconds,
+                                   padSample == nullptr ? 1.0f : padSample->sustainLevel,
+                                   padSample == nullptr ? 0.06f : padSample->releaseSeconds);
     });
     connect(arrangementEditor, &ArrangementEditor::clipActivated, this,
             [this](quint64 trackId, quint64 clipId) { selectClip(trackId, clipId, true); });
@@ -1434,7 +1450,7 @@ void MainWindow::createDocks()
     connect(audioCrossfadeButton, &QPushButton::clicked,
             this, &MainWindow::createSelectedAudioCrossfade);
 
-    drumSampleControls = new QGroupBox(tr("DRUM SAMPLES"), browser);
+    drumSampleControls = new QGroupBox(tr("DRUM RACK PADS"), browser);
     auto* drumSampleLayout = new QVBoxLayout(drumSampleControls);
     const std::array<QString, 4> drumPadNames = {
         tr("Kick"), tr("Snare"), tr("Closed hat"), tr("Open hat")
@@ -1481,6 +1497,33 @@ void MainWindow::createDocks()
             tr("%1 loop while note is held").arg(drumPadNames[static_cast<size_t>(pad)]),
             drumSampleControls);
         parameterForm->addRow(drumSampleLoopControls[static_cast<size_t>(pad)]);
+        drumPadAttackControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
+        drumPadDecayControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
+        drumPadSustainControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
+        drumPadReleaseControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
+        for (QDoubleSpinBox* control : {drumPadAttackControls[static_cast<size_t>(pad)],
+                                        drumPadDecayControls[static_cast<size_t>(pad)],
+                                        drumPadSustainControls[static_cast<size_t>(pad)],
+                                        drumPadReleaseControls[static_cast<size_t>(pad)]})
+        {
+            control->setDecimals(3);
+            control->setSuffix(tr(" s"));
+            control->setSingleStep(0.01);
+        }
+        drumPadAttackControls[static_cast<size_t>(pad)]->setRange(0.0, 5.0);
+        drumPadDecayControls[static_cast<size_t>(pad)]->setRange(0.0, 5.0);
+        drumPadSustainControls[static_cast<size_t>(pad)]->setRange(0.0, 1.0);
+        drumPadSustainControls[static_cast<size_t>(pad)]->setSuffix(QString());
+        drumPadSustainControls[static_cast<size_t>(pad)]->setSingleStep(0.05);
+        drumPadReleaseControls[static_cast<size_t>(pad)]->setRange(0.0, 5.0);
+        drumPadAttackControls[static_cast<size_t>(pad)]->setToolTip(tr("Time to reach full level"));
+        drumPadDecayControls[static_cast<size_t>(pad)]->setToolTip(tr("Time to reach the sustain level"));
+        drumPadSustainControls[static_cast<size_t>(pad)]->setToolTip(tr("Level held after the decay stage"));
+        drumPadReleaseControls[static_cast<size_t>(pad)]->setToolTip(tr("Fade time after the pad note ends"));
+        parameterForm->addRow(tr("Pad attack"), drumPadAttackControls[static_cast<size_t>(pad)]);
+        parameterForm->addRow(tr("Pad decay"), drumPadDecayControls[static_cast<size_t>(pad)]);
+        parameterForm->addRow(tr("Pad sustain"), drumPadSustainControls[static_cast<size_t>(pad)]);
+        parameterForm->addRow(tr("Pad release"), drumPadReleaseControls[static_cast<size_t>(pad)]);
         highVelocityThresholdControls[static_cast<size_t>(pad)] = new QSpinBox(drumSampleControls);
         highVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(1, 127);
         highVelocityThresholdControls[static_cast<size_t>(pad)]->setSuffix(tr(" velocity"));
@@ -1503,6 +1546,18 @@ void MainWindow::createDocks()
                 [this, pad](double value) { setSelectedDrumSample(pad, 1, value); });
         connect(drumSampleLoopControls[static_cast<size_t>(pad)], &QCheckBox::toggled, this,
                 [this, pad](bool enabled) { setSelectedDrumSample(pad, 2, enabled ? 1.0 : 0.0); });
+        connect(drumPadAttackControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, pad](double value) { setSelectedDrumSample(pad, 4, value); });
+        connect(drumPadDecayControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, pad](double value) { setSelectedDrumSample(pad, 5, value); });
+        connect(drumPadSustainControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, pad](double value) { setSelectedDrumSample(pad, 6, value); });
+        connect(drumPadReleaseControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, pad](double value) { setSelectedDrumSample(pad, 7, value); });
         connect(highVelocityThresholdControls[static_cast<size_t>(pad)], qOverload<int>(&QSpinBox::valueChanged),
                 this, [this, pad](int value) { setSelectedDrumSample(pad, 3, value); });
     }
@@ -1880,17 +1935,29 @@ void MainWindow::refreshProjectUi()
         const QSignalBlocker tuneBlocker(drumSampleTuneControls[pad]);
         const QSignalBlocker startBlocker(drumSampleStartControls[pad]);
         const QSignalBlocker loopBlocker(drumSampleLoopControls[pad]);
+        const QSignalBlocker attackBlocker(drumPadAttackControls[pad]);
+        const QSignalBlocker decayBlocker(drumPadDecayControls[pad]);
+        const QSignalBlocker sustainBlocker(drumPadSustainControls[pad]);
+        const QSignalBlocker releaseBlocker(drumPadReleaseControls[pad]);
         const QSignalBlocker thresholdBlocker(highVelocityThresholdControls[pad]);
         drumSampleTuneControls[pad]->setValue(sample == nullptr ? 0.0 : sample->tuningSemitones);
         drumSampleStartControls[pad]->setValue(
             sample == nullptr ? 0.0 : sample->startPositionPercent);
         drumSampleLoopControls[pad]->setChecked(sample != nullptr && sample->loopEnabled);
+        drumPadAttackControls[pad]->setValue(sample == nullptr ? 0.008 : sample->attackSeconds);
+        drumPadDecayControls[pad]->setValue(sample == nullptr ? 0.0 : sample->decaySeconds);
+        drumPadSustainControls[pad]->setValue(sample == nullptr ? 1.0 : sample->sustainLevel);
+        drumPadReleaseControls[pad]->setValue(sample == nullptr ? 0.06 : sample->releaseSeconds);
         const bool sampleAssigned = drumRackSelected && sample != nullptr && !sample->path.isEmpty();
         const bool velocityLayerAssigned = sampleAssigned && !sample->highVelocityPath.isEmpty();
         highVelocityThresholdControls[pad]->setValue(sample == nullptr ? 100 : sample->highVelocityThreshold);
         drumSampleTuneControls[pad]->setEnabled(sampleAssigned);
         drumSampleStartControls[pad]->setEnabled(sampleAssigned);
         drumSampleLoopControls[pad]->setEnabled(sampleAssigned);
+        drumPadAttackControls[pad]->setEnabled(drumRackSelected);
+        drumPadDecayControls[pad]->setEnabled(drumRackSelected);
+        drumPadSustainControls[pad]->setEnabled(drumRackSelected);
+        drumPadReleaseControls[pad]->setEnabled(drumRackSelected);
         highVelocityThresholdControls[pad]->setEnabled(velocityLayerAssigned);
     }
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
@@ -4189,7 +4256,7 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
         pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
         return;
     DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
-    if (sample.path.isEmpty())
+    if (parameter <= 3 && sample.path.isEmpty())
         return;
     switch (parameter)
     {
@@ -4197,6 +4264,10 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
         case 1: sample.startPositionPercent = static_cast<float>(std::clamp(value, 0.0, 99.0)); break;
         case 2: sample.loopEnabled = value >= 0.5; break;
         case 3: sample.highVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)), 1, 127); break;
+        case 4: sample.attackSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
+        case 5: sample.decaySeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
+        case 6: sample.sustainLevel = static_cast<float>(std::clamp(value, 0.0, 1.0)); break;
+        case 7: sample.releaseSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
         default: return;
     }
     audioEngine.setProject(project);

@@ -80,6 +80,11 @@ private:
         quint64 probabilitySeed = 0;
         bool drumSamplePlayback = false;
         bool drumSampleLoop = false;
+        qint64 drumGateEndFrame = 0;
+        qint64 drumAttackFrames = 1;
+        qint64 drumDecayFrames = 0;
+        qint64 drumReleaseFrames = 0;
+        float drumSustainLevel = 1.0f;
         std::shared_ptr<const AudioAsset> source;
     };
 

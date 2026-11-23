@@ -234,6 +234,10 @@ private:
     std::array<QDoubleSpinBox*, 4> drumSampleTuneControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleStartControls{};
     std::array<QCheckBox*, 4> drumSampleLoopControls{};
+    std::array<QDoubleSpinBox*, 4> drumPadAttackControls{};
+    std::array<QDoubleSpinBox*, 4> drumPadDecayControls{};
+    std::array<QDoubleSpinBox*, 4> drumPadSustainControls{};
+    std::array<QDoubleSpinBox*, 4> drumPadReleaseControls{};
     std::array<QPushButton*, 4> highVelocityDrumSampleButtons{};
     std::array<QPushButton*, 4> clearHighVelocityDrumSampleButtons{};
     std::array<QSpinBox*, 4> highVelocityThresholdControls{};

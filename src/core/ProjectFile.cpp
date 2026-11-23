@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 30;
+constexpr int currentProjectVersion = 31;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -414,7 +414,11 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                      {QStringLiteral("highVelocityThreshold"), sample.highVelocityThreshold},
                      {QStringLiteral("tuningSemitones"), sample.tuningSemitones},
                      {QStringLiteral("startPositionPercent"), sample.startPositionPercent},
-                     {QStringLiteral("loopEnabled"), sample.loopEnabled}
+                     {QStringLiteral("loopEnabled"), sample.loopEnabled},
+                     {QStringLiteral("attackSeconds"), sample.attackSeconds},
+                     {QStringLiteral("decaySeconds"), sample.decaySeconds},
+                     {QStringLiteral("sustainLevel"), sample.sustainLevel},
+                     {QStringLiteral("releaseSeconds"), sample.releaseSeconds}
                  });
              return samples;
          }()},
@@ -637,6 +641,27 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                         return false;
                     }
                     sample.highVelocityPath = highVelocityPath.toString();
+                }
+                if (version >= 31)
+                {
+                    const double attackSeconds = sampleObject.value(
+                        QStringLiteral("attackSeconds")).toDouble(std::numeric_limits<double>::quiet_NaN());
+                    const double decaySeconds = sampleObject.value(
+                        QStringLiteral("decaySeconds")).toDouble(std::numeric_limits<double>::quiet_NaN());
+                    const double sustainLevel = sampleObject.value(
+                        QStringLiteral("sustainLevel")).toDouble(std::numeric_limits<double>::quiet_NaN());
+                    const double releaseSeconds = sampleObject.value(
+                        QStringLiteral("releaseSeconds")).toDouble(std::numeric_limits<double>::quiet_NaN());
+                    if (!std::isfinite(attackSeconds) || !std::isfinite(decaySeconds) ||
+                        !std::isfinite(sustainLevel) || !std::isfinite(releaseSeconds))
+                    {
+                        setError(error, QStringLiteral("The drum rack contains invalid pad envelope settings."));
+                        return false;
+                    }
+                    sample.attackSeconds = static_cast<float>(attackSeconds);
+                    sample.decaySeconds = static_cast<float>(decaySeconds);
+                    sample.sustainLevel = static_cast<float>(sustainLevel);
+                    sample.releaseSeconds = static_cast<float>(releaseSeconds);
                 }
             }
             else

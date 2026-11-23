@@ -100,6 +100,10 @@ struct DrumPadSample
     float tuningSemitones = 0.0f;
     float startPositionPercent = 0.0f;
     bool loopEnabled = false;
+    float attackSeconds = 0.008f;
+    float decaySeconds = 0.0f;
+    float sustainLevel = 1.0f;
+    float releaseSeconds = 0.06f;
 
     bool hasSampleAssignment() const { return !path.isEmpty() || !highVelocityPath.isEmpty(); }
     const std::shared_ptr<const AudioAsset>& sourceForVelocity(int velocity) const

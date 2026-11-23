@@ -62,6 +62,21 @@ bool probabilityPasses(int probabilityPercent, quint64 seed, quint64 cycle)
     return static_cast<int>(value % 100) < probabilityPercent;
 }
 
+float envelopeLevel(qint64 ageFrames, qint64 attackFrames, qint64 decayFrames, float sustainLevel)
+{
+    if (ageFrames < 0)
+        return 0.0f;
+    if (attackFrames > 0 && ageFrames < attackFrames)
+        return static_cast<float>(ageFrames) / static_cast<float>(attackFrames);
+    const qint64 decayAge = ageFrames - attackFrames;
+    if (decayFrames > 0 && decayAge < decayFrames)
+    {
+        const float progress = static_cast<float>(decayAge) / static_cast<float>(decayFrames);
+        return 1.0f - progress * (1.0f - sustainLevel);
+    }
+    return sustainLevel;
+}
+
 float automationValue(const QVector<AutomationPoint>& points, double beat, float defaultValue)
 {
     if (points.isEmpty())
@@ -466,6 +481,13 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             region.trackIndex = trackIndex;
                             region.drumSamplePlayback = true;
                             region.drumSampleLoop = padSample.loopEnabled;
+                            region.drumAttackFrames = std::max<qint64>(0,
+                                static_cast<qint64>(std::llround(padSample.attackSeconds * sampleRate)));
+                            region.drumDecayFrames = std::max<qint64>(0,
+                                static_cast<qint64>(std::llround(padSample.decaySeconds * sampleRate)));
+                            region.drumReleaseFrames = std::max<qint64>(0,
+                                static_cast<qint64>(std::llround(padSample.releaseSeconds * sampleRate)));
+                            region.drumSustainLevel = padSample.sustainLevel;
                             region.probabilityPercent = note.probabilityPercent;
                             region.probabilitySeed = probabilitySeed;
                             region.sourceStartFrame = static_cast<qint64>(std::llround(
@@ -493,10 +515,19 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                     ? std::max<qint64>(1, hitEndOffset - hitStartOffset)
                                     : std::max<qint64>(1, oneShotDurationFrames);
                                 if (region.drumSampleLoop)
-                                    hitRegion.fadeOutFrames = std::min<qint64>(duration,
-                                        std::max<qint64>(1, static_cast<qint64>(
-                                            std::llround(sampleRate * 0.008))));
-                                hitRegion.endFrame = hitRegion.startFrame + duration;
+                                {
+                                    hitRegion.drumGateEndFrame = hitRegion.startFrame + duration;
+                                    hitRegion.endFrame = hitRegion.drumGateEndFrame +
+                                                         hitRegion.drumReleaseFrames;
+                                }
+                                else
+                                {
+                                    hitRegion.endFrame = hitRegion.startFrame + duration;
+                                    hitRegion.drumReleaseFrames = std::min(
+                                        hitRegion.drumReleaseFrames, duration);
+                                    hitRegion.drumGateEndFrame = hitRegion.endFrame -
+                                        std::min(hitRegion.drumReleaseFrames, duration);
+                                }
                                 audioRegions.push_back(std::move(hitRegion));
                             }
                         }
@@ -544,6 +575,18 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     voice.percussion = track.instrumentType == InstrumentType::DrumRack;
                     if (voice.percussion)
                     {
+                        const int pad = drumPadForPitch(note.pitch);
+                        if (pad >= 0)
+                        {
+                            const DrumPadSample& padSample = track.drumSamples[static_cast<size_t>(pad)];
+                            voice.attackFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
+                                padSample.attackSeconds * sampleRate)));
+                            voice.decayFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
+                                padSample.decaySeconds * sampleRate)));
+                            voice.releaseFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
+                                padSample.releaseSeconds * sampleRate)));
+                            voice.sustainLevel = padSample.sustainLevel;
+                        }
                         const double decaySeconds = note.pitch == 46 ? 0.72 :
                             (note.pitch == 35 || note.pitch == 36 ? 0.48 :
                              (note.pitch == 42 || note.pitch == 44 ? 0.22 : 0.36));
@@ -1050,14 +1093,17 @@ double SynthRenderer::effectTailSeconds() const
         return seconds;
     };
     double longestTrackTail = 0.0;
-    double sampleOverrunSeconds = 0.0;
+    double renderOverrunSeconds = 0.0;
     const double songEndFrame = project->songLengthBeats() * sampleRate * 60.0 / project->tempoBpm;
     for (const AudioRegion& region : audioRegions)
     {
         if (region.drumSamplePlayback)
-            sampleOverrunSeconds = std::max(sampleOverrunSeconds,
+            renderOverrunSeconds = std::max(renderOverrunSeconds,
                 std::max(0.0, region.endFrame - songEndFrame) / sampleRate);
     }
+    for (const VoiceNote& note : notes)
+        renderOverrunSeconds = std::max(renderOverrunSeconds,
+            std::max(0.0, note.endFrame + note.releaseFrames - songEndFrame) / sampleRate);
     for (const InstrumentTrack& track : project->tracks)
     {
         double instrumentFilterTail = 0.0;
@@ -1071,7 +1117,7 @@ double SynthRenderer::effectTailSeconds() const
         longestTrackTail = std::max(longestTrackTail,
             instrumentFilterTail + chainTail(track.effects));
     }
-    longestTrackTail += sampleOverrunSeconds;
+    longestTrackTail += renderOverrunSeconds;
     double busTail = 0.0;
     for (const MixerBus& bus : project->buses)
         busTail += chainTail(bus.effects);
@@ -1220,8 +1266,14 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         if (note.percussion)
         {
             const TrackMixValue& mix = trackMixAt(note.trackIndex, projectFrame, projectBeat);
-            const float envelope = age < note.attackFrames
-                ? static_cast<float>(age) / static_cast<float>(note.attackFrames) : 1.0f;
+            const qint64 gateDuration = note.endFrame - note.startFrame;
+            const float envelope = age < gateDuration
+                ? envelopeLevel(age, note.attackFrames, note.decayFrames, note.sustainLevel)
+                : note.releaseFrames > 0
+                    ? envelopeLevel(gateDuration, note.attackFrames, note.decayFrames,
+                                    note.sustainLevel) * std::max(0.0f, 1.0f -
+                        static_cast<float>(age - gateDuration) / static_cast<float>(note.releaseFrames))
+                    : 0.0f;
             const float voice = renderPercussionSample(note.midiPitch, age, note.startFrame, sampleRate) *
                                 note.amplitude * envelope;
             addTrackSample(note.trackIndex, voice * mix.leftGain, voice * mix.rightGain);
@@ -1309,6 +1361,22 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
             const double fadeOutProgress = 1.0 - std::clamp(
                 static_cast<double>(remainingFadeFrames) / fadeOutLength, 0.0, 1.0);
             fadeEnvelope *= audioFadeEnvelope(region.fadeOutCurve, false, fadeOutProgress);
+        }
+        if (region.drumSamplePlayback)
+        {
+            const qint64 gateEndAge = std::max<qint64>(0,
+                region.drumGateEndFrame - region.startFrame);
+            float drumEnvelope = envelopeLevel(age, region.drumAttackFrames,
+                region.drumDecayFrames, region.drumSustainLevel);
+            if (region.drumReleaseFrames > 0 && age >= gateEndAge)
+            {
+                const qint64 releaseAge = age - gateEndAge;
+                const float releaseStartLevel = envelopeLevel(gateEndAge,
+                    region.drumAttackFrames, region.drumDecayFrames, region.drumSustainLevel);
+                drumEnvelope = releaseStartLevel * std::max(0.0f, 1.0f -
+                    static_cast<float>(releaseAge) / static_cast<float>(region.drumReleaseFrames));
+            }
+            fadeEnvelope *= drumEnvelope;
         }
         const TrackMixValue& mix = trackMixAt(region.trackIndex, projectFrame, projectBeat);
         addTrackSample(region.trackIndex,
