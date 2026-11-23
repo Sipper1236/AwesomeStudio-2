@@ -110,6 +110,8 @@ private:
     void applySelectedSynthPreset(int presetIndex);
     void setSelectedTrackEqualizer(int band, double gainDb);
     void setSelectedTrackEqualizerCrossover(int band, double frequencyHz);
+    void setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings);
+    void refreshParametricEqualizerControls();
     void refreshAutomationEditor();
     void refreshArrangementAutomationView();
     void addAutomationPoint();
@@ -237,6 +239,9 @@ private:
     QWidget* synthFilterEnvelopePanel = nullptr;
     QWidget* synthEnvelopePanel = nullptr;
     QWidget* equalizerControls = nullptr;
+    QWidget* equalizerResponseGraph = nullptr;
+    QComboBox* parametricEqBandControl = nullptr;
+    std::array<QDoubleSpinBox*, 3> parametricEqBandParameterControls{};
     QWidget* automationEditorPanel = nullptr;
     QWidget* drumSampleControls = nullptr;
     std::array<QDoubleSpinBox*, 4> envelopeControls{};

@@ -6,7 +6,7 @@ Build a pattern-first digital audio workstation with a fast MIDI workflow and a 
 
 ## Shipped foundation
 
-The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, standalone or during-recording live audio input monitoring, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, seven factory synth presets, and selectable resonant filters with bipolar cutoff-envelope modulation, three-band EQ with adjustable crossovers and volume/pan keyframe automation, Delay/Reverb/Compressor/Low-pass Filter inserts on tracks, buses, and Master, mixer submix buses with nested/group routing and multiple track and bus auxiliary sends, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming and selectable linear, smooth, and equal-power fades, a 16-step drum sequencer with four assignable sample pads, five velocity layers per pad, and independent per-layer tuning, start, loop, and ADSR overrides, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
+The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, standalone or during-recording live audio input monitoring, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, seven factory synth presets, and selectable resonant filters with bipolar cutoff-envelope modulation, three-band EQ with adjustable crossovers, three parametric bands with a draggable response graph, and volume/pan keyframe automation, Delay/Reverb/Compressor/Low-pass Filter inserts on tracks, buses, and Master, mixer submix buses with nested/group routing and multiple track and bus auxiliary sends, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming and selectable linear, smooth, and equal-power fades, a 16-step drum sequencer with four assignable sample pads, five velocity layers per pad, and independent per-layer tuning, start, loop, and ADSR overrides, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
 
 ## Roadmap
 
@@ -53,7 +53,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Persistent Delay, Reverb, and Compressor inserts on tracks, buses, and Master in realtime playback and render
 - [x] Resonant low-pass filter insert with cutoff and Q controls in realtime playback and render
 - [x] Adjustable low/mid and mid/high crossover frequencies for the per-track EQ in playback and render
-- [ ] Parametric EQ bands and a visual response graph
+- [x] Three per-track parametric EQ bands with editable frequency, gain, and Q plus a draggable response graph
 - [x] Graphical per-track volume/pan automation lanes with undoable point editing
 - [x] Touch recording for volume/pan automation from Mixer controls during playback
 - [x] Latch recording for volume/pan automation until playback stops or Write is disarmed

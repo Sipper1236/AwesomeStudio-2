@@ -332,6 +332,13 @@ struct MixerBus
     bool solo = false;
 };
 
+struct ParametricEqBand
+{
+    float frequencyHz = 1000.0f;
+    float gainDb = 0.0f;
+    float q = 0.707f;
+};
+
 struct InstrumentTrack
 {
     quint64 id = 0;
@@ -368,6 +375,9 @@ struct InstrumentTrack
     float eqHighDb = 0.0f;
     float eqLowCrossoverHz = 120.0f;
     float eqHighCrossoverHz = 6000.0f;
+    std::array<ParametricEqBand, 3> eqParametricBands{{
+        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f}
+    }};
     quint64 outputBusId = 0;
     QVector<MixerSend> sends;
     QVector<MixerEffect> effects;

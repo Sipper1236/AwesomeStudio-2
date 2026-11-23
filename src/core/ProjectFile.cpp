@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 46;
+constexpr int currentProjectVersion = 47;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -528,6 +528,17 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("eqHighDb"), track.eqHighDb},
         {QStringLiteral("eqLowCrossoverHz"), track.eqLowCrossoverHz},
         {QStringLiteral("eqHighCrossoverHz"), track.eqHighCrossoverHz},
+        {QStringLiteral("eqParametricBands"), [&track]
+         {
+             QJsonArray bands;
+             for (const ParametricEqBand& band : track.eqParametricBands)
+                 bands.push_back(QJsonObject{
+                     {QStringLiteral("frequencyHz"), band.frequencyHz},
+                     {QStringLiteral("gainDb"), band.gainDb},
+                     {QStringLiteral("q"), band.q}
+                 });
+             return bands;
+         }()},
         {QStringLiteral("outputBusId"), static_cast<qint64>(track.outputBusId)},
         {QStringLiteral("effects"), saveEffects(track.effects)},
         {QStringLiteral("sends"), [&track]
@@ -796,6 +807,29 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
             object.value(QStringLiteral("eqLowCrossoverHz")).toDouble(120.0));
         track.eqHighCrossoverHz = static_cast<float>(
             object.value(QStringLiteral("eqHighCrossoverHz")).toDouble(6000.0));
+    }
+    if (version >= 47)
+    {
+        const QJsonValue bandsValue = object.value(QStringLiteral("eqParametricBands"));
+        if (bandsValue.isArray())
+        {
+            const QJsonArray bands = bandsValue.toArray();
+            for (qsizetype index = 0;
+                 index < bands.size() && index < static_cast<qsizetype>(track.eqParametricBands.size());
+                 ++index)
+            {
+                if (!bands[index].isObject())
+                    continue;
+                const QJsonObject bandObject = bands[index].toObject();
+                ParametricEqBand& band = track.eqParametricBands[static_cast<size_t>(index)];
+                band.frequencyHz = static_cast<float>(
+                    bandObject.value(QStringLiteral("frequencyHz")).toDouble(band.frequencyHz));
+                band.gainDb = static_cast<float>(
+                    bandObject.value(QStringLiteral("gainDb")).toDouble(band.gainDb));
+                band.q = static_cast<float>(
+                    bandObject.value(QStringLiteral("q")).toDouble(band.q));
+            }
+        }
     }
     if (version >= 14 && !readId(object, QStringLiteral("outputBusId"), track.outputBusId, error))
         return false;

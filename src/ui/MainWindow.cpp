@@ -26,6 +26,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFontMetrics>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -35,12 +36,18 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMediaDevices>
+#include <QMouseEvent>
 #include <QMessageBox>
+#include <QPaintEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPalette>
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QSettings>
@@ -57,6 +64,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <functional>
 #include <unordered_set>
 #include <utility>
@@ -65,6 +73,281 @@
 namespace
 {
 constexpr double automationWritePointSpacingBeats = 0.04;
+
+class TrackEqResponseWidget final : public QWidget
+{
+public:
+    using ChangeHandler = std::function<void(int, float, float)>;
+    using SelectionHandler = std::function<void(int)>;
+
+    explicit TrackEqResponseWidget(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setMinimumSize(190, 148);
+        setMaximumHeight(170);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setMouseTracking(true);
+        setAccessibleName(tr("Parametric EQ response"));
+        setToolTip(tr("Drag a band point to change its frequency and gain"));
+    }
+
+    void setBands(const std::array<ParametricEqBand, 3>& bands)
+    {
+        parametricBands = bands;
+        update();
+    }
+
+    void setLegacyParameters(float lowDb, float midDb, float highDb,
+                             float lowCrossoverHz, float highCrossoverHz)
+    {
+        legacyGains = {lowDb, midDb, highDb};
+        legacyCrossovers = {lowCrossoverHz, highCrossoverHz};
+        update();
+    }
+
+    void setSelectedBand(int band)
+    {
+        selectedBand = std::clamp(band, 0, 2);
+        update();
+    }
+
+    void setChangeHandler(ChangeHandler handler) { changeHandler = std::move(handler); }
+    void setSelectionHandler(SelectionHandler handler) { selectionHandler = std::move(handler); }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QColor background = palette().color(QPalette::Base);
+        const QColor foreground = palette().color(QPalette::Text);
+        const QColor gridColor = palette().color(QPalette::Mid);
+        const QColor accent = palette().color(QPalette::Highlight);
+        painter.fillRect(rect(), background);
+
+        const QRectF plot = plotRect();
+        if (plot.width() < 40.0 || plot.height() < 40.0)
+            return;
+        painter.setPen(QPen(gridColor, 1.0));
+        painter.drawRect(plot);
+
+        const QFontMetrics metrics(painter.font());
+        painter.setPen(foreground);
+        for (int db = -18; db <= 18; db += 6)
+        {
+            const double y = gainToY(db, plot);
+            painter.setPen(QPen(gridColor, db == 0 ? 1.0 : 0.7,
+                                db == 0 ? Qt::SolidLine : Qt::DotLine));
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+            painter.setPen(foreground);
+            const QString label = db > 0 ? QStringLiteral("+%1").arg(db)
+                                         : QString::number(db);
+            painter.drawText(QRectF(0.0, y - metrics.height() / 2.0,
+                                    plot.left() - 5.0, metrics.height()),
+                             Qt::AlignRight | Qt::AlignVCenter, label);
+        }
+
+        const std::array<double, 5> frequencies = {20.0, 100.0, 1000.0, 10000.0, 20000.0};
+        for (double frequency : frequencies)
+        {
+            const double x = frequencyToX(frequency, plot);
+            painter.setPen(QPen(gridColor, 0.7, Qt::DotLine));
+            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+            painter.setPen(foreground);
+            const QString label = frequency >= 1000.0
+                ? QStringLiteral("%1k").arg(frequency / 1000.0, 0, 'g', 2)
+                : QString::number(static_cast<int>(frequency));
+            const double labelX = std::clamp(x - 20.0, plot.left(), plot.right() - 40.0);
+            painter.drawText(QRectF(labelX, plot.bottom() + 3.0, 40.0, metrics.height()),
+                             Qt::AlignHCenter | Qt::AlignTop, label);
+        }
+
+        QPainterPath response;
+        constexpr int pointCount = 180;
+        for (int index = 0; index <= pointCount; ++index)
+        {
+            const double ratio = static_cast<double>(index) / pointCount;
+            const double frequency = 20.0 * std::pow(1000.0, ratio);
+            const double gainDb = std::clamp(responseAt(frequency), -18.0, 18.0);
+            const QPointF point(frequencyToX(frequency, plot), gainToY(gainDb, plot));
+            if (index == 0)
+                response.moveTo(point);
+            else
+                response.lineTo(point);
+        }
+        painter.setPen(QPen(accent, 2.0));
+        painter.drawPath(response);
+
+        for (int bandIndex = 0; bandIndex < static_cast<int>(parametricBands.size()); ++bandIndex)
+        {
+            const ParametricEqBand& band = parametricBands[static_cast<size_t>(bandIndex)];
+            const QPointF center(frequencyToX(band.frequencyHz, plot),
+                                 gainToY(band.gainDb, plot));
+            const QColor color = bandIndex == selectedBand ? accent : foreground;
+            painter.setPen(QPen(background, 2.0));
+            painter.setBrush(color);
+            painter.drawEllipse(center, bandIndex == selectedBand ? 6.0 : 4.5,
+                                bandIndex == selectedBand ? 6.0 : 4.5);
+            painter.setPen(QPen(background, 1.0));
+            painter.drawText(QRectF(center.x() - 5.0, center.y() - 5.0, 10.0, 10.0),
+                             Qt::AlignCenter, QString::number(bandIndex + 1));
+        }
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() != Qt::LeftButton || !plotRect().contains(event->position()))
+            return;
+        const QPointF position = event->position();
+        int closestBand = selectedBand;
+        double closestDistance = 14.0;
+        const QRectF plot = plotRect();
+        for (int bandIndex = 0; bandIndex < static_cast<int>(parametricBands.size()); ++bandIndex)
+        {
+            const ParametricEqBand& band = parametricBands[static_cast<size_t>(bandIndex)];
+            const QPointF center(frequencyToX(band.frequencyHz, plot),
+                                 gainToY(band.gainDb, plot));
+            const double distance = std::hypot(position.x() - center.x(), position.y() - center.y());
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestBand = bandIndex;
+            }
+        }
+        selectedBand = closestBand;
+        dragging = true;
+        setSelectedBand(selectedBand);
+        if (selectionHandler)
+            selectionHandler(selectedBand);
+        updateFromPosition(position);
+        event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        if (dragging)
+        {
+            updateFromPosition(event->position());
+            event->accept();
+            return;
+        }
+        const QPointF position = event->position();
+        bool nearHandle = false;
+        const QRectF plot = plotRect();
+        for (const ParametricEqBand& band : parametricBands)
+        {
+            const QPointF center(frequencyToX(band.frequencyHz, plot),
+                                 gainToY(band.gainDb, plot));
+            if (std::hypot(position.x() - center.x(), position.y() - center.y()) < 11.0)
+            {
+                nearHandle = true;
+                break;
+            }
+        }
+        setCursor(nearHandle ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        QWidget::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton)
+        {
+            dragging = false;
+            unsetCursor();
+            event->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
+    }
+
+private:
+    QRectF plotRect() const
+    {
+        return QRectF(37.0, 7.0, std::max(1, width() - 46), std::max(1, height() - 32));
+    }
+
+    static double frequencyToX(double frequency, const QRectF& plot)
+    {
+        const double normalized = std::log(std::clamp(frequency, 20.0, 20000.0) / 20.0) /
+                                  std::log(1000.0);
+        return plot.left() + normalized * plot.width();
+    }
+
+    static double gainToY(double gainDb, const QRectF& plot)
+    {
+        return plot.top() + (18.0 - std::clamp(gainDb, -18.0, 18.0)) / 36.0 * plot.height();
+    }
+
+    double responseAt(double frequency) const
+    {
+        constexpr double sampleRate = 48000.0;
+        constexpr double twoPi = 6.28318530717958647692;
+        const double omega = twoPi * frequency / sampleRate;
+        const std::complex<double> z1(std::cos(omega), -std::sin(omega));
+        const std::complex<double> z2 = z1 * z1;
+
+        const auto lowpass = [omega, sampleRate, twoPi](double cutoff)
+        {
+            const double coefficient = 1.0 - std::exp(-twoPi * cutoff / sampleRate);
+            const std::complex<double> z(std::cos(omega), -std::sin(omega));
+            return coefficient / (1.0 - (1.0 - coefficient) * z);
+        };
+        const std::complex<double> low = lowpass(legacyCrossovers[0]);
+        const std::complex<double> upper = lowpass(legacyCrossovers[1]);
+        std::complex<double> response =
+            std::pow(10.0, legacyGains[0] / 20.0) * low +
+            std::pow(10.0, legacyGains[1] / 20.0) * (upper - low) +
+            std::pow(10.0, legacyGains[2] / 20.0) * (1.0 - upper);
+
+        for (const ParametricEqBand& band : parametricBands)
+        {
+            if (std::abs(band.gainDb) < 1.0e-5f)
+                continue;
+            const double center = twoPi * std::clamp(static_cast<double>(band.frequencyHz),
+                20.0, sampleRate * 0.49) / sampleRate;
+            const double q = std::clamp(static_cast<double>(band.q), 0.1, 10.0);
+            const double a = std::pow(10.0, band.gainDb / 40.0);
+            const double alpha = std::sin(center) / (2.0 * q);
+            const double cosine = std::cos(center);
+            const double a0 = 1.0 + alpha / a;
+            const double b0 = (1.0 + alpha * a) / a0;
+            const double b1 = (-2.0 * cosine) / a0;
+            const double b2 = (1.0 - alpha * a) / a0;
+            const double a1 = (-2.0 * cosine) / a0;
+            const double a2 = (1.0 - alpha / a) / a0;
+            const std::complex<double> numerator = b0 + b1 * z1 + b2 * z2;
+            const std::complex<double> denominator = 1.0 + a1 * z1 + a2 * z2;
+            response *= numerator / denominator;
+        }
+        return 20.0 * std::log10(std::max(1.0e-6, std::abs(response)));
+    }
+
+    void updateFromPosition(const QPointF& position)
+    {
+        const QRectF plot = plotRect();
+        if (!plot.contains(position) || !changeHandler)
+            return;
+        const double ratio = std::clamp((position.x() - plot.left()) / plot.width(), 0.0, 1.0);
+        const float frequency = static_cast<float>(20.0 * std::pow(1000.0, ratio));
+        const float gainDb = static_cast<float>(std::clamp(
+            18.0 - (position.y() - plot.top()) / plot.height() * 36.0, -18.0, 18.0));
+        const ParametricEqBand& current = parametricBands[static_cast<size_t>(selectedBand)];
+        if (std::abs(current.frequencyHz - frequency) < 0.2f &&
+            std::abs(current.gainDb - gainDb) < 0.02f)
+            return;
+        changeHandler(selectedBand, frequency, gainDb);
+    }
+
+    std::array<ParametricEqBand, 3> parametricBands{{
+        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f}
+    }};
+    std::array<float, 3> legacyGains{};
+    std::array<float, 2> legacyCrossovers{120.0f, 6000.0f};
+    ChangeHandler changeHandler;
+    SelectionHandler selectionHandler;
+    int selectedBand = 0;
+    bool dragging = false;
+};
 
 struct FactorySynthPreset
 {
@@ -2401,6 +2684,80 @@ void MainWindow::createDocks()
         connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, band](double value) { setSelectedTrackEqualizerCrossover(band, value); });
     }
+
+    auto* parametricEqGroup = new QGroupBox(tr("PARAMETRIC BANDS"), equalizerGroup);
+    auto* parametricEqLayout = new QVBoxLayout(parametricEqGroup);
+    auto* responseGraph = new TrackEqResponseWidget(parametricEqGroup);
+    equalizerResponseGraph = responseGraph;
+    parametricEqLayout->addWidget(responseGraph);
+    parametricEqBandControl = new QComboBox(parametricEqGroup);
+    for (int band = 0; band < 3; ++band)
+        parametricEqBandControl->addItem(tr("Bell %1").arg(band + 1), band);
+    parametricEqLayout->addWidget(parametricEqBandControl);
+    auto* parametricEqForm = new QFormLayout;
+    const std::array<QString, 3> parametricLabels = {
+        tr("Frequency"), tr("Gain"), tr("Q")
+    };
+    for (int parameter = 0; parameter < static_cast<int>(parametricEqBandParameterControls.size());
+         ++parameter)
+    {
+        QDoubleSpinBox* control = new QDoubleSpinBox(parametricEqGroup);
+        if (parameter == 0)
+        {
+            control->setRange(20.0, 20000.0);
+            control->setDecimals(0);
+            control->setSingleStep(10.0);
+            control->setSuffix(tr(" Hz"));
+        }
+        else if (parameter == 1)
+        {
+            control->setRange(-18.0, 18.0);
+            control->setDecimals(1);
+            control->setSingleStep(0.5);
+            control->setSuffix(tr(" dB"));
+        }
+        else
+        {
+            control->setRange(0.1, 10.0);
+            control->setDecimals(2);
+            control->setSingleStep(0.1);
+        }
+        parametricEqBandParameterControls[static_cast<size_t>(parameter)] = control;
+        parametricEqForm->addRow(parametricLabels[static_cast<size_t>(parameter)], control);
+        connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, parameter](double value)
+        {
+            InstrumentTrack* track = selectedTrack();
+            const int band = parametricEqBandControl->currentData().toInt();
+            if (track == nullptr || band < 0 || band >= static_cast<int>(track->eqParametricBands.size()))
+                return;
+            ParametricEqBand settings = track->eqParametricBands[static_cast<size_t>(band)];
+            if (parameter == 0) settings.frequencyHz = static_cast<float>(value);
+            else if (parameter == 1) settings.gainDb = static_cast<float>(value);
+            else settings.q = static_cast<float>(value);
+            setSelectedTrackParametricEqualizer(band, settings);
+        });
+    }
+    parametricEqLayout->addLayout(parametricEqForm);
+    equalizerForm->addRow(parametricEqGroup);
+    connect(parametricEqBandControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int) { refreshParametricEqualizerControls(); });
+    responseGraph->setSelectionHandler([this](int band)
+    {
+        const QSignalBlocker bandBlocker(parametricEqBandControl);
+        parametricEqBandControl->setCurrentIndex(band);
+        refreshParametricEqualizerControls();
+    });
+    responseGraph->setChangeHandler([this](int band, float frequencyHz, float gainDb)
+    {
+        InstrumentTrack* track = selectedTrack();
+        if (track == nullptr || band < 0 || band >= static_cast<int>(track->eqParametricBands.size()))
+            return;
+        ParametricEqBand settings = track->eqParametricBands[static_cast<size_t>(band)];
+        settings.frequencyHz = frequencyHz;
+        settings.gainDb = gainDb;
+        setSelectedTrackParametricEqualizer(band, settings);
+    });
     browserLayout->addWidget(equalizerGroup);
 
     auto* automationGroup = new QGroupBox(tr("TRACK AUTOMATION"), browser);
@@ -3150,6 +3507,7 @@ void MainWindow::refreshProjectUi()
     equalizerCrossoverControls[1]->setValue(highCrossover);
     equalizerCrossoverControls[0]->setEnabled(track != nullptr);
     equalizerCrossoverControls[1]->setEnabled(track != nullptr);
+    refreshParametricEqualizerControls();
     refreshAutomationEditor();
     instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
                                track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
@@ -5402,6 +5760,7 @@ void MainWindow::setSelectedTrackEqualizer(int band, double gainDb)
         default: return;
     }
     audioEngine.setProject(project);
+    refreshParametricEqualizerControls();
     settingsDirty = true;
     refreshDirtyState();
 }
@@ -5426,8 +5785,58 @@ void MainWindow::setSelectedTrackEqualizerCrossover(int band, double frequencyHz
     equalizerCrossoverControls[0]->setValue(track->eqLowCrossoverHz);
     equalizerCrossoverControls[1]->setValue(track->eqHighCrossoverHz);
     audioEngine.setProject(project);
+    refreshParametricEqualizerControls();
     settingsDirty = true;
     refreshDirtyState();
+}
+
+void MainWindow::setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || band < 0 || band >= static_cast<int>(track->eqParametricBands.size()))
+        return;
+    ParametricEqBand& target = track->eqParametricBands[static_cast<size_t>(band)];
+    target.frequencyHz = std::clamp(settings.frequencyHz, 20.0f, 20000.0f);
+    target.gainDb = std::clamp(settings.gainDb, -18.0f, 18.0f);
+    target.q = std::clamp(settings.q, 0.1f, 10.0f);
+    audioEngine.setProject(project);
+    refreshParametricEqualizerControls();
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::refreshParametricEqualizerControls()
+{
+    if (parametricEqBandControl == nullptr || equalizerResponseGraph == nullptr)
+        return;
+    InstrumentTrack* track = selectedTrack();
+    const int band = std::clamp(parametricEqBandControl->currentData().toInt(), 0, 2);
+    const std::array<ParametricEqBand, 3> defaults{{
+        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f}
+    }};
+    const std::array<ParametricEqBand, 3>& bands = track == nullptr
+        ? defaults : track->eqParametricBands;
+    const ParametricEqBand& selectedBand = bands[static_cast<size_t>(band)];
+    const std::array<double, 3> values = {
+        selectedBand.frequencyHz, selectedBand.gainDb, selectedBand.q
+    };
+    for (size_t parameter = 0; parameter < parametricEqBandParameterControls.size(); ++parameter)
+    {
+        QDoubleSpinBox* control = parametricEqBandParameterControls[parameter];
+        const QSignalBlocker blocker(control);
+        control->setValue(values[parameter]);
+        control->setEnabled(track != nullptr);
+    }
+    parametricEqBandControl->setEnabled(track != nullptr);
+    auto* graph = static_cast<TrackEqResponseWidget*>(equalizerResponseGraph);
+    graph->setSelectedBand(band);
+    graph->setBands(bands);
+    graph->setLegacyParameters(track == nullptr ? 0.0f : track->eqLowDb,
+                               track == nullptr ? 0.0f : track->eqMidDb,
+                               track == nullptr ? 0.0f : track->eqHighDb,
+                               track == nullptr ? 120.0f : track->eqLowCrossoverHz,
+                               track == nullptr ? 6000.0f : track->eqHighCrossoverHz);
+    graph->setEnabled(track != nullptr);
 }
 
 void MainWindow::refreshAutomationEditor()

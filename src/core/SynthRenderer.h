@@ -150,6 +150,22 @@ private:
         float pan = 2.0f;
     };
 
+    struct ParametricEqCoefficients
+    {
+        float b0 = 1.0f;
+        float b1 = 0.0f;
+        float b2 = 0.0f;
+        float a1 = 0.0f;
+        float a2 = 0.0f;
+        bool active = false;
+    };
+
+    struct ParametricEqDelay
+    {
+        float first = 0.0f;
+        float second = 0.0f;
+    };
+
     struct TrackEqualizerState
     {
         float lowLeft = 0.0f;
@@ -158,6 +174,8 @@ private:
         float upperRight = 0.0f;
         float lowBandCoefficient = 0.0f;
         float highBandCoefficient = 0.0f;
+        std::array<ParametricEqCoefficients, 3> parametricCoefficients{};
+        std::array<std::array<ParametricEqDelay, 2>, 3> parametricDelays{};
         bool tailActive = false;
     };
 
@@ -203,6 +221,8 @@ private:
     void addBusFrameSample(size_t busIndex, StereoSample input);
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
     void resetTrackEqualizers();
+    static ParametricEqCoefficients makeParametricEqCoefficients(
+        const ParametricEqBand& band, double sampleRate);
     void prepareEffectChain(const QVector<MixerEffect>& settings, std::vector<EffectState>& states);
     void configureFilter(EffectState& state, SynthFilterType type);
     void resetEffectChain(std::vector<EffectState>& states);

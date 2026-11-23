@@ -100,6 +100,32 @@ float automationValue(const QVector<AutomationPoint>& points, double beat, float
 }
 }
 
+SynthRenderer::ParametricEqCoefficients SynthRenderer::makeParametricEqCoefficients(
+    const ParametricEqBand& band, double sampleRate)
+{
+    ParametricEqCoefficients coefficients;
+    if (std::abs(band.gainDb) < 1.0e-5f)
+        return coefficients;
+
+    const double frequency = std::clamp(static_cast<double>(band.frequencyHz),
+                                         20.0, std::max(20.0, sampleRate * 0.49));
+    const double q = std::clamp(static_cast<double>(band.q), 0.1, 10.0);
+    const double gain = std::pow(10.0, std::clamp(static_cast<double>(band.gainDb),
+                                                  -18.0, 18.0) / 40.0);
+    const double omega = twoPi * frequency / sampleRate;
+    const double sine = std::sin(omega);
+    const double alpha = sine / (2.0 * q);
+    const double cosine = std::cos(omega);
+    const double a0 = 1.0 + alpha / gain;
+    coefficients.b0 = static_cast<float>((1.0 + alpha * gain) / a0);
+    coefficients.b1 = static_cast<float>((-2.0 * cosine) / a0);
+    coefficients.b2 = static_cast<float>((1.0 - alpha * gain) / a0);
+    coefficients.a1 = static_cast<float>((-2.0 * cosine) / a0);
+    coefficients.a2 = static_cast<float>((1.0 - alpha / gain) / a0);
+    coefficients.active = true;
+    return coefficients;
+}
+
 float renderPercussionSample(int midiPitch, qint64 ageFrames, qint64 startFrame, double sampleRate)
 {
     if (ageFrames < 0 || sampleRate <= 0.0)
@@ -266,6 +292,9 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             1.0 - std::exp(-twoPi * lowCutoff / sampleRate));
         equalizerState.highBandCoefficient = static_cast<float>(
             1.0 - std::exp(-twoPi * highCutoff / sampleRate));
+        for (size_t bandIndex = 0; bandIndex < equalizerState.parametricCoefficients.size(); ++bandIndex)
+            equalizerState.parametricCoefficients[bandIndex] = makeParametricEqCoefficients(
+                track.eqParametricBands[bandIndex], sampleRate);
         if (track.instrumentType == InstrumentType::Synth && track.synthFilterEnabled)
         {
             MixerEffect instrumentFilter = defaultMixerEffect(MixerEffectType::LowPass);
@@ -905,9 +934,14 @@ StereoSample SynthRenderer::finishMixerFrame()
         }
         trackSample = applyTrackEqualizer(trackIndex, trackSample);
         TrackEqualizerState& equalizerState = trackEqualizerStates[trackIndex];
-        if (!equalizerState.tailActive &&
-            std::max({std::abs(equalizerState.lowLeft), std::abs(equalizerState.lowRight),
-                      std::abs(equalizerState.upperLeft), std::abs(equalizerState.upperRight)}) > 1.0e-5f)
+        bool equalizerHasTail = std::max({std::abs(equalizerState.lowLeft),
+            std::abs(equalizerState.lowRight), std::abs(equalizerState.upperLeft),
+            std::abs(equalizerState.upperRight)}) > 1.0e-5f;
+        for (const auto& bandDelays : equalizerState.parametricDelays)
+            for (const ParametricEqDelay& delay : bandDelays)
+                equalizerHasTail = equalizerHasTail ||
+                    std::abs(delay.first) > 1.0e-5f || std::abs(delay.second) > 1.0e-5f;
+        if (!equalizerState.tailActive && equalizerHasTail)
         {
             equalizerState.tailActive = true;
             activeEqualizerTailTracks.push_back(trackIndex);
@@ -1020,32 +1054,59 @@ StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample 
     if (trackIndex >= trackEqualizerGains.size() || trackIndex >= trackEqualizerStates.size())
         return input;
     const std::array<float, 3>& gains = trackEqualizerGains[trackIndex];
-    if (std::abs(gains[0] - 1.0f) < 1.0e-6f && std::abs(gains[1] - 1.0f) < 1.0e-6f &&
-        std::abs(gains[2] - 1.0f) < 1.0e-6f)
+    TrackEqualizerState& state = trackEqualizerStates[trackIndex];
+    const bool legacyActive = std::abs(gains[0] - 1.0f) >= 1.0e-6f ||
+                              std::abs(gains[1] - 1.0f) >= 1.0e-6f ||
+                              std::abs(gains[2] - 1.0f) >= 1.0e-6f;
+    const bool parametricActive = std::any_of(
+        state.parametricCoefficients.cbegin(), state.parametricCoefficients.cend(),
+        [](const ParametricEqCoefficients& coefficients) { return coefficients.active; });
+    if (!legacyActive && !parametricActive)
     {
-        TrackEqualizerState& state = trackEqualizerStates[trackIndex];
         const float lowCoefficient = state.lowBandCoefficient;
         const float highCoefficient = state.highBandCoefficient;
+        const auto parametricCoefficients = state.parametricCoefficients;
         state = {};
         state.lowBandCoefficient = lowCoefficient;
         state.highBandCoefficient = highCoefficient;
+        state.parametricCoefficients = parametricCoefficients;
         return input;
     }
 
-    TrackEqualizerState& state = trackEqualizerStates[trackIndex];
-    state.lowLeft += state.lowBandCoefficient * (input.left - state.lowLeft);
-    state.lowRight += state.lowBandCoefficient * (input.right - state.lowRight);
-    state.upperLeft += state.highBandCoefficient * (input.left - state.upperLeft);
-    state.upperRight += state.highBandCoefficient * (input.right - state.upperRight);
+    StereoSample output = input;
+    if (legacyActive)
+    {
+        state.lowLeft += state.lowBandCoefficient * (input.left - state.lowLeft);
+        state.lowRight += state.lowBandCoefficient * (input.right - state.lowRight);
+        state.upperLeft += state.highBandCoefficient * (input.left - state.upperLeft);
+        state.upperRight += state.highBandCoefficient * (input.right - state.upperRight);
 
-    const float midLeft = state.upperLeft - state.lowLeft;
-    const float midRight = state.upperRight - state.lowRight;
-    const float highLeft = input.left - state.upperLeft;
-    const float highRight = input.right - state.upperRight;
-    return {
-        state.lowLeft * gains[0] + midLeft * gains[1] + highLeft * gains[2],
-        state.lowRight * gains[0] + midRight * gains[1] + highRight * gains[2]
-    };
+        const float midLeft = state.upperLeft - state.lowLeft;
+        const float midRight = state.upperRight - state.lowRight;
+        const float highLeft = input.left - state.upperLeft;
+        const float highRight = input.right - state.upperRight;
+        output = {
+            state.lowLeft * gains[0] + midLeft * gains[1] + highLeft * gains[2],
+            state.lowRight * gains[0] + midRight * gains[1] + highRight * gains[2]
+        };
+    }
+
+    for (size_t bandIndex = 0; bandIndex < state.parametricCoefficients.size(); ++bandIndex)
+    {
+        const ParametricEqCoefficients& coefficients = state.parametricCoefficients[bandIndex];
+        if (!coefficients.active)
+            continue;
+        const auto process = [&coefficients](float sample, ParametricEqDelay& delay)
+        {
+            const float filtered = coefficients.b0 * sample + delay.first;
+            delay.first = coefficients.b1 * sample - coefficients.a1 * filtered + delay.second;
+            delay.second = coefficients.b2 * sample - coefficients.a2 * filtered;
+            return filtered;
+        };
+        output.left = process(output.left, state.parametricDelays[bandIndex][0]);
+        output.right = process(output.right, state.parametricDelays[bandIndex][1]);
+    }
+    return output;
 }
 
 void SynthRenderer::resetTrackEqualizers()
@@ -1054,9 +1115,11 @@ void SynthRenderer::resetTrackEqualizers()
     {
         const float lowCoefficient = state.lowBandCoefficient;
         const float highCoefficient = state.highBandCoefficient;
+        const auto parametricCoefficients = state.parametricCoefficients;
         state = {};
         state.lowBandCoefficient = lowCoefficient;
         state.highBandCoefficient = highCoefficient;
+        state.parametricCoefficients = parametricCoefficients;
     }
     activeEqualizerTailTracks.clear();
 }
