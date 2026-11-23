@@ -206,7 +206,13 @@ private:
         SelectedTrackSynthDecay = 9,
         SelectedTrackSynthSustain = 10,
         SelectedTrackSynthRelease = 11,
-        SelectedTrackOscillatorMix = 12
+        SelectedTrackOscillatorMix = 12,
+        SelectedTrackFilterEnvelopeAmount = 13,
+        SelectedTrackFilterEnvelopeAttack = 14,
+        SelectedTrackFilterEnvelopeDecay = 15,
+        SelectedTrackFilterEnvelopeSustain = 16,
+        SelectedTrackFilterEnvelopeRelease = 17,
+        SelectedTrackFilterEnvelopeEnabled = 18
     };
     struct MidiControllerMapping
     {
