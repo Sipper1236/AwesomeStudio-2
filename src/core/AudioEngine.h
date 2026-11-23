@@ -25,6 +25,7 @@ public:
     void setProject(const ProjectData& project);
     void startPlayback();
     void stopPlayback();
+    void seekToBeat(double beat);
     bool isPlaying() const;
     double positionBeats() const;
     float trackPeakLevel(quint64 trackId) const;
@@ -110,6 +111,8 @@ private:
     int bytesPerFrame = 0;
     std::atomic<bool> playing{false};
     std::atomic<bool> resetPosition{true};
+    std::atomic<bool> seekPosition{false};
+    std::atomic<qint64> requestedPositionFrames{0};
     std::atomic<qint64> publishedPositionFrames{0};
     std::atomic<qint64> audioClockFrames{0};
     std::atomic<float> masterGain{0.8f};

@@ -162,7 +162,8 @@ void AudioEngine::startPlayback()
 {
     if (!sink)
         return;
-    resetPosition.store(true, std::memory_order_release);
+    if (!seekPosition.load(std::memory_order_acquire))
+        resetPosition.store(true, std::memory_order_release);
     playing.store(true, std::memory_order_release);
 }
 
@@ -170,6 +171,21 @@ void AudioEngine::stopPlayback()
 {
     playing.store(false, std::memory_order_release);
     resetPosition.store(true, std::memory_order_release);
+    seekPosition.store(false, std::memory_order_release);
+}
+
+void AudioEngine::seekToBeat(double beat)
+{
+    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    if (!project || !std::isfinite(beat))
+        return;
+    const double maximumBeat = std::max(0.0, project->songLengthBeats() - 1.0 / 64.0);
+    const double clampedBeat = std::clamp(beat, 0.0, maximumBeat);
+    const double framesPerBeat = outputSampleRate * 60.0 / project->tempoBpm;
+    requestedPositionFrames.store(static_cast<qint64>(std::llround(clampedBeat * framesPerBeat)),
+                                  std::memory_order_relaxed);
+    resetPosition.store(false, std::memory_order_release);
+    seekPosition.store(true, std::memory_order_release);
 }
 
 bool AudioEngine::isPlaying() const
@@ -601,7 +617,13 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     const std::shared_ptr<const AudioAsset> previewSample =
         std::atomic_load_explicit(&previewSampleAsset, std::memory_order_acquire);
 
-    if (resetPosition.exchange(false, std::memory_order_acq_rel))
+    if (seekPosition.exchange(false, std::memory_order_acq_rel))
+    {
+        playbackFrame = requestedPositionFrames.load(std::memory_order_acquire);
+        renderer.resetTransport();
+        resetPosition.store(false, std::memory_order_release);
+    }
+    else if (resetPosition.exchange(false, std::memory_order_acq_rel))
     {
         const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
             outputSampleRate * 60.0 / project->tempoBpm * 4.0 / project->beatUnit)));

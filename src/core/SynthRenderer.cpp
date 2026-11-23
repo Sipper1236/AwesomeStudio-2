@@ -260,6 +260,15 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     });
 }
 
+void SynthRenderer::resetTransport()
+{
+    activeNotes.clear();
+    activeAudioRegions.clear();
+    nextStartIndex = 0;
+    nextAudioStartIndex = 0;
+    lastFrame = -1;
+}
+
 void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, float value)
 {
     if (trackIndex >= liveTrackMixOverrides.size())

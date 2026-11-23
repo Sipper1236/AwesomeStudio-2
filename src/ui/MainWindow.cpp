@@ -26,7 +26,9 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
@@ -171,6 +173,33 @@ private:
     QVector<AutomationPoint> after;
 };
 
+class MarkerEditCommand final : public QUndoCommand
+{
+public:
+    MarkerEditCommand(MainWindow* window, QVector<TimelineMarker> before, QVector<TimelineMarker> after)
+        : window(window), before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Edit arrangement markers"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyMarkerHistory(before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyMarkerHistory(after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    QVector<TimelineMarker> before;
+    QVector<TimelineMarker> after;
+};
+
 MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     : QMainWindow(parent), audioEngine(engine)
 {
@@ -280,6 +309,14 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     {
         statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
     });
+    connect(arrangementEditor, &ArrangementEditor::markerAddRequested,
+            this, &MainWindow::addTimelineMarker);
+    connect(arrangementEditor, &ArrangementEditor::markerRenameRequested,
+            this, &MainWindow::renameTimelineMarker);
+    connect(arrangementEditor, &ArrangementEditor::markerRemoveRequested,
+            this, &MainWindow::removeTimelineMarker);
+    connect(arrangementEditor, &ArrangementEditor::markerSeekRequested,
+            this, &MainWindow::seekToTimelineMarker);
     connect(arrangementEditor, &ArrangementEditor::trackSelected, this,
             [this](quint64 trackId) { selectTrack(trackId); });
     connect(&undoStack, &QUndoStack::cleanChanged, this, [this] { refreshDirtyState(); });
@@ -1212,6 +1249,12 @@ void MainWindow::createMenus()
     transportMenu->addAction(loopAction);
     transportMenu->addAction(metronomeAction);
 
+    QMenu* arrangementMenu = menuBar()->addMenu(tr("&Arrangement"));
+    arrangementMenu->addAction(tr("Add marker at playhead"), this, [this]
+    {
+        addTimelineMarker(audioEngine.positionBeats());
+    });
+
     QMenu* midiMenu = menuBar()->addMenu(tr("&MIDI"));
     midiControllerListenAction = new QAction(tr("Enable controller mappings"), this);
     midiControllerListenAction->setCheckable(true);
@@ -2064,6 +2107,121 @@ void MainWindow::applyAutomationHistory(quint64 trackId, int parameter,
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     refreshAutomationEditor();
+    refreshDirtyState();
+}
+
+void MainWindow::addTimelineMarker(double beat)
+{
+    if (project.markers.size() >= 1000)
+    {
+        statusBar()->showMessage(tr("This project has reached the 1,000-marker limit"), 3500);
+        return;
+    }
+    beat = std::clamp(beat, 0.0, std::max(0.0, project.songLengthBeats() - 1.0 / 64.0));
+    for (const TimelineMarker& marker : project.markers)
+    {
+        if (std::abs(marker.beat - beat) < 1.0e-6)
+        {
+            statusBar()->showMessage(tr("A marker already exists at that beat"), 2500);
+            return;
+        }
+    }
+
+    bool accepted = false;
+    const QString defaultName = tr("Marker %1").arg(project.markers.size() + 1);
+    const QString name = QInputDialog::getText(this, tr("Add arrangement marker"), tr("Name"),
+                                                QLineEdit::Normal, defaultName, &accepted).trimmed();
+    if (!accepted || name.isEmpty())
+        return;
+
+    const QVector<TimelineMarker> before = project.markers;
+    QVector<TimelineMarker> after = before;
+    after.push_back({beat, name.left(80)});
+    std::stable_sort(after.begin(), after.end(), [](const TimelineMarker& left, const TimelineMarker& right)
+    {
+        return left.beat < right.beat;
+    });
+    undoStack.push(new MarkerEditCommand(this, before, after));
+    statusBar()->showMessage(tr("Added marker %1").arg(name), 2000);
+}
+
+void MainWindow::renameTimelineMarker(double beat)
+{
+    int markerIndex = -1;
+    for (int index = 0; index < project.markers.size(); ++index)
+    {
+        if (std::abs(project.markers[index].beat - beat) < 1.0e-6)
+        {
+            markerIndex = index;
+            break;
+        }
+    }
+    if (markerIndex < 0)
+        return;
+
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this, tr("Rename arrangement marker"), tr("Name"),
+                                                QLineEdit::Normal, project.markers[markerIndex].name,
+                                                &accepted).trimmed();
+    if (!accepted || name.isEmpty() || name == project.markers[markerIndex].name)
+        return;
+
+    const QVector<TimelineMarker> before = project.markers;
+    QVector<TimelineMarker> after = before;
+    after[markerIndex].name = name.left(80);
+    undoStack.push(new MarkerEditCommand(this, before, after));
+    statusBar()->showMessage(tr("Renamed arrangement marker"), 2000);
+}
+
+void MainWindow::removeTimelineMarker(double beat)
+{
+    int markerIndex = -1;
+    for (int index = 0; index < project.markers.size(); ++index)
+    {
+        if (std::abs(project.markers[index].beat - beat) < 1.0e-6)
+        {
+            markerIndex = index;
+            break;
+        }
+    }
+    if (markerIndex < 0)
+        return;
+
+    const QVector<TimelineMarker> before = project.markers;
+    QVector<TimelineMarker> after = before;
+    const QString name = after[markerIndex].name;
+    after.removeAt(markerIndex);
+    undoStack.push(new MarkerEditCommand(this, before, after));
+    statusBar()->showMessage(tr("Removed marker %1").arg(name), 2000);
+}
+
+void MainWindow::seekToTimelineMarker(double beat)
+{
+    if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
+    {
+        statusBar()->showMessage(tr("Stop recording before seeking to an arrangement marker"), 3000);
+        return;
+    }
+    if (!audioEngine.isAudioAvailable() && !audioEngine.initialize())
+    {
+        statusBar()->showMessage(audioEngine.errorMessage(), 4000);
+        return;
+    }
+    audioEngine.setProject(project);
+    if (!audioEngine.isPlaying())
+        audioEngine.startPlayback();
+    audioEngine.seekToBeat(beat);
+    playAction->setChecked(true);
+    statusBar()->showMessage(tr("Playing from beat %1").arg(beat + 1.0, 0, 'f', 2), 2000);
+}
+
+void MainWindow::applyMarkerHistory(const QVector<TimelineMarker>& markers)
+{
+    project.markers = markers;
+    project.normalize();
+    audioEngine.setProject(project);
+    arrangementEditor->setProject(project);
+    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     refreshDirtyState();
 }
 

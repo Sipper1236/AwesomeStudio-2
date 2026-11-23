@@ -36,6 +36,7 @@ class MainWindow final : public QMainWindow
     Q_OBJECT
     friend class NoteEditCommand;
     friend class AutomationEditCommand;
+    friend class MarkerEditCommand;
 
 public:
     explicit MainWindow(AudioEngine& audioEngine, QWidget* parent = nullptr);
@@ -71,6 +72,11 @@ private:
     void removeAutomationPoint();
     void applyAutomationHistory(quint64 trackId, int parameter,
                                 const QVector<AutomationPoint>& points);
+    void addTimelineMarker(double beat);
+    void renameTimelineMarker(double beat);
+    void removeTimelineMarker(double beat);
+    void seekToTimelineMarker(double beat);
+    void applyMarkerHistory(const QVector<TimelineMarker>& markers);
     void beginAutomationWrite(quint64 trackId, int parameter, float value);
     void recordAutomationValue(quint64 trackId, int parameter, float value);
     void finishAutomationWrite();

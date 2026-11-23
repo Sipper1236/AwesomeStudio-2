@@ -78,6 +78,14 @@ struct AutomationPoint
     float value = 0.0f;
 };
 
+struct TimelineMarker
+{
+    double beat = 0.0;
+    QString name = QStringLiteral("Marker");
+
+    bool operator==(const TimelineMarker& other) const;
+};
+
 struct InstrumentTrack
 {
     quint64 id = 0;
@@ -111,6 +119,7 @@ struct ProjectData
     bool metronomeEnabled = false;
     int countInBars = 0;
     float masterGain = 0.8f;
+    QVector<TimelineMarker> markers;
     QVector<InstrumentTrack> tracks;
 
     double patternLengthBeats() const;

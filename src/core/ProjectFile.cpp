@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 11;
+constexpr int currentProjectVersion = 12;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -361,6 +361,12 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
     QJsonArray tracks;
     for (const InstrumentTrack& track : safeProject.tracks)
         tracks.push_back(saveTrack(track));
+    QJsonArray markers;
+    for (const TimelineMarker& marker : safeProject.markers)
+        markers.push_back(QJsonObject{
+            {QStringLiteral("beat"), marker.beat},
+            {QStringLiteral("name"), marker.name}
+        });
 
     const QJsonObject root{
         {QStringLiteral("format"), QString::fromLatin1(projectFormat)},
@@ -374,6 +380,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("metronomeEnabled"), safeProject.metronomeEnabled},
         {QStringLiteral("countInBars"), safeProject.countInBars},
         {QStringLiteral("masterGain"), safeProject.masterGain},
+        {QStringLiteral("markers"), markers},
         {QStringLiteral("tracks"), tracks}
     };
 
@@ -441,6 +448,34 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     loaded.metronomeEnabled = version >= 5 ? root.value(QStringLiteral("metronomeEnabled")).toBool(false) : false;
     loaded.countInBars = version >= 5 ? root.value(QStringLiteral("countInBars")).toInt(0) : 0;
     loaded.masterGain = static_cast<float>(root.value(QStringLiteral("masterGain")).toDouble(0.8));
+    if (version >= 12)
+    {
+        const QJsonValue markerValue = root.value(QStringLiteral("markers"));
+        if (!markerValue.isArray() || markerValue.toArray().size() > 1000)
+        {
+            setError(error, QStringLiteral("The project has invalid or excessive timeline markers."));
+            return false;
+        }
+        for (const QJsonValue& markerJson : markerValue.toArray())
+        {
+            if (!markerJson.isObject())
+            {
+                setError(error, QStringLiteral("The project contains an invalid timeline marker."));
+                return false;
+            }
+            const QJsonObject markerObject = markerJson.toObject();
+            TimelineMarker marker;
+            marker.beat = markerObject.value(QStringLiteral("beat")).toDouble(-1.0);
+            marker.name = markerObject.value(QStringLiteral("name")).toString();
+            if (!std::isfinite(marker.beat) || marker.beat < 0.0 || marker.beat > 16384.0 ||
+                marker.name.trimmed().isEmpty())
+            {
+                setError(error, QStringLiteral("The project contains an out-of-range timeline marker."));
+                return false;
+            }
+            loaded.markers.push_back(std::move(marker));
+        }
+    }
 
     if (version == 1)
     {

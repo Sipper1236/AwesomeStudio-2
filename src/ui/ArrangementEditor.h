@@ -30,6 +30,10 @@ signals:
                            const QVector<AutomationPoint>& before,
                            const QVector<AutomationPoint>& after);
     void automationPointLimitReached();
+    void markerAddRequested(double beat);
+    void markerRenameRequested(double beat);
+    void markerRemoveRequested(double beat);
+    void markerSeekRequested(double beat);
 
 private:
     class Canvas;

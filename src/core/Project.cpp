@@ -47,6 +47,11 @@ bool MidiNote::operator==(const MidiNote& other) const
            std::abs(lengthBeats - other.lengthBeats) < 1.0e-9 && channel == other.channel;
 }
 
+bool TimelineMarker::operator==(const TimelineMarker& other) const
+{
+    return std::abs(beat - other.beat) < 1.0e-9 && name == other.name;
+}
+
 double ProjectData::patternLengthBeats() const
 {
     return quarterNotesPerBar() * bars;
@@ -149,6 +154,35 @@ void ProjectData::normalize()
     bars = std::clamp(bars, 1, 64);
     countInBars = std::clamp(countInBars, 0, 4);
     masterGain = std::clamp(masterGain, 0.0f, 1.0f);
+    if (markers.size() > 1000)
+        markers.resize(1000);
+    QVector<TimelineMarker> validMarkers;
+    validMarkers.reserve(markers.size());
+    for (TimelineMarker marker : markers)
+    {
+        if (!std::isfinite(marker.beat))
+            continue;
+        marker.beat = std::clamp(marker.beat, 0.0, 16384.0);
+        marker.name = marker.name.trimmed().left(80);
+        if (marker.name.isEmpty())
+            marker.name = QStringLiteral("Marker");
+        validMarkers.push_back(std::move(marker));
+    }
+    std::stable_sort(validMarkers.begin(), validMarkers.end(), [](const TimelineMarker& left,
+                                                                   const TimelineMarker& right)
+    {
+        return left.beat < right.beat;
+    });
+    QVector<TimelineMarker> uniqueMarkers;
+    uniqueMarkers.reserve(validMarkers.size());
+    for (const TimelineMarker& marker : validMarkers)
+    {
+        if (!uniqueMarkers.isEmpty() && std::abs(uniqueMarkers.last().beat - marker.beat) < 1.0e-6)
+            uniqueMarkers.last() = marker;
+        else
+            uniqueMarkers.push_back(marker);
+    }
+    markers = std::move(uniqueMarkers);
     if (tracks.size() > 256)
         tracks.resize(256);
 

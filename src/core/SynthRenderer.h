@@ -17,6 +17,7 @@ class SynthRenderer
 {
 public:
     void setProject(std::shared_ptr<const ProjectData> project, double sampleRate);
+    void resetTransport();
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
     void resetTrackPeakLevels();
     float trackPeakLevel(size_t trackIndex) const;

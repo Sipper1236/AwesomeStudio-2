@@ -2,6 +2,8 @@
 
 #include <QMouseEvent>
 #include <QKeyEvent>
+#include <QFontMetrics>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
@@ -108,8 +110,10 @@ protected:
         const int trackCount = std::max(1, static_cast<int>(project.tracks.size()));
         const int rowHeight = currentRowHeight();
         const double quarterNotesPerBar = project.quarterNotesPerBar();
-        const double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
-                                             quarterNotesPerBar * 16.0);
+        double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
+                                       quarterNotesPerBar * 16.0);
+        for (const TimelineMarker& marker : project.markers)
+            visibleBeats = std::max(visibleBeats, marker.beat + quarterNotesPerBar * 2.0);
         const int gridWidth = static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
         painter.fillRect(QRect(trackHeaderWidth, 0, gridWidth, rulerHeight), QColor(QStringLiteral("#202630")));
         painter.fillRect(QRect(0, 0, trackHeaderWidth, rulerHeight), QColor(QStringLiteral("#252d37")));
@@ -300,6 +304,26 @@ protected:
             }
         }
 
+        const QFont markerFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold);
+        const QFontMetrics markerMetrics(markerFont);
+        for (const TimelineMarker& marker : project.markers)
+        {
+            const int x = trackHeaderWidth + static_cast<int>(std::round(marker.beat * pixelsPerBeat));
+            painter.setPen(QPen(QColor(QStringLiteral("#5bd5bd")), 2));
+            painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * rowHeight);
+            painter.setBrush(QColor(QStringLiteral("#5bd5bd")));
+            painter.setPen(Qt::NoPen);
+            painter.drawPolygon(QPolygon{QPoint(x - 4, 0), QPoint(x + 4, 0), QPoint(x, 7)});
+            const int labelWidth = markerMetrics.horizontalAdvance(marker.name) + 12;
+            const QRect labelRect(x + 5, 5, labelWidth, rulerHeight - 10);
+            painter.setBrush(QColor(QStringLiteral("#28514c")));
+            painter.setPen(QPen(QColor(QStringLiteral("#5bd5bd")), 1));
+            painter.drawRoundedRect(labelRect, 3, 3);
+            painter.setPen(QColor(QStringLiteral("#e0fff7")));
+            painter.setFont(markerFont);
+            painter.drawText(labelRect.adjusted(5, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft, marker.name);
+        }
+
         if (playheadBeat >= 0.0 && playheadBeat <= visibleBeats)
         {
             const int x = trackHeaderWidth + static_cast<int>(std::round(playheadBeat * pixelsPerBeat));
@@ -312,6 +336,43 @@ protected:
     {
         setFocus(Qt::MouseFocusReason);
         const QPoint point = event->position().toPoint();
+        if (point.y() >= 0 && point.y() < rulerHeight && point.x() >= trackHeaderWidth)
+        {
+            const double beat = std::clamp(
+                (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+            const int markerIndex = markerAt(point);
+            if (event->button() == Qt::LeftButton)
+            {
+                emit owner->markerSeekRequested(markerIndex >= 0 ? project.markers[markerIndex].beat : beat);
+                return;
+            }
+            if (event->button() == Qt::RightButton)
+            {
+                QMenu menu(this);
+                QAction* addAction = nullptr;
+                QAction* renameAction = nullptr;
+                QAction* removeAction = nullptr;
+                double markerBeat = beat;
+                if (markerIndex >= 0)
+                {
+                    markerBeat = project.markers[markerIndex].beat;
+                    renameAction = menu.addAction(tr("Rename marker…"));
+                    removeAction = menu.addAction(tr("Remove marker"));
+                }
+                else
+                {
+                    addAction = menu.addAction(tr("Add marker here…"));
+                }
+                QAction* chosen = menu.exec(event->globalPosition().toPoint());
+                if (chosen == addAction)
+                    emit owner->markerAddRequested(beat);
+                else if (chosen == renameAction)
+                    emit owner->markerRenameRequested(markerBeat);
+                else if (chosen == removeAction)
+                    emit owner->markerRemoveRequested(markerBeat);
+                return;
+            }
+        }
         const int row = (point.y() - rulerHeight) / currentRowHeight();
         if (row < 0 || row >= project.tracks.size())
             return;
@@ -658,6 +719,21 @@ protected:
     }
 
 private:
+    int markerAt(const QPoint& position) const
+    {
+        const QFont font(QStringLiteral("Sans Serif"), 8, QFont::DemiBold);
+        const QFontMetrics metrics(font);
+        for (int index = project.markers.size() - 1; index >= 0; --index)
+        {
+            const TimelineMarker& marker = project.markers[index];
+            const int x = trackHeaderWidth + static_cast<int>(std::round(marker.beat * pixelsPerBeat));
+            const QRect bounds(x - 3, 0, metrics.horizontalAdvance(marker.name) + 16, rulerHeight);
+            if (bounds.contains(position))
+                return index;
+        }
+        return -1;
+    }
+
     int currentRowHeight() const
     {
         return trackHeight + (automationViewEnabled ? automationLaneHeight : 0);
