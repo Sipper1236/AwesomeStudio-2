@@ -592,12 +592,18 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             region.sourceStartFrame = static_cast<qint64>(std::llround(
                                 static_cast<double>(source->frameCount() - 1) *
                                 layerSettings.startPositionPercent / 100.0));
+                            region.sourceEndFrame = static_cast<qint64>(std::llround(
+                                static_cast<double>(source->frameCount() - 1) *
+                                layerSettings.endPositionPercent / 100.0));
+                            region.sourceEndFrame = std::clamp<qint64>(region.sourceEndFrame,
+                                region.sourceStartFrame, source->frameCount() - 1);
                             region.playbackRate = std::pow(2.0,
                                 static_cast<double>(layerSettings.tuningSemitones) / 12.0);
                             const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
                             region.sourceGain = velocityGain;
                             const int ratchetCount = std::clamp(note.ratchetCount, 1, 8);
-                            const qint64 remainingSourceFrames = source->frameCount() - region.sourceStartFrame;
+                            const qint64 remainingSourceFrames =
+                                region.sourceEndFrame - region.sourceStartFrame + 1;
                             const qint64 oneShotDurationFrames = static_cast<qint64>(std::ceil(
                                 static_cast<double>(remainingSourceFrames) * sampleRate /
                                 (source->sampleRate * region.playbackRate)));
@@ -1932,17 +1938,22 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
             static_cast<double>(age) * region.source->sampleRate * region.playbackRate / sampleRate;
         const qint64 loopStartFrame = std::clamp<qint64>(region.sourceStartFrame, 0,
                                                           region.source->frameCount() - 1);
+        const qint64 sourceEndFrame = std::clamp<qint64>(
+            region.sourceEndFrame < 0 ? region.source->frameCount() - 1 : region.sourceEndFrame,
+            loopStartFrame, region.source->frameCount() - 1);
         if (region.drumSampleLoop)
         {
             const double loopLengthFrames = std::max<qint64>(1,
-                region.source->frameCount() - loopStartFrame);
+                sourceEndFrame - loopStartFrame + 1);
             sourcePosition = loopStartFrame + std::fmod(
                 std::max(0.0, sourcePosition - loopStartFrame), loopLengthFrames);
         }
         const qint64 firstFrame = static_cast<qint64>(sourcePosition);
-        const qint64 secondFrame = firstFrame + 1 < region.source->frameCount()
+        if (firstFrame > sourceEndFrame)
+            continue;
+        const qint64 secondFrame = firstFrame + 1 <= sourceEndFrame
             ? firstFrame + 1
-            : region.drumSampleLoop ? loopStartFrame : region.source->frameCount() - 1;
+            : region.drumSampleLoop ? loopStartFrame : sourceEndFrame;
         if (firstFrame < 0 || firstFrame >= region.source->frameCount())
             continue;
         const float fraction = static_cast<float>(sourcePosition - firstFrame);

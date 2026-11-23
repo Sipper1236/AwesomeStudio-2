@@ -510,7 +510,14 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
             {
                 event.sampleStartFrame = static_cast<qint64>(std::llround(
                     static_cast<double>(event.sample->frameCount() - 1) *
-                    settings.startPositionPercent / 100.0));
+                    std::clamp(static_cast<double>(settings.startPositionPercent), 0.0, 99.0) / 100.0));
+                event.sampleEndFrame = static_cast<qint64>(std::llround(
+                    static_cast<double>(event.sample->frameCount() - 1) *
+                    std::clamp(static_cast<double>(settings.endPositionPercent),
+                               static_cast<double>(settings.startPositionPercent) + 0.1,
+                               100.0) / 100.0));
+                event.sampleEndFrame = std::clamp<qint64>(event.sampleEndFrame,
+                    event.sampleStartFrame, event.sample->frameCount() - 1);
                 event.samplePlaybackRate = std::pow(2.0,
                     static_cast<double>(settings.tuningSemitones) / 12.0);
             }
@@ -808,13 +815,14 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
     target->secondOscillatorEnabled = event.secondOscillatorEnabled && !event.percussion;
     target->sample = event.sample;
     target->sampleStartFrame = event.sampleStartFrame;
+    target->sampleEndFrame = event.sampleEndFrame;
     target->samplePlaybackRate = event.samplePlaybackRate;
     target->sampleLoopEnabled = event.sampleLoopEnabled;
     if (target->sample != nullptr && !target->sampleLoopEnabled &&
         target->sample->sampleRate > 0 && target->samplePlaybackRate > 0.0)
     {
-        const double sourceDuration = static_cast<double>(target->sample->frameCount() -
-            target->sampleStartFrame) * outputSampleRate /
+        const double sourceDuration = static_cast<double>(target->sampleEndFrame -
+            target->sampleStartFrame + 1) * outputSampleRate /
             (target->sample->sampleRate * target->samplePlaybackRate);
         target->sampleDurationFrames = std::max<qint64>(1,
             static_cast<qint64>(std::ceil(sourceDuration)));
@@ -854,24 +862,26 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer)
                 voice.sample->sampleRate * voice.samplePlaybackRate / outputSampleRate;
             const qint64 loopStartFrame = std::clamp<qint64>(voice.sampleStartFrame, 0,
                                                               voice.sample->frameCount() - 1);
+            const qint64 sampleEndFrame = std::clamp<qint64>(voice.sampleEndFrame,
+                loopStartFrame, voice.sample->frameCount() - 1);
             if (voice.sampleLoopEnabled)
             {
                 const double loopLengthFrames = std::max<qint64>(1,
-                    voice.sample->frameCount() - loopStartFrame);
+                    sampleEndFrame - loopStartFrame + 1);
                 sourcePosition = loopStartFrame + std::fmod(
                     std::max(0.0, sourcePosition - loopStartFrame), loopLengthFrames);
             }
             const qint64 firstFrame = static_cast<qint64>(sourcePosition);
-            if (firstFrame >= voice.sample->frameCount() && !voice.sampleLoopEnabled)
+            if (firstFrame > sampleEndFrame && !voice.sampleLoopEnabled)
             {
                 voice = LiveMidiVoice{};
                 continue;
             }
             if (firstFrame < 0 || voice.sample->channelCount < 1 || voice.sample->channelCount > 2)
                 continue;
-            const qint64 secondFrame = firstFrame + 1 < voice.sample->frameCount()
+            const qint64 secondFrame = firstFrame + 1 <= sampleEndFrame
                 ? firstFrame + 1
-                : voice.sampleLoopEnabled ? loopStartFrame : voice.sample->frameCount() - 1;
+                : voice.sampleLoopEnabled ? loopStartFrame : sampleEndFrame;
             const float fraction = static_cast<float>(sourcePosition - firstFrame);
             const int channels = voice.sample->channelCount;
             const auto sampleAt = [&](qint64 sampleFrame, int channel)
@@ -1121,7 +1131,8 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
 
 void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity,
                                        float pan, float gain, float startPositionPercent,
-                                       float tuningSemitones, bool loopEnabled,
+                                       float endPositionPercent, float tuningSemitones,
+                                       bool loopEnabled,
                                        float attackSeconds, float decaySeconds,
                                        float sustainLevel, float releaseSeconds)
 {
@@ -1135,11 +1146,18 @@ void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample,
     previewSynthFilterEnabled.store(false, std::memory_order_relaxed);
     previewFilterResetSerial.fetch_add(1, std::memory_order_release);
     previewSampleGain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
-    const double startFrame = static_cast<double>(sample->frameCount() - 1) *
-                              std::clamp(static_cast<double>(startPositionPercent), 0.0, 99.0) / 100.0;
+    const qint64 lastFrame = sample->frameCount() - 1;
+    const double startPercent = std::clamp(static_cast<double>(startPositionPercent), 0.0, 99.0);
+    const double endPercent = std::clamp(static_cast<double>(endPositionPercent),
+                                          startPercent + 0.1, 100.0);
+    const qint64 startFrame = static_cast<qint64>(std::llround(lastFrame * startPercent / 100.0));
+    const qint64 endFrame = std::clamp<qint64>(
+        static_cast<qint64>(std::llround(lastFrame * endPercent / 100.0)),
+        startFrame, lastFrame);
     const double playbackRate = std::pow(2.0,
         std::clamp(static_cast<double>(tuningSemitones), -24.0, 24.0) / 12.0);
-    previewSampleStartFrame.store(startFrame, std::memory_order_relaxed);
+    previewSampleStartFrame.store(static_cast<double>(startFrame), std::memory_order_relaxed);
+    previewSampleEndFrame.store(endFrame, std::memory_order_relaxed);
     previewSamplePlaybackRate.store(playbackRate, std::memory_order_relaxed);
     previewSampleLoopEnabled.store(loopEnabled, std::memory_order_relaxed);
     previewAttackFrames.store(std::max<qint64>(0, static_cast<qint64>(std::llround(
@@ -1155,7 +1173,7 @@ void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample,
     const qint64 duration = loopEnabled
         ? static_cast<qint64>(outputSampleRate)
         : static_cast<qint64>(std::ceil(
-            (sample->frameCount() - startFrame) * outputSampleRate /
+            (endFrame - startFrame + 1) * outputSampleRate /
             (sample->sampleRate * playbackRate)));
     previewStartFrame.store(start, std::memory_order_release);
     const qint64 end = start + std::max<qint64>(1, duration);
@@ -1412,22 +1430,25 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                     static_cast<double>(age) * previewSample->sampleRate *
                     previewSamplePlaybackRate.load(std::memory_order_relaxed) / outputSampleRate;
                 const bool loopEnabled = previewSampleLoopEnabled.load(std::memory_order_relaxed);
-                const qint64 loopStartFrame = std::clamp<qint64>(static_cast<qint64>(std::llround(
-                    previewSampleStartFrame.load(std::memory_order_relaxed))), 0,
-                    previewSample->frameCount() - 1);
+            const qint64 loopStartFrame = std::clamp<qint64>(static_cast<qint64>(std::llround(
+                previewSampleStartFrame.load(std::memory_order_relaxed))), 0,
+                previewSample->frameCount() - 1);
+            const qint64 sampleEndFrame = std::clamp<qint64>(
+                previewSampleEndFrame.load(std::memory_order_relaxed), loopStartFrame,
+                previewSample->frameCount() - 1);
                 if (loopEnabled)
                 {
                     const double loopLengthFrames = std::max<qint64>(1,
-                        previewSample->frameCount() - loopStartFrame);
+                    sampleEndFrame - loopStartFrame + 1);
                     sourcePosition = loopStartFrame + std::fmod(
                         std::max(0.0, sourcePosition - loopStartFrame), loopLengthFrames);
                 }
                 const qint64 firstFrame = static_cast<qint64>(sourcePosition);
-                if (firstFrame >= 0 && firstFrame < previewSample->frameCount())
+            if (firstFrame >= 0 && firstFrame <= sampleEndFrame)
                 {
-                    const qint64 secondFrame = firstFrame + 1 < previewSample->frameCount()
+                const qint64 secondFrame = firstFrame + 1 <= sampleEndFrame
                         ? firstFrame + 1
-                        : loopEnabled ? loopStartFrame : previewSample->frameCount() - 1;
+                    : loopEnabled ? loopStartFrame : sampleEndFrame;
                     const float fraction = static_cast<float>(sourcePosition - firstFrame);
                     const int channels = previewSample->channelCount;
                     const auto sampleAt = [&](qint64 frame, int channel)

@@ -108,6 +108,7 @@ private:
         qint64 startFrame = 0;
         qint64 endFrame = 0;
         qint64 sourceStartFrame = 0;
+        qint64 sourceEndFrame = -1;
         qint64 fadeInFrames = 0;
         qint64 fadeOutFrames = 0;
         AudioFadeCurve fadeInCurve = AudioFadeCurve::Linear;

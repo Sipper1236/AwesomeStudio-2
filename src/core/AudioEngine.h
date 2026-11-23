@@ -70,6 +70,7 @@ public:
     void triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity = 96,
                               float pan = 0.0f, float gain = 1.0f,
                               float startPositionPercent = 0.0f,
+                              float endPositionPercent = 100.0f,
                               float tuningSemitones = 0.0f,
                               bool loopEnabled = false,
                               float attackSeconds = 0.008f,
@@ -121,6 +122,7 @@ private:
         float filterEnvelopeReleaseSeconds = 0.2f;
         std::shared_ptr<const AudioAsset> sample;
         qint64 sampleStartFrame = 0;
+        qint64 sampleEndFrame = 0;
         double samplePlaybackRate = 1.0;
         bool sampleLoopEnabled = false;
     };
@@ -163,6 +165,7 @@ private:
         bool secondOscillatorEnabled = false;
         std::shared_ptr<const AudioAsset> sample;
         qint64 sampleStartFrame = 0;
+        qint64 sampleEndFrame = 0;
         qint64 sampleDurationFrames = 0;
         double samplePlaybackRate = 1.0;
         bool sampleLoopEnabled = false;
@@ -292,6 +295,7 @@ private:
     std::atomic<float> previewSustainLevel{1.0f};
     std::shared_ptr<const AudioAsset> previewSampleAsset;
     std::atomic<double> previewSampleStartFrame{0.0};
+    std::atomic<qint64> previewSampleEndFrame{0};
     std::atomic<double> previewSamplePlaybackRate{1.0};
     std::atomic<bool> previewSampleLoopEnabled{false};
     std::atomic<float> previewSampleGain{1.0f};

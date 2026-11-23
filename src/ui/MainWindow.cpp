@@ -355,7 +355,7 @@ private:
 class DrumSampleWaveformWidget final : public QWidget
 {
 public:
-    using StartHandler = std::function<void(double)>;
+    using PositionHandler = std::function<void(bool, double)>;
 
     explicit DrumSampleWaveformWidget(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -363,25 +363,32 @@ public:
         setMinimumHeight(82);
         setMaximumHeight(96);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setAccessibleName(tr("Drum sample waveform and start position"));
-        setToolTip(tr("Drag across the waveform to set the sample start position"));
+        setAccessibleName(tr("Drum sample waveform and slice boundaries"));
+        setToolTip(tr("Drag the start or end marker to set the sample slice"));
     }
 
     void setSample(const std::shared_ptr<const AudioAsset>& asset, const QString& sourcePath,
-                   float startPercent)
+                   float startPercent, float endPercent)
     {
         peaks = asset == nullptr ? QVector<float>{} : asset->waveformPeaks;
         label = asset != nullptr ? QFileInfo(asset->path).fileName()
                                  : sourcePath.isEmpty() ? tr("No sample assigned")
                                                         : tr("Offline: %1").arg(QFileInfo(sourcePath).fileName());
         startPositionPercent = std::clamp(static_cast<double>(startPercent), 0.0, 99.0);
+        endPositionPercent = std::clamp(static_cast<double>(endPercent),
+                                        startPositionPercent + 0.1, 100.0);
         update();
     }
 
-    void setStartHandler(StartHandler handler) { startHandler = std::move(handler); }
+    void setPositionHandler(PositionHandler handler) { positionHandler = std::move(handler); }
     void setStartPosition(double percent)
     {
-        startPositionPercent = std::clamp(percent, 0.0, 99.0);
+        startPositionPercent = std::clamp(percent, 0.0, std::min(99.0, endPositionPercent - 0.1));
+        update();
+    }
+    void setEndPosition(double percent)
+    {
+        endPositionPercent = std::clamp(percent, startPositionPercent + 0.1, 100.0);
         update();
     }
 
@@ -412,6 +419,12 @@ protected:
             return;
         }
 
+        const double startX = plot.left() + plot.width() * startPositionPercent / 100.0;
+        const double endX = plot.left() + plot.width() * endPositionPercent / 100.0;
+        QColor selectionColor = accent;
+        selectionColor.setAlpha(32);
+        painter.fillRect(QRectF(startX, plot.top(), endX - startX, plot.height()), selectionColor);
+
         painter.setPen(QPen(accent, 1.0));
         const int pixelColumns = std::max(1, static_cast<int>(plot.width()));
         for (int column = 0; column < pixelColumns; ++column)
@@ -429,16 +442,23 @@ protected:
             painter.drawLine(QPointF(x, centerY - amplitude), QPointF(x, centerY + amplitude));
         }
 
-        const double startX = plot.left() + plot.width() * startPositionPercent / 100.0;
         painter.setPen(QPen(foreground, 1.0, Qt::DashLine));
         painter.drawLine(QPointF(startX, plot.top()), QPointF(startX, plot.bottom()));
+        painter.setPen(QPen(accent, 1.0, Qt::DashLine));
+        painter.drawLine(QPointF(endX, plot.top()), QPointF(endX, plot.bottom()));
         painter.setPen(Qt::NoPen);
         painter.setBrush(foreground);
-        QPolygonF marker;
-        marker << QPointF(startX - 4.0, plot.top() - 1.0)
-               << QPointF(startX + 4.0, plot.top() - 1.0)
-               << QPointF(startX, plot.top() + 5.0);
-        painter.drawPolygon(marker);
+        QPolygonF startMarker;
+        startMarker << QPointF(startX - 4.0, plot.top() - 1.0)
+                    << QPointF(startX + 4.0, plot.top() - 1.0)
+                    << QPointF(startX, plot.top() + 5.0);
+        painter.drawPolygon(startMarker);
+        painter.setBrush(accent);
+        QPolygonF endMarker;
+        endMarker << QPointF(endX - 4.0, plot.bottom() + 1.0)
+                  << QPointF(endX + 4.0, plot.bottom() + 1.0)
+                  << QPointF(endX, plot.bottom() - 5.0);
+        painter.drawPolygon(endMarker);
     }
 
     void mousePressEvent(QMouseEvent* event) override
@@ -449,6 +469,16 @@ protected:
             return;
         }
         dragging = true;
+        const QRectF plot = plotRect();
+        const double startX = plot.left() + plot.width() * startPositionPercent / 100.0;
+        const double endX = plot.left() + plot.width() * endPositionPercent / 100.0;
+        const double startDistance = std::abs(event->position().x() - startX);
+        const double endDistance = std::abs(event->position().x() - endX);
+        const bool nearStart = startDistance <= 12.0;
+        const bool nearEnd = endDistance <= 12.0;
+        draggingStart = nearStart && nearEnd
+            ? event->position().y() < plot.center().y()
+            : nearStart || !nearEnd;
         setCursor(Qt::ClosedHandCursor);
         updateFromPosition(event->position());
         event->accept();
@@ -458,6 +488,15 @@ protected:
     {
         if (!dragging)
         {
+            const QRectF plot = plotRect();
+            const double startX = plot.left() + plot.width() * startPositionPercent / 100.0;
+            const double endX = plot.left() + plot.width() * endPositionPercent / 100.0;
+            if (plot.contains(event->position()) &&
+                std::min(std::abs(event->position().x() - startX),
+                         std::abs(event->position().x() - endX)) <= 12.0)
+                setCursor(Qt::SizeHorCursor);
+            else
+                unsetCursor();
             QWidget::mouseMoveEvent(event);
             return;
         }
@@ -487,18 +526,25 @@ private:
     {
         const QRectF plot = plotRect();
         const double percent = std::clamp((position.x() - plot.left()) / plot.width() * 100.0,
-                                          0.0, 99.0);
-        startPositionPercent = percent;
+                                          0.0, 100.0);
+        if (draggingStart)
+            startPositionPercent = std::clamp(percent, 0.0, std::min(99.0,
+                endPositionPercent - 0.1));
+        else
+            endPositionPercent = std::clamp(percent, startPositionPercent + 0.1, 100.0);
         update();
-        if (startHandler)
-            startHandler(percent);
+        if (positionHandler)
+            positionHandler(draggingStart,
+                draggingStart ? startPositionPercent : endPositionPercent);
     }
 
     QVector<float> peaks;
     QString label;
-    StartHandler startHandler;
+    PositionHandler positionHandler;
     double startPositionPercent = 0.0;
+    double endPositionPercent = 100.0;
     bool dragging = false;
+    bool draggingStart = true;
 };
 
 struct FactorySynthPreset
@@ -1688,6 +1734,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                     const DrumLayerSettings settings = padSample->settingsForVelocity(96);
                     audioEngine.triggerSamplePreview(previewSample, 96, track->pan, track->gain,
                                                      settings.startPositionPercent,
+                                                     settings.endPositionPercent,
                                                      settings.tuningSemitones, settings.loopEnabled,
                                                      settings.attackSeconds, settings.decaySeconds,
                                                      settings.sustainLevel, settings.releaseSeconds);
@@ -1759,6 +1806,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                     const DrumLayerSettings settings = padSample->settingsForVelocity(100);
                     audioEngine.triggerSamplePreview(previewSample, 100, track->pan, track->gain,
                                                      settings.startPositionPercent,
+                                                     settings.endPositionPercent,
                                                      settings.tuningSemitones, settings.loopEnabled,
                                                      settings.attackSeconds, settings.decaySeconds,
                                                      settings.sustainLevel, settings.releaseSeconds);
@@ -3212,11 +3260,18 @@ void MainWindow::createDocks()
                               drumSampleTuneControls[static_cast<size_t>(pad)]);
         drumSampleStartControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
         drumSampleStartControls[static_cast<size_t>(pad)]->setRange(0.0, 99.0);
-        drumSampleStartControls[static_cast<size_t>(pad)]->setDecimals(0);
-        drumSampleStartControls[static_cast<size_t>(pad)]->setSingleStep(1.0);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setDecimals(1);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setSingleStep(0.1);
         drumSampleStartControls[static_cast<size_t>(pad)]->setSuffix(QStringLiteral("%"));
         parameterForm->addRow(tr("%1 sample start").arg(drumPadNames[static_cast<size_t>(pad)]),
                               drumSampleStartControls[static_cast<size_t>(pad)]);
+        drumSampleEndControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
+        drumSampleEndControls[static_cast<size_t>(pad)]->setRange(0.1, 100.0);
+        drumSampleEndControls[static_cast<size_t>(pad)]->setDecimals(1);
+        drumSampleEndControls[static_cast<size_t>(pad)]->setSingleStep(0.1);
+        drumSampleEndControls[static_cast<size_t>(pad)]->setSuffix(QStringLiteral("%"));
+        parameterForm->addRow(tr("%1 sample end").arg(drumPadNames[static_cast<size_t>(pad)]),
+                              drumSampleEndControls[static_cast<size_t>(pad)]);
         drumSampleLoopControls[static_cast<size_t>(pad)] = new QCheckBox(
             tr("%1 loop while note is held").arg(drumPadNames[static_cast<size_t>(pad)]),
             drumSampleControls);
@@ -3307,13 +3362,20 @@ void MainWindow::createDocks()
         connect(drumSampleStartControls[static_cast<size_t>(pad)],
                 qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, pad](double value) { setSelectedDrumSample(pad, 1, value); });
-        sampleWaveform->setStartHandler([this, pad](double percent)
+        connect(drumSampleEndControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, pad](double value) { setSelectedDrumSample(pad, 11, value); });
+        sampleWaveform->setPositionHandler([this, pad](bool editingStart, double percent)
         {
-            drumSampleStartControls[static_cast<size_t>(pad)]->setValue(percent);
+            (editingStart ? drumSampleStartControls[static_cast<size_t>(pad)]
+                          : drumSampleEndControls[static_cast<size_t>(pad)])->setValue(percent);
         });
         connect(drumSampleStartControls[static_cast<size_t>(pad)],
                 qOverload<double>(&QDoubleSpinBox::valueChanged), sampleWaveform,
                 [sampleWaveform](double value) { sampleWaveform->setStartPosition(value); });
+        connect(drumSampleEndControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), sampleWaveform,
+                [sampleWaveform](double value) { sampleWaveform->setEndPosition(value); });
         connect(drumSampleLoopControls[static_cast<size_t>(pad)], &QCheckBox::toggled, this,
                 [this, pad](bool enabled) { setSelectedDrumSample(pad, 2, enabled ? 1.0 : 0.0); });
         connect(drumPadAttackControls[static_cast<size_t>(pad)],
@@ -3845,6 +3907,7 @@ void MainWindow::refreshProjectUi()
             drumRackSelected && sample != nullptr && !sample->veryHighVelocityPath.isEmpty());
         const QSignalBlocker tuneBlocker(drumSampleTuneControls[pad]);
         const QSignalBlocker startBlocker(drumSampleStartControls[pad]);
+        const QSignalBlocker endBlocker(drumSampleEndControls[pad]);
         const QSignalBlocker loopBlocker(drumSampleLoopControls[pad]);
         const QSignalBlocker attackBlocker(drumPadAttackControls[pad]);
         const QSignalBlocker decayBlocker(drumPadDecayControls[pad]);
@@ -3863,8 +3926,15 @@ void MainWindow::refreshProjectUi()
         const DrumLayerSettings displayedSettings = sample == nullptr
             ? DrumLayerSettings{}
             : layerSpecific ? sample->layerSettings(selectedLayer) : sample->sharedLayerSettings();
+        const double startPosition = std::clamp(
+            static_cast<double>(displayedSettings.startPositionPercent), 0.0, 99.0);
+        const double endPosition = std::clamp(
+            static_cast<double>(displayedSettings.endPositionPercent), startPosition + 0.1, 100.0);
         drumSampleTuneControls[pad]->setValue(displayedSettings.tuningSemitones);
-        drumSampleStartControls[pad]->setValue(displayedSettings.startPositionPercent);
+        drumSampleStartControls[pad]->setRange(0.0, std::min(99.0, endPosition - 0.1));
+        drumSampleEndControls[pad]->setRange(startPosition + 0.1, 100.0);
+        drumSampleStartControls[pad]->setValue(startPosition);
+        drumSampleEndControls[pad]->setValue(endPosition);
         drumSampleLoopControls[pad]->setChecked(displayedSettings.loopEnabled);
         drumPadAttackControls[pad]->setValue(displayedSettings.attackSeconds);
         drumPadDecayControls[pad]->setValue(displayedSettings.decaySeconds);
@@ -3929,10 +3999,11 @@ void MainWindow::refreshProjectUi()
             }
         }
         auto* waveform = static_cast<DrumSampleWaveformWidget*>(drumSampleWaveformWidgets[pad]);
-        waveform->setSample(waveformSource, waveformPath, displayedSettings.startPositionPercent);
+        waveform->setSample(waveformSource, waveformPath, startPosition, endPosition);
         waveform->setEnabled(playbackSettingsEnabled && waveformSource != nullptr);
         drumSampleTuneControls[pad]->setEnabled(playbackSettingsEnabled);
         drumSampleStartControls[pad]->setEnabled(playbackSettingsEnabled);
+        drumSampleEndControls[pad]->setEnabled(playbackSettingsEnabled);
         drumSampleLoopControls[pad]->setEnabled(playbackSettingsEnabled);
         const bool envelopeSettingsEnabled = layerSpecific
             ? selectedLayerAssigned : drumRackSelected;
@@ -7531,9 +7602,10 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
         pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
         return;
     DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
-    if (parameter <= 2 && !sample.hasSampleAssignment())
+    if ((parameter <= 2 || parameter == 11) && !sample.hasSampleAssignment())
         return;
-    const bool editsLayerControls = parameter <= 2 || (parameter >= 4 && parameter <= 7);
+    const bool editsLayerControls = parameter <= 2 || (parameter >= 4 && parameter <= 7) ||
+                                    parameter == 11;
     const int selectedLayer = drumLayerSettingsControls[static_cast<size_t>(pad)]
         ->currentData().toInt();
     const bool layerSpecific = selectedLayer >= 0 && selectedLayer < 5;
@@ -7546,12 +7618,16 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
         switch (parameter)
         {
             case 0: settings.tuningSemitones = static_cast<float>(std::clamp(value, -24.0, 24.0)); break;
-            case 1: settings.startPositionPercent = static_cast<float>(std::clamp(value, 0.0, 99.0)); break;
+            case 1: settings.startPositionPercent = static_cast<float>(std::clamp(
+                value, 0.0, std::min(99.0,
+                    static_cast<double>(settings.endPositionPercent) - 0.1))); break;
             case 2: settings.loopEnabled = value >= 0.5; break;
             case 4: settings.attackSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
             case 5: settings.decaySeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
             case 6: settings.sustainLevel = static_cast<float>(std::clamp(value, 0.0, 1.0)); break;
             case 7: settings.releaseSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
+            case 11: settings.endPositionPercent = static_cast<float>(std::clamp(
+                value, static_cast<double>(settings.startPositionPercent) + 0.1, 100.0)); break;
             default: return;
         }
         if (layerSpecific)
@@ -7561,6 +7637,18 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
         }
         else
             sample.setSharedLayerSettings(settings);
+        const QSignalBlocker startBlocker(drumSampleStartControls[static_cast<size_t>(pad)]);
+        const QSignalBlocker endBlocker(drumSampleEndControls[static_cast<size_t>(pad)]);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setRange(
+            0.0, std::min(99.0, static_cast<double>(settings.endPositionPercent) - 0.1));
+        drumSampleEndControls[static_cast<size_t>(pad)]->setRange(
+            settings.startPositionPercent + 0.1, 100.0);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setValue(settings.startPositionPercent);
+        drumSampleEndControls[static_cast<size_t>(pad)]->setValue(settings.endPositionPercent);
+        auto* waveform = static_cast<DrumSampleWaveformWidget*>(
+            drumSampleWaveformWidgets[static_cast<size_t>(pad)]);
+        waveform->setEndPosition(settings.endPositionPercent);
+        waveform->setStartPosition(settings.startPositionPercent);
     }
     else
     {

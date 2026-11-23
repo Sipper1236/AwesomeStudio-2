@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 49;
+constexpr int currentProjectVersion = 50;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -572,6 +572,7 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                      {QStringLiteral("veryHighVelocityThreshold"), sample.veryHighVelocityThreshold},
                      {QStringLiteral("tuningSemitones"), sample.tuningSemitones},
                      {QStringLiteral("startPositionPercent"), sample.startPositionPercent},
+                     {QStringLiteral("endPositionPercent"), sample.endPositionPercent},
                      {QStringLiteral("loopEnabled"), sample.loopEnabled},
                      {QStringLiteral("attackSeconds"), sample.attackSeconds},
                      {QStringLiteral("decaySeconds"), sample.decaySeconds},
@@ -587,6 +588,7 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                                   {QStringLiteral("custom"), sample.velocityLayerSettingsCustom[layer]},
                                   {QStringLiteral("tuningSemitones"), settings.tuningSemitones},
                                   {QStringLiteral("startPositionPercent"), settings.startPositionPercent},
+                                  {QStringLiteral("endPositionPercent"), settings.endPositionPercent},
                                   {QStringLiteral("loopEnabled"), settings.loopEnabled},
                                   {QStringLiteral("attackSeconds"), settings.attackSeconds},
                                   {QStringLiteral("decaySeconds"), settings.decaySeconds},
@@ -915,13 +917,19 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                     std::numeric_limits<double>::quiet_NaN());
                 const double startPositionPercent = sampleObject.value(
                     QStringLiteral("startPositionPercent")).toDouble(std::numeric_limits<double>::quiet_NaN());
-                if (!std::isfinite(tuningSemitones) || !std::isfinite(startPositionPercent))
+                const double endPositionPercent = version >= 50
+                    ? sampleObject.value(QStringLiteral("endPositionPercent")).toDouble(
+                        std::numeric_limits<double>::quiet_NaN())
+                    : 100.0;
+                if (!std::isfinite(tuningSemitones) || !std::isfinite(startPositionPercent) ||
+                    !std::isfinite(endPositionPercent))
                 {
                     setError(error, QStringLiteral("The drum rack contains invalid sample controls."));
                     return false;
                 }
                 sample.tuningSemitones = static_cast<float>(tuningSemitones);
                 sample.startPositionPercent = static_cast<float>(startPositionPercent);
+                sample.endPositionPercent = static_cast<float>(endPositionPercent);
                 if (version >= 27)
                     sample.loopEnabled = sampleObject.value(QStringLiteral("loopEnabled")).toBool(false);
                 if (version >= 30)
@@ -1026,6 +1034,10 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                             .toDouble(std::numeric_limits<double>::quiet_NaN());
                         const double start = layerObject.value(QStringLiteral("startPositionPercent"))
                             .toDouble(std::numeric_limits<double>::quiet_NaN());
+                        const double end = version >= 50
+                            ? layerObject.value(QStringLiteral("endPositionPercent")).toDouble(
+                                std::numeric_limits<double>::quiet_NaN())
+                            : 100.0;
                         const double attack = layerObject.value(QStringLiteral("attackSeconds"))
                             .toDouble(std::numeric_limits<double>::quiet_NaN());
                         const double decay = layerObject.value(QStringLiteral("decaySeconds"))
@@ -1035,7 +1047,7 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                         const double release = layerObject.value(QStringLiteral("releaseSeconds"))
                             .toDouble(std::numeric_limits<double>::quiet_NaN());
                         if (!customValue.isBool() || !loopValue.isBool() ||
-                            !std::isfinite(tuning) || !std::isfinite(start) ||
+                            !std::isfinite(tuning) || !std::isfinite(start) || !std::isfinite(end) ||
                             !std::isfinite(attack) || !std::isfinite(decay) ||
                             !std::isfinite(sustain) || !std::isfinite(release))
                         {
@@ -1046,6 +1058,7 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                             customValue.toBool();
                         settings.tuningSemitones = static_cast<float>(tuning);
                         settings.startPositionPercent = static_cast<float>(start);
+                        settings.endPositionPercent = static_cast<float>(end);
                         settings.loopEnabled = loopValue.toBool();
                         settings.attackSeconds = static_cast<float>(attack);
                         settings.decaySeconds = static_cast<float>(decay);

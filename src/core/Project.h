@@ -106,6 +106,7 @@ struct DrumLayerSettings
 {
     float tuningSemitones = 0.0f;
     float startPositionPercent = 0.0f;
+    float endPositionPercent = 100.0f;
     bool loopEnabled = false;
     float attackSeconds = 0.008f;
     float decaySeconds = 0.0f;
@@ -131,6 +132,7 @@ struct DrumPadSample
     int veryHighVelocityThreshold = 120;
     float tuningSemitones = 0.0f;
     float startPositionPercent = 0.0f;
+    float endPositionPercent = 100.0f;
     bool loopEnabled = false;
     float attackSeconds = 0.008f;
     float decaySeconds = 0.0f;
@@ -174,13 +176,22 @@ struct DrumPadSample
     }
     DrumLayerSettings sharedLayerSettings() const
     {
-        return {tuningSemitones, startPositionPercent, loopEnabled,
-                attackSeconds, decaySeconds, sustainLevel, releaseSeconds};
+        DrumLayerSettings settings;
+        settings.tuningSemitones = tuningSemitones;
+        settings.startPositionPercent = startPositionPercent;
+        settings.endPositionPercent = endPositionPercent;
+        settings.loopEnabled = loopEnabled;
+        settings.attackSeconds = attackSeconds;
+        settings.decaySeconds = decaySeconds;
+        settings.sustainLevel = sustainLevel;
+        settings.releaseSeconds = releaseSeconds;
+        return settings;
     }
     void setSharedLayerSettings(const DrumLayerSettings& settings)
     {
         tuningSemitones = settings.tuningSemitones;
         startPositionPercent = settings.startPositionPercent;
+        endPositionPercent = settings.endPositionPercent;
         loopEnabled = settings.loopEnabled;
         attackSeconds = settings.attackSeconds;
         decaySeconds = settings.decaySeconds;

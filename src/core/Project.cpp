@@ -708,8 +708,12 @@ void ProjectData::normalize()
                 drumSample.tuningSemitones = 0.0f;
             if (!std::isfinite(drumSample.startPositionPercent))
                 drumSample.startPositionPercent = 0.0f;
+            if (!std::isfinite(drumSample.endPositionPercent))
+                drumSample.endPositionPercent = 100.0f;
             drumSample.tuningSemitones = std::clamp(drumSample.tuningSemitones, -24.0f, 24.0f);
             drumSample.startPositionPercent = std::clamp(drumSample.startPositionPercent, 0.0f, 99.0f);
+            drumSample.endPositionPercent = std::clamp(drumSample.endPositionPercent,
+                drumSample.startPositionPercent + 0.1f, 100.0f);
             if (!std::isfinite(drumSample.attackSeconds)) drumSample.attackSeconds = 0.008f;
             if (!std::isfinite(drumSample.decaySeconds)) drumSample.decaySeconds = 0.0f;
             if (!std::isfinite(drumSample.sustainLevel)) drumSample.sustainLevel = 1.0f;
@@ -722,12 +726,15 @@ void ProjectData::normalize()
             {
                 if (!std::isfinite(settings.tuningSemitones)) settings.tuningSemitones = 0.0f;
                 if (!std::isfinite(settings.startPositionPercent)) settings.startPositionPercent = 0.0f;
+                if (!std::isfinite(settings.endPositionPercent)) settings.endPositionPercent = 100.0f;
                 if (!std::isfinite(settings.attackSeconds)) settings.attackSeconds = 0.008f;
                 if (!std::isfinite(settings.decaySeconds)) settings.decaySeconds = 0.0f;
                 if (!std::isfinite(settings.sustainLevel)) settings.sustainLevel = 1.0f;
                 if (!std::isfinite(settings.releaseSeconds)) settings.releaseSeconds = 0.06f;
                 settings.tuningSemitones = std::clamp(settings.tuningSemitones, -24.0f, 24.0f);
                 settings.startPositionPercent = std::clamp(settings.startPositionPercent, 0.0f, 99.0f);
+                settings.endPositionPercent = std::clamp(settings.endPositionPercent,
+                    settings.startPositionPercent + 0.1f, 100.0f);
                 settings.attackSeconds = std::clamp(settings.attackSeconds, 0.0f, 5.0f);
                 settings.decaySeconds = std::clamp(settings.decaySeconds, 0.0f, 5.0f);
                 settings.sustainLevel = std::clamp(settings.sustainLevel, 0.0f, 1.0f);
