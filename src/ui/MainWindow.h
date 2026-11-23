@@ -175,6 +175,7 @@ private:
     void finishAudioRecording(bool keepTake = true);
     void refreshPunchRangeUi();
     void refreshAudioInputs();
+    void refreshAudioInputCompensation();
     void startMidiRecording();
     bool startPendingMidiRecording(double playheadBeat);
     void finishMidiRecording(bool keepTake = true);
@@ -327,6 +328,7 @@ private:
     QTimer* automationWriteIdleTimer = nullptr;
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;
+    QDoubleSpinBox* audioInputCompensationControl = nullptr;
     QAction* recordAction = nullptr;
     QAction* punchRecordAction = nullptr;
     QAction* audioMonitorAction = nullptr;
@@ -356,6 +358,7 @@ private:
     QByteArray pendingRecordingDeviceId;
     QString pendingRecordingDeviceName;
     double recordingStartBeat = 0.0;
+    double recordingInputCompensationMs = 0.0;
     double recordingPunchInBeat = 0.0;
     double recordingPunchOutBeat = 16.0;
     quint64 recordingDecodedByteLimit = 0;

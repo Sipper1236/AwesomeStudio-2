@@ -2440,6 +2440,30 @@ void MainWindow::createToolBars()
     audioInputControl->setMinimumWidth(190);
     audioInputControl->setToolTip(tr("Audio device used for new recordings"));
     recordingBar->addWidget(audioInputControl);
+    recordingBar->addWidget(new QLabel(tr("COMP"), recordingBar));
+    audioInputCompensationControl = new QDoubleSpinBox(recordingBar);
+    audioInputCompensationControl->setRange(-500.0, 500.0);
+    audioInputCompensationControl->setDecimals(1);
+    audioInputCompensationControl->setSingleStep(1.0);
+    audioInputCompensationControl->setSuffix(tr(" ms"));
+    audioInputCompensationControl->setToolTip(
+        tr("Per-input recording compensation. Positive values move recorded audio earlier; negative values move it later."));
+    recordingBar->addWidget(audioInputCompensationControl);
+    connect(audioInputControl, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int) { refreshAudioInputCompensation(); });
+    connect(audioInputCompensationControl, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this, [this](double value)
+    {
+        if (audioInputControl == nullptr)
+            return;
+        const QByteArray deviceId = audioInputControl->currentData().toByteArray();
+        if (deviceId.isEmpty())
+            return;
+        QSettings settings;
+        const QString key = QStringLiteral("recording/inputCompensationMs/%1")
+                                .arg(QString::fromLatin1(deviceId.toHex()));
+        settings.setValue(key, value);
+    });
     recordingBar->addSeparator();
     punchRecordAction = new QAction(tr("Punch"), this);
     punchRecordAction->setCheckable(true);
@@ -7769,11 +7793,34 @@ void MainWindow::refreshAudioInputs()
     }
     audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !audioMonitor && !recordingPending &&
                                   !midiRecordingActive && !midiRecordingPending);
+    refreshAudioInputCompensation();
     audioMonitorAction->setEnabled(audioEngine.isAudioAvailable() && !recordingPending &&
                                    (audioRecorder != nullptr || audioMonitor != nullptr || !devices.isEmpty()));
     recordAction->setEnabled(!midiRecordingActive && !midiRecordingPending &&
                              (audioRecorder || recordingPending || !devices.isEmpty()));
     refreshPunchRangeUi();
+}
+
+void MainWindow::refreshAudioInputCompensation()
+{
+    if (audioInputControl == nullptr || audioInputCompensationControl == nullptr)
+        return;
+
+    const QByteArray deviceId = audioInputControl->currentData().toByteArray();
+    double compensationMs = 0.0;
+    if (!deviceId.isEmpty())
+    {
+        QSettings settings;
+        const QString key = QStringLiteral("recording/inputCompensationMs/%1")
+                                .arg(QString::fromLatin1(deviceId.toHex()));
+        compensationMs = settings.value(key, 0.0).toDouble();
+        if (!std::isfinite(compensationMs))
+            compensationMs = 0.0;
+    }
+
+    const QSignalBlocker blocker(audioInputCompensationControl);
+    audioInputCompensationControl->setValue(std::clamp(compensationMs, -500.0, 500.0));
+    audioInputCompensationControl->setEnabled(!deviceId.isEmpty() && !audioRecorder && !recordingPending);
 }
 
 void MainWindow::refreshPunchRangeUi()
@@ -8261,6 +8308,8 @@ void MainWindow::startAudioRecording()
     pendingRecordingPath = path;
     pendingRecordingDeviceId = selectedDevice.id();
     pendingRecordingDeviceName = selectedDevice.description();
+    recordingInputCompensationMs = audioInputCompensationControl == nullptr
+        ? 0.0 : audioInputCompensationControl->value();
     recordingPunchEnabled = punchEnabled;
     recordingPunchInBeat = punchInBeat;
     recordingPunchOutBeat = punchOutBeat;
@@ -8275,6 +8324,7 @@ void MainWindow::startAudioRecording()
     recordingTransportActive = playbackAvailable;
     refreshPunchRangeUi();
     audioInputControl->setEnabled(false);
+    audioInputCompensationControl->setEnabled(false);
     tempoControl->setEnabled(false);
     timeSignatureControl->setEnabled(false);
     countInControl->setEnabled(false);
@@ -8430,13 +8480,14 @@ void MainWindow::finishAudioRecording(bool keepTake)
     clip.id = project.nextClipId();
     clip.name = takeName;
     const double durationSeconds = static_cast<double>(asset->frameCount()) / asset->sampleRate;
+    const double compensationSeconds = recordingInputCompensationMs / 1000.0;
     if (wasPunchRecording)
     {
-        const double captureStartSeconds = project.secondsAtBeat(recordingStartBeat);
+        const double captureStartSeconds = project.secondsAtBeat(recordingStartBeat) - compensationSeconds;
         const double punchStartSeconds = project.secondsAtBeat(punchInBeat);
         const double punchEndSeconds = project.secondsAtBeat(punchOutBeat);
         const double captureEndSeconds = captureStartSeconds + durationSeconds;
-        const double regionStartSeconds = std::max(captureStartSeconds, punchStartSeconds);
+        const double regionStartSeconds = std::max({0.0, captureStartSeconds, punchStartSeconds});
         const double regionEndSeconds = std::min(captureEndSeconds, punchEndSeconds);
         if (regionEndSeconds <= regionStartSeconds || asset->frameCount() <= 0)
         {
@@ -8453,10 +8504,20 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
     else
     {
-        clip.startBeat = recordingStartBeat;
-        const double endBeat = project.beatAtSeconds(project.secondsAtBeat(recordingStartBeat) +
-                                                      durationSeconds);
-        clip.lengthBeats = std::max(0.25, endBeat - recordingStartBeat);
+        const double compensatedStartSeconds = project.secondsAtBeat(recordingStartBeat) - compensationSeconds;
+        const double captureEndSeconds = compensatedStartSeconds + durationSeconds;
+        if (captureEndSeconds <= 0.0 || asset->frameCount() <= 0)
+        {
+            statusBar()->showMessage(tr("The compensated take falls before the start of the arrangement."), 5000);
+            return;
+        }
+        const double visibleStartSeconds = std::max(0.0, compensatedStartSeconds);
+        clip.startBeat = project.beatAtSeconds(visibleStartSeconds);
+        clip.audioStartFrame = std::clamp<qint64>(
+            static_cast<qint64>(std::llround((visibleStartSeconds - compensatedStartSeconds) * asset->sampleRate)),
+            0, asset->frameCount() - 1);
+        const double endBeat = project.beatAtSeconds(captureEndSeconds);
+        clip.lengthBeats = std::max(0.25, endBeat - clip.startBeat);
     }
     clip.audioSourcePath = asset->path;
     clip.audioSource = asset;
