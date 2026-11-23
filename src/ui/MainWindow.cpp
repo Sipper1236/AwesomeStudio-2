@@ -3498,12 +3498,13 @@ void MainWindow::createMenus()
     connect(midiControllerListenAction, &QAction::toggled,
             this, &MainWindow::setMidiControllerListening);
 
-    const std::array<QString, 4> controllerTargets = {
-        tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo")
+    const std::array<QString, 6> controllerTargets = {
+        tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo"),
+        tr("Selected track mute"), tr("Selected track solo")
     };
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
-    for (int target = 0; target < static_cast<int>(MidiControllerTarget::Tempo) + 1; ++target)
+    for (int target = 0; target <= static_cast<int>(MidiControllerTarget::SelectedTrackSolo); ++target)
     {
         QAction* learnAction = learnControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
         connect(learnAction, &QAction::triggered, this,
@@ -4430,6 +4431,8 @@ void MainWindow::refreshMixer()
         stateLayout->setContentsMargins(0, 0, 0, 0);
         auto* mute = new QCheckBox(tr("Mute"), stateRow);
         auto* solo = new QCheckBox(tr("Solo"), stateRow);
+        mute->setObjectName(QStringLiteral("mixerTrackMute_%1").arg(item.id));
+        solo->setObjectName(QStringLiteral("mixerTrackSolo_%1").arg(item.id));
         mute->setChecked(item.muted);
         solo->setChecked(item.solo);
         stateLayout->addWidget(mute);
@@ -7902,11 +7905,13 @@ void MainWindow::setMidiControllerListening(bool enabled)
 
 void MainWindow::beginMidiControllerLearn(int target)
 {
-    const int targetCount = static_cast<int>(MidiControllerTarget::Tempo) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackSolo) + 1;
     if (target < 0 || target >= targetCount)
         return;
     if ((target == static_cast<int>(MidiControllerTarget::SelectedTrackLevel) ||
-         target == static_cast<int>(MidiControllerTarget::SelectedTrackPan)) && selectedTrack() == nullptr)
+         target == static_cast<int>(MidiControllerTarget::SelectedTrackPan) ||
+         target == static_cast<int>(MidiControllerTarget::SelectedTrackMute) ||
+         target == static_cast<int>(MidiControllerTarget::SelectedTrackSolo)) && selectedTrack() == nullptr)
     {
         statusBar()->showMessage(tr("Select a track before learning its MIDI control"), 3000);
         return;
@@ -7944,7 +7949,7 @@ void MainWindow::loadMidiControllerMappings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::Tempo) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackSolo) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const QString prefix = QString::number(target);
@@ -7960,7 +7965,7 @@ void MainWindow::saveMidiControllerMappings() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::Tempo) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackSolo) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const MidiControllerMapping mapping = midiControllerMappings.value(target);
@@ -8008,6 +8013,16 @@ void MainWindow::applyMidiControllerTarget(int target, int value)
     const InstrumentTrack* track = selectedTrack();
     if (track == nullptr)
         return;
+    if (target == static_cast<int>(MidiControllerTarget::SelectedTrackMute) ||
+        target == static_cast<int>(MidiControllerTarget::SelectedTrackSolo))
+    {
+        const QString controlName = target == static_cast<int>(MidiControllerTarget::SelectedTrackMute)
+            ? QStringLiteral("mixerTrackMute_%1").arg(track->id)
+            : QStringLiteral("mixerTrackSolo_%1").arg(track->id);
+        if (QCheckBox* control = mixerDock->findChild<QCheckBox*>(controlName))
+            control->setChecked(value >= 64);
+        return;
+    }
     const bool levelTarget = target == static_cast<int>(MidiControllerTarget::SelectedTrackLevel);
     QSlider* control = mixerDock->findChild<QSlider*>(
         QStringLiteral("mixerTrack%1_%2").arg(levelTarget ? QStringLiteral("Volume") : QStringLiteral("Pan"))

@@ -195,7 +195,9 @@ private:
         MasterLevel = 0,
         SelectedTrackLevel = 1,
         SelectedTrackPan = 2,
-        Tempo = 3
+        Tempo = 3,
+        SelectedTrackMute = 4,
+        SelectedTrackSolo = 5
     };
     struct MidiControllerMapping
     {
