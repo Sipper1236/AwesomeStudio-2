@@ -11,6 +11,37 @@ namespace
 {
 constexpr std::array<int, 7> supportedStepCounts = {8, 12, 16, 24, 32, 48, 64};
 
+double tempoRampValue(double startBpm, double endBpm, double progress)
+{
+    return startBpm + (endBpm - startBpm) * std::clamp(progress, 0.0, 1.0);
+}
+
+double tempoRampSeconds(double beats, double startBpm, double endBpm, double rampBeats)
+{
+    if (beats <= 0.0)
+        return 0.0;
+    if (rampBeats <= 0.0)
+        return beats * 60.0 / startBpm;
+    const double slope = (endBpm - startBpm) / rampBeats;
+    if (std::abs(slope) < 1.0e-12)
+        return beats * 60.0 / startBpm;
+    const double endTempo = tempoRampValue(startBpm, endBpm, beats / rampBeats);
+    return 60.0 / slope * std::log(endTempo / startBpm);
+}
+
+double tempoRampBeats(double seconds, double startBpm, double endBpm, double rampBeats)
+{
+    if (seconds <= 0.0)
+        return 0.0;
+    if (rampBeats <= 0.0)
+        return seconds * startBpm / 60.0;
+    const double slope = (endBpm - startBpm) / rampBeats;
+    if (std::abs(slope) < 1.0e-12)
+        return seconds * startBpm / 60.0;
+    const double tempo = startBpm * std::exp(slope * seconds / 60.0);
+    return std::clamp((tempo - startBpm) / slope, 0.0, rampBeats);
+}
+
 int normalizedStepsPerBar(int requested)
 {
     return *std::min_element(supportedStepCounts.cbegin(), supportedStepCounts.cend(),
@@ -157,7 +188,8 @@ bool TimelineMarker::operator==(const TimelineMarker& other) const
 
 bool TempoChange::operator==(const TempoChange& other) const
 {
-    return std::abs(beat - other.beat) < 1.0e-9 && std::abs(bpm - other.bpm) < 1.0e-9;
+    return std::abs(beat - other.beat) < 1.0e-9 && std::abs(bpm - other.bpm) < 1.0e-9 &&
+           rampFromPrevious == other.rampFromPrevious;
 }
 
 double ProjectData::patternLengthBeats() const
@@ -196,9 +228,15 @@ double ProjectData::songLengthBeats() const
 
 double ProjectData::tempoAtBeat(double beat) const
 {
+    if (beat <= 0.0)
+        return tempoBpm;
     const auto next = std::upper_bound(tempoChanges.cbegin(), tempoChanges.cend(), beat,
         [](double value, const TempoChange& change) { return value < change.beat; });
-    return next == tempoChanges.cbegin() ? tempoBpm : (next - 1)->bpm;
+    const double startBeat = next == tempoChanges.cbegin() ? 0.0 : (next - 1)->beat;
+    const double startBpm = next == tempoChanges.cbegin() ? tempoBpm : (next - 1)->bpm;
+    if (next != tempoChanges.cend() && next->rampFromPrevious && next->beat > startBeat)
+        return tempoRampValue(startBpm, next->bpm, (beat - startBeat) / (next->beat - startBeat));
+    return startBpm;
 }
 
 double ProjectData::secondsAtBeat(double beat) const
@@ -210,11 +248,22 @@ double ProjectData::secondsAtBeat(double beat) const
 
     const auto next = std::lower_bound(tempoChanges.cbegin(), tempoChanges.cend(), beat,
         [](const TempoChange& change, double value) { return change.beat < value; });
-    if (next == tempoChanges.cbegin())
-        return beat * 60.0 / tempoBpm;
-    const qsizetype index = next - tempoChanges.cbegin() - 1;
-    return tempoChangeElapsedSeconds[index] + (beat - tempoChanges[index].beat) *
-           60.0 / tempoChanges[index].bpm;
+    if (next == tempoChanges.cend())
+    {
+        if (tempoChanges.isEmpty())
+            return beat * 60.0 / tempoBpm;
+        const qsizetype last = tempoChanges.size() - 1;
+        return tempoChangeElapsedSeconds[last] +
+               (beat - tempoChanges[last].beat) * 60.0 / tempoChanges[last].bpm;
+    }
+    const qsizetype index = next - tempoChanges.cbegin();
+    const double startBeat = index == 0 ? 0.0 : tempoChanges[index - 1].beat;
+    const double startBpm = index == 0 ? tempoBpm : tempoChanges[index - 1].bpm;
+    const double startSeconds = index == 0 ? 0.0 : tempoChangeElapsedSeconds[index - 1];
+    if (next->rampFromPrevious)
+        return startSeconds + tempoRampSeconds(beat - startBeat, startBpm, next->bpm,
+                                               next->beat - startBeat);
+    return startSeconds + (beat - startBeat) * 60.0 / startBpm;
 }
 
 double ProjectData::beatAtSeconds(double seconds) const
@@ -226,11 +275,23 @@ double ProjectData::beatAtSeconds(double seconds) const
 
     const auto next = std::upper_bound(tempoChangeElapsedSeconds.cbegin(),
                                        tempoChangeElapsedSeconds.cend(), seconds);
-    if (next == tempoChangeElapsedSeconds.cbegin())
-        return seconds * tempoBpm / 60.0;
-    const qsizetype index = next - tempoChangeElapsedSeconds.cbegin() - 1;
-    return tempoChanges[index].beat + (seconds - tempoChangeElapsedSeconds[index]) *
-           tempoChanges[index].bpm / 60.0;
+    if (next == tempoChangeElapsedSeconds.cend())
+    {
+        if (tempoChanges.isEmpty())
+            return seconds * tempoBpm / 60.0;
+        const qsizetype last = tempoChanges.size() - 1;
+        return tempoChanges[last].beat + (seconds - tempoChangeElapsedSeconds[last]) *
+               tempoChanges[last].bpm / 60.0;
+    }
+    const qsizetype index = next - tempoChangeElapsedSeconds.cbegin();
+    const double startBeat = index == 0 ? 0.0 : tempoChanges[index - 1].beat;
+    const double startBpm = index == 0 ? tempoBpm : tempoChanges[index - 1].bpm;
+    const double startSeconds = index == 0 ? 0.0 : tempoChangeElapsedSeconds[index - 1];
+    if (tempoChanges[index].rampFromPrevious)
+        return startBeat + tempoRampBeats(seconds - startSeconds, startBpm,
+                                          tempoChanges[index].bpm,
+                                          tempoChanges[index].beat - startBeat);
+    return startBeat + (seconds - startSeconds) * startBpm / 60.0;
 }
 
 qint64 ProjectData::frameAtBeat(double beat, int sampleRate) const
@@ -264,7 +325,10 @@ void ProjectData::rebuildTempoCache()
     for (qsizetype index = 0; index < tempoChanges.size(); ++index)
     {
         const TempoChange& change = tempoChanges[index];
-        elapsedSeconds += (change.beat - cursorBeat) * 60.0 / activeTempo;
+        const double segmentBeats = change.beat - cursorBeat;
+        elapsedSeconds += change.rampFromPrevious
+            ? tempoRampSeconds(segmentBeats, activeTempo, change.bpm, segmentBeats)
+            : segmentBeats * 60.0 / activeTempo;
         tempoChangeElapsedSeconds[index] = elapsedSeconds;
         cursorBeat = change.beat;
         activeTempo = change.bpm;

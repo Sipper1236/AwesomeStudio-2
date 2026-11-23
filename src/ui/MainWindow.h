@@ -126,6 +126,7 @@ private:
     void applyMarkerHistory(const QVector<TimelineMarker>& markers);
     void setTimelineTempo(double beat);
     void removeTimelineTempo(double beat);
+    void toggleTimelineTempoRamp(double beat);
     void applyTempoHistory(double baseTempo, const QVector<TempoChange>& changes);
     void beginAutomationWrite(quint64 trackId, int parameter, float value,
                               const QString& pluginUri = QString(),

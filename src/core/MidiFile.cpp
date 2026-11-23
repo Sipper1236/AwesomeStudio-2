@@ -231,17 +231,22 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                 {
                     const double bpm = 60000000.0 / microseconds;
                     const double beat = static_cast<double>(absoluteTick) / ppqn;
-                    if (beat > maximumSongBeats || tempoChanges.size() >= 1000)
+                    if (beat > maximumSongBeats ||
+                        (absoluteTick > 0 && tempoChanges.size() >= 1000))
                     {
                         setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
                         return false;
                     }
-                    tempoChanges.push_back({beat, bpm});
-                    if (absoluteTick == 0 && !foundTempo)
+                    if (absoluteTick == 0)
                     {
-                        tempo = bpm;
-                        foundTempo = true;
+                        if (!foundTempo)
+                        {
+                            tempo = bpm;
+                            foundTempo = true;
+                        }
                     }
+                    else
+                        tempoChanges.push_back({beat, bpm});
                 }
             }
             else if (type == 0x58 && payload.size() >= 2 && !foundTimeSignature)
@@ -415,20 +420,44 @@ QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
     appendByte(track, 8);
 
     qint64 previousTempoTick = 0;
+    int rampCountRemaining = static_cast<int>(std::count_if(
+        project.tempoChanges.cbegin(), project.tempoChanges.cend(),
+        [](const TempoChange& change) { return change.rampFromPrevious; }));
+    int additionalTempoEventBudget = std::max(
+        0, 999 - static_cast<int>(project.tempoChanges.size()));
+    double previousTempoBeat = 0.0;
     for (const TempoChange& change : project.tempoChanges)
     {
-        const qint64 tempoTick = std::max<qint64>(previousTempoTick,
-            std::llround(change.beat * exportPpqn));
-        const quint32 tempoMicroseconds = static_cast<quint32>(std::clamp(
-            std::llround(60000000.0 / change.bpm), 1LL, 0xffffffLL));
-        appendVariableLength(track, static_cast<quint32>(tempoTick - previousTempoTick));
-        appendByte(track, 0xff);
-        appendByte(track, 0x51);
-        appendByte(track, 3);
-        appendByte(track, static_cast<quint8>((tempoMicroseconds >> 16) & 0xff));
-        appendByte(track, static_cast<quint8>((tempoMicroseconds >> 8) & 0xff));
-        appendByte(track, static_cast<quint8>(tempoMicroseconds & 0xff));
-        previousTempoTick = tempoTick;
+        int subdivisions = 1;
+        if (change.rampFromPrevious)
+        {
+            const int desiredSubdivisions = std::max(1, static_cast<int>(std::ceil(
+                (change.beat - previousTempoBeat) * 4.0)));
+            const int share = rampCountRemaining > 0
+                ? additionalTempoEventBudget / rampCountRemaining : 0;
+            subdivisions = std::min(desiredSubdivisions, 1 + share);
+            additionalTempoEventBudget -= subdivisions - 1;
+            --rampCountRemaining;
+        }
+        for (int subdivision = 1; subdivision <= subdivisions; ++subdivision)
+        {
+            const double beat = previousTempoBeat + (change.beat - previousTempoBeat) *
+                                static_cast<double>(subdivision) / subdivisions;
+            const double bpm = subdivision == subdivisions ? change.bpm : project.tempoAtBeat(beat);
+            const qint64 tempoTick = std::max<qint64>(previousTempoTick,
+                std::llround(beat * exportPpqn));
+            const quint32 tempoMicroseconds = static_cast<quint32>(std::clamp(
+                std::llround(60000000.0 / bpm), 1LL, 0xffffffLL));
+            appendVariableLength(track, static_cast<quint32>(tempoTick - previousTempoTick));
+            appendByte(track, 0xff);
+            appendByte(track, 0x51);
+            appendByte(track, 3);
+            appendByte(track, static_cast<quint8>((tempoMicroseconds >> 16) & 0xff));
+            appendByte(track, static_cast<quint8>((tempoMicroseconds >> 8) & 0xff));
+            appendByte(track, static_cast<quint8>(tempoMicroseconds & 0xff));
+            previousTempoTick = tempoTick;
+        }
+        previousTempoBeat = change.beat;
     }
 
     appendVariableLength(track, static_cast<quint32>(std::max<qint64>(0, songEndTick - previousTempoTick)));

@@ -23,7 +23,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Exact single-note pitch, start, duration, velocity, and channel properties
 - [x] Upward strumming for selected chord notes
 - [x] Arpeggiator direction, octave-range, and gate controls
-- [ ] Arpeggiator velocity patterns
+- [x] Arpeggiator velocity patterns
 - [x] Built-in synth preview and arrangement playback
 - [x] Project save/open and stereo WAV export
 - [x] Playlist with multi-track MIDI clips and basic mixer controls
@@ -31,6 +31,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Editable clip length and common time signatures
 - [x] Standard MIDI File import/export (formats 0/1, PPQN)
 - [x] Count-in and metronome
+- [x] Linear tempo ramps between Playlist tempo markers with exact beat/time conversion and WAV rendering
 - [x] WAV audio import, Playlist playback, waveform display, and WAV render integration
 - [x] Basic audio region edge trimming and selectable linear, smooth, and equal-power fades
 - [x] One WAV sample assignment per drum rack pad with synthesized fallback
@@ -60,7 +61,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Realtime per-track, bus, and master peak meters in the Mixer
 - [x] Persistent per-track three-band EQ in realtime playback and WAV/stem rendering
 - [x] Export each arrangement track as an isolated WAV stem
-- [ ] Automation trim mode and plugin parameter automation
+- [x] Automation trim mode and LV2/CLAP parameter automation for playback and render
 
 ### 3. Plugin and production workflow
 

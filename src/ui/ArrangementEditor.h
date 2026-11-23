@@ -41,6 +41,7 @@ signals:
     void markerSeekRequested(double beat);
     void tempoChangeRequested(double beat);
     void tempoRemoveRequested(double beat);
+    void tempoRampToggleRequested(double beat);
 
 private:
     class Canvas;

@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 47;
+constexpr int currentProjectVersion = 48;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -130,7 +130,8 @@ QJsonArray saveTempoChanges(const QVector<TempoChange>& changes)
     {
         result.push_back(QJsonObject{
             {QStringLiteral("beat"), change.beat},
-            {QStringLiteral("bpm"), change.bpm}
+            {QStringLiteral("bpm"), change.bpm},
+            {QStringLiteral("rampFromPrevious"), change.rampFromPrevious}
         });
     }
     return result;
@@ -1260,7 +1261,8 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
                 setError(error, QStringLiteral("The project contains an invalid tempo change."));
                 return false;
             }
-            loaded.tempoChanges.push_back({beat, bpm});
+            loaded.tempoChanges.push_back({beat, bpm,
+                version >= 48 && object.value(QStringLiteral("rampFromPrevious")).toBool(false)});
         }
     }
     if (version >= 22)

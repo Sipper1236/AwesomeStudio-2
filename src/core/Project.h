@@ -267,6 +267,7 @@ struct TempoChange
 {
     double beat = 0.0;
     double bpm = 120.0;
+    bool rampFromPrevious = false;
 
     bool operator==(const TempoChange& other) const;
 };

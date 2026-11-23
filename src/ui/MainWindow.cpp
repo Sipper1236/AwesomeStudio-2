@@ -1687,6 +1687,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             this, &MainWindow::setTimelineTempo);
     connect(arrangementEditor, &ArrangementEditor::tempoRemoveRequested,
             this, &MainWindow::removeTimelineTempo);
+    connect(arrangementEditor, &ArrangementEditor::tempoRampToggleRequested,
+            this, &MainWindow::toggleTimelineTempoRamp);
     connect(arrangementEditor, &ArrangementEditor::trackSelected, this,
             [this](quint64 trackId) { selectTrack(trackId); });
     connect(&undoStack, &QUndoStack::cleanChanged, this, [this] { refreshDirtyState(); });
@@ -6384,6 +6386,30 @@ void MainWindow::removeTimelineTempo(double beat)
                                                beforeBaseTempo, after));
         statusBar()->showMessage(tr("Removed tempo change; tempo returns to %1 BPM")
                                      .arg(project.tempoAtBeat(beat), 0, 'f', 1), 2500);
+        return;
+    }
+}
+
+void MainWindow::toggleTimelineTempoRamp(double beat)
+{
+    if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
+    {
+        statusBar()->showMessage(tr("Stop recording before editing the tempo map"), 3000);
+        return;
+    }
+    for (qsizetype index = 0; index < project.tempoChanges.size(); ++index)
+    {
+        if (std::abs(project.tempoChanges[index].beat - beat) >= 1.0e-6)
+            continue;
+        const double beforeBaseTempo = project.tempoBpm;
+        const QVector<TempoChange> before = project.tempoChanges;
+        QVector<TempoChange> after = before;
+        after[index].rampFromPrevious = !after[index].rampFromPrevious;
+        undoStack.push(new TempoMapEditCommand(this, beforeBaseTempo, before,
+                                               beforeBaseTempo, after));
+        statusBar()->showMessage(after[index].rampFromPrevious
+            ? tr("Linear tempo ramp enabled from the previous tempo")
+            : tr("Tempo change is now a step"), 3000);
         return;
     }
 }

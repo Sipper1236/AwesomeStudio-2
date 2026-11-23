@@ -381,7 +381,9 @@ protected:
         for (const TempoChange& change : project.tempoChanges)
         {
             const int x = trackHeaderWidth + static_cast<int>(std::round(change.beat * pixelsPerBeat));
-            const QString label = tr("%1 BPM").arg(change.bpm, 0, 'f', 1);
+            const QString label = change.rampFromPrevious
+                ? tr("Ramp to %1 BPM").arg(change.bpm, 0, 'f', 1)
+                : tr("%1 BPM").arg(change.bpm, 0, 'f', 1);
             const int labelWidth = tempoMetrics.horizontalAdvance(label) + 10;
             const QRect labelRect(x + 5, 5, labelWidth, rulerHeight - 10);
             painter.setPen(QPen(QColor(QStringLiteral("#e4b966")), 1));
@@ -437,9 +439,14 @@ protected:
                 const double tempoBeat = tempoIndex >= 0 ? project.tempoChanges[tempoIndex].beat : beat;
                 QAction* tempoAction = menu.addAction(tempoIndex >= 0
                     ? tr("Change tempo here…") : tr("Add tempo change here…"));
+                QAction* rampAction = tempoIndex >= 0
+                    ? menu.addAction(project.tempoChanges[tempoIndex].rampFromPrevious
+                        ? tr("Use a step change") : tr("Ramp from previous tempo")) : nullptr;
                 QAction* removeTempoAction = tempoIndex >= 0
                     ? menu.addAction(tr("Remove tempo change")) : nullptr;
                 QAction* chosen = menu.exec(event->globalPosition().toPoint());
+                if (chosen == nullptr)
+                    return;
                 if (chosen == addAction)
                     emit owner->markerAddRequested(beat);
                 else if (chosen == renameAction)
@@ -448,6 +455,8 @@ protected:
                     emit owner->markerRemoveRequested(markerBeat);
                 else if (chosen == tempoAction)
                     emit owner->tempoChangeRequested(tempoBeat);
+                else if (chosen == rampAction)
+                    emit owner->tempoRampToggleRequested(tempoBeat);
                 else if (chosen == removeTempoAction)
                     emit owner->tempoRemoveRequested(tempoBeat);
                 return;
