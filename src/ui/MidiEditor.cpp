@@ -203,6 +203,76 @@ public:
         return true;
     }
 
+    bool arpeggiateSelectedChord()
+    {
+        QVector<MidiNote> chord;
+        for (const MidiNote& note : notes)
+        {
+            if (selected.contains(note.id))
+                chord.push_back(note);
+        }
+        if (chord.size() < 2)
+            return false;
+
+        const double startBeat = chord.first().startBeat;
+        const double noteLength = chord.first().lengthBeats;
+        for (const MidiNote& note : chord)
+        {
+            if (std::abs(note.startBeat - startBeat) > 1e-6 ||
+                std::abs(note.lengthBeats - noteLength) > 1e-6)
+                return false;
+        }
+
+        const double endBeat = std::min(patternLength, startBeat + noteLength);
+        const double arpLength = endBeat - startBeat;
+        if (arpLength <= 0.0)
+            return false;
+        const int stepCount = static_cast<int>(std::ceil(arpLength / snap - 1e-9));
+        if (stepCount < 1 || stepCount > 4096)
+            return false;
+
+        std::sort(chord.begin(), chord.end(), [](const MidiNote& left, const MidiNote& right)
+        {
+            if (left.pitch != right.pitch) return left.pitch < right.pitch;
+            return left.channel < right.channel;
+        });
+        chord.erase(std::unique(chord.begin(), chord.end(), [](const MidiNote& left, const MidiNote& right)
+        {
+            return left.pitch == right.pitch;
+        }), chord.end());
+        if (chord.size() < 2)
+            return false;
+
+        const QVector<MidiNote> before = notes;
+        quint64 id = nextId();
+        notes.erase(std::remove_if(notes.begin(), notes.end(), [this](const MidiNote& note)
+        {
+            return selected.contains(note.id);
+        }), notes.end());
+        selected.clear();
+        for (int step = 0; step < stepCount; ++step)
+        {
+            const double noteStart = startBeat + step * snap;
+            if (noteStart >= endBeat)
+                break;
+            MidiNote arpNote = chord[step % chord.size()];
+            arpNote.id = id++;
+            arpNote.startBeat = noteStart;
+            arpNote.lengthBeats = std::min(snap, endBeat - noteStart);
+            notes.push_back(arpNote);
+            selected.insert(arpNote.id);
+        }
+
+        std::sort(notes.begin(), notes.end(), [](const MidiNote& left, const MidiNote& right)
+        {
+            if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
+            return left.pitch < right.pitch;
+        });
+        commitIfChanged(before);
+        update();
+        return notes != before;
+    }
+
     void setPixelsPerBeat(int pixels)
     {
         pixelsPerBeat = std::clamp(pixels, 36, 180);
@@ -710,6 +780,11 @@ void MidiEditor::quantizeNotesToGrid()
 bool MidiEditor::addChordToSelection(const QVector<int>& semitoneIntervals)
 {
     return canvas->addChordToSelection(semitoneIntervals);
+}
+
+bool MidiEditor::arpeggiateSelectedChord()
+{
+    return canvas->arpeggiateSelectedChord();
 }
 
 void MidiEditor::setPixelsPerBeat(int pixels)

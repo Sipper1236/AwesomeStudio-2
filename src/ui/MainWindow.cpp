@@ -1134,6 +1134,14 @@ void MainWindow::createMenus()
     addChordAction(tr("Dominant 7th"), {0, 4, 7, 10});
     addChordAction(tr("Major 7th"), {0, 4, 7, 11});
     addChordAction(tr("Minor 7th"), {0, 3, 7, 10});
+    QAction* arpeggiateAction = editMenu->addAction(tr("Arpeggiate selected chord upward"));
+    connect(arpeggiateAction, &QAction::triggered, this, [this]
+    {
+        if (midiEditor->arpeggiateSelectedChord())
+            statusBar()->showMessage(tr("Arpeggiated the selected chord on the current grid"), 2000);
+        else
+            statusBar()->showMessage(tr("Select chord notes with the same start and length"), 2400);
+    });
 
     QMenu* patternMenu = menuBar()->addMenu(tr("&Track"));
     patternMenu->addAction(addTrackAction);
