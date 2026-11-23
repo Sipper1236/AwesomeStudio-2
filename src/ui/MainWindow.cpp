@@ -1781,6 +1781,53 @@ QVector<const MidiClip*> overlappingAudioRegions(const ProjectData& project,
 }
 }
 
+class ClipDuplicateCommand final : public QUndoCommand
+{
+public:
+    ClipDuplicateCommand(MainWindow* window, quint64 trackId, MidiClip clip, qsizetype insertIndex,
+                         quint64 previousTrackId, quint64 previousClipId)
+        : window(window), trackId(trackId), clip(std::move(clip)), insertIndex(insertIndex),
+          previousTrackId(previousTrackId), previousClipId(previousClipId)
+    {
+        setText(QObject::tr("Duplicate Playlist clip"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr && applied)
+        {
+            window->applyClipDuplicateHistory(trackId, clip, insertIndex, false,
+                                              previousTrackId, previousClipId);
+            applied = false;
+        }
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+        {
+            const quint64 appliedId = window->applyClipDuplicateHistory(
+                trackId, clip, insertIndex, true, trackId, clip.id);
+            if (appliedId != 0)
+            {
+                clip.id = appliedId;
+                applied = true;
+            }
+            else
+                applied = false;
+        }
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    MidiClip clip;
+    qsizetype insertIndex;
+    quint64 previousTrackId;
+    quint64 previousClipId;
+    bool applied = false;
+};
+
 class NoteEditCommand final : public QUndoCommand
 {
 public:
@@ -2246,6 +2293,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             [this](quint64 trackId, quint64 clipId) { selectClip(trackId, clipId, false); });
     connect(arrangementEditor, &ArrangementEditor::clipAdded, this,
             [this](quint64 trackId, double startBeat) { addClipAt(trackId, startBeat); });
+    connect(arrangementEditor, &ArrangementEditor::clipDuplicateRequested, this,
+            [this](quint64 trackId, quint64 clipId) { duplicateClip(trackId, clipId); });
     connect(arrangementEditor, &ArrangementEditor::clipRemoved, this,
             [this](quint64 trackId, quint64 clipId) { removeClip(trackId, clipId); });
     connect(arrangementEditor, &ArrangementEditor::clipMoved, this,
@@ -3916,6 +3965,11 @@ void MainWindow::createMenus()
     editMenu->addAction(undoAction);
     editMenu->addAction(redoAction);
     editMenu->addSeparator();
+    QAction* duplicateClipAction = editMenu->addAction(tr("Duplicate selected Playlist clip"));
+    duplicateClipAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+D")));
+    duplicateClipAction->setToolTip(tr("Copy the selected MIDI pattern or audio region immediately after it"));
+    connect(duplicateClipAction, &QAction::triggered, this, &MainWindow::duplicateSelectedClip);
+    editMenu->addSeparator();
     editMenu->addAction(tr("Note properties…"), midiEditor, &MidiEditor::editSelectedNoteProperties);
     editMenu->addAction(tr("Quantize note starts to grid"), midiEditor, &MidiEditor::quantizeNotesToGrid);
     QMenu* chordMenu = editMenu->addMenu(tr("Build chord from selection"));
@@ -4106,6 +4160,12 @@ void MainWindow::refreshPianoRollGhostNotes()
         }
     }
     midiEditor->setGhostNotes(ghostNotes);
+}
+
+quint64 MainWindow::nextClipId()
+{
+    clipIdSequence = std::max(clipIdSequence, project.nextClipId());
+    return clipIdSequence++;
 }
 
 void MainWindow::refreshProjectUi()
@@ -5965,7 +6025,7 @@ void MainWindow::addDrumTrack()
     track.instrumentType = InstrumentType::DrumRack;
     track.gain = 0.8f;
     MidiClip clip;
-    clip.id = project.nextClipId();
+    clip.id = nextClipId();
     clip.name = tr("Beat %1").arg(clip.id);
     clip.lengthBeats = project.patternLengthBeats();
     track.clips.push_back(std::move(clip));
@@ -6021,7 +6081,7 @@ void MainWindow::addClapInstrumentTrack()
         track.clapParameterValues.push_back(parameter.defaultValue);
 
     MidiClip clip;
-    clip.id = project.nextClipId();
+    clip.id = nextClipId();
     clip.name = tr("Pattern %1").arg(clip.id);
     clip.lengthBeats = project.patternLengthBeats();
     track.clips.push_back(std::move(clip));
@@ -6198,7 +6258,7 @@ void MainWindow::addClipAt(quint64 trackId, double startBeat)
         return;
     }
     MidiClip clip;
-    clip.id = project.nextClipId();
+    clip.id = nextClipId();
     clip.name = tr("Pattern %1").arg(clip.id);
     clip.startBeat = std::max(0.0, startBeat);
     clip.lengthBeats = project.patternLengthBeats();
@@ -6232,6 +6292,120 @@ void MainWindow::addNewPattern()
     const double barLength = project.quarterNotesPerBar();
     startBeat = std::ceil(startBeat / barLength) * barLength;
     addClipAt(track->id, startBeat);
+}
+
+void MainWindow::duplicateSelectedClip()
+{
+    if (selectedClip() == nullptr)
+    {
+        statusBar()->showMessage(tr("Select a Playlist clip to duplicate"), 2200);
+        return;
+    }
+    duplicateClip(selectedTrackId, selectedClipId);
+}
+
+void MainWindow::duplicateClip(quint64 trackId, quint64 clipId)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    const MidiClip* source = project.findClip(trackId, clipId);
+    if (track == nullptr || source == nullptr)
+        return;
+    if (track->clips.size() >= 10000)
+    {
+        statusBar()->showMessage(tr("This track already has the maximum of 10,000 clips"), 2600);
+        return;
+    }
+
+    const double duplicateStart = source->startBeat + source->lengthBeats;
+    if (!std::isfinite(duplicateStart) || duplicateStart > 16384.0)
+    {
+        statusBar()->showMessage(tr("There is no room after this clip to place a duplicate"), 2600);
+        return;
+    }
+
+    qsizetype sourceIndex = 0;
+    while (sourceIndex < track->clips.size() && track->clips[sourceIndex].id != clipId)
+        ++sourceIndex;
+    if (sourceIndex >= track->clips.size())
+        return;
+
+    MidiClip duplicate = *source;
+    const QString sourceName = source->name;
+    duplicate.id = nextClipId();
+    duplicate.name = duplicate.name.isEmpty() ? tr("Pattern copy")
+                                               : tr("%1 copy").arg(duplicate.name);
+    duplicate.startBeat = duplicateStart;
+    const quint64 previousTrackId = selectedTrackId;
+    const quint64 previousClipId = selectedClipId;
+    undoStack.push(new ClipDuplicateCommand(this, trackId, std::move(duplicate), sourceIndex + 1,
+                                            previousTrackId, previousClipId));
+    statusBar()->showMessage(tr("Duplicated %1 immediately after the original")
+                                 .arg(sourceName.isEmpty() ? tr("clip") : sourceName),
+                             2200);
+}
+
+quint64 MainWindow::applyClipDuplicateHistory(quint64 trackId, const MidiClip& clip,
+                                              qsizetype insertIndex, bool present,
+                                              quint64 selectionTrackId, quint64 selectionClipId)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (present && track == nullptr)
+        return 0;
+
+    quint64 appliedId = clip.id;
+    if (present)
+    {
+        if (track->clips.size() >= 10000)
+        {
+            statusBar()->showMessage(tr("This track already has the maximum of 10,000 clips"), 2600);
+            return 0;
+        }
+
+        bool idInUse = false;
+        for (const InstrumentTrack& candidateTrack : project.tracks)
+            for (const MidiClip& candidate : candidateTrack.clips)
+                idInUse = idInUse || candidate.id == appliedId;
+        MidiClip inserted = clip;
+        if (idInUse)
+        {
+            inserted.id = nextClipId();
+            appliedId = inserted.id;
+        }
+        track->clips.insert(std::clamp<qsizetype>(insertIndex, 0, track->clips.size()), inserted);
+        selectedTrackId = trackId;
+        selectedClipId = appliedId;
+    }
+    else
+    {
+        bool removed = false;
+        for (InstrumentTrack& candidateTrack : project.tracks)
+        {
+            for (auto it = candidateTrack.clips.begin(); it != candidateTrack.clips.end(); ++it)
+            {
+                if (it->id == clip.id)
+                {
+                    candidateTrack.clips.erase(it);
+                    removed = true;
+                    break;
+                }
+            }
+            if (removed)
+                break;
+        }
+        selectedTrackId = selectionTrackId;
+        selectedClipId = selectionClipId;
+        if (!removed)
+        {
+            refreshProjectUi();
+            refreshDirtyState();
+            return 0;
+        }
+    }
+
+    project.normalize();
+    refreshProjectUi();
+    refreshDirtyState();
+    return appliedId;
 }
 
 void MainWindow::removeClip(quint64 trackId, quint64 clipId)
@@ -7697,6 +7871,7 @@ void MainWindow::setProject(const ProjectData& incoming, const QString& path)
     finishAutomationWrite();
     audioEngine.stopPlayback();
     project = incoming;
+    clipIdSequence = project.nextClipId();
     project.normalize();
     projectPath = path;
     settingsDirty = false;
@@ -8578,7 +8753,7 @@ void MainWindow::importAudio()
     track.name = QFileInfo(path).completeBaseName();
     track.instrumentType = InstrumentType::Audio;
     MidiClip clip;
-    clip.id = project.nextClipId();
+    clip.id = nextClipId();
     clip.name = QFileInfo(path).fileName();
     clip.audioSourcePath = asset->path;
     clip.audioSource = std::move(asset);
@@ -9971,7 +10146,7 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
 
     MidiClip clip;
-    clip.id = project.nextClipId();
+    clip.id = nextClipId();
     clip.name = takeName;
     const double durationSeconds = static_cast<double>(asset->frameCount()) / asset->sampleRate;
     const double compensationSeconds = recordingInputCompensationMs / 1000.0;
@@ -10368,7 +10543,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
             return;
         }
         MidiClip newClip;
-        newClip.id = project.nextClipId();
+        newClip.id = nextClipId();
         newClip.name = tr("MIDI Take");
         newClip.lengthBeats = project.patternLengthBeats();
         track->clips.push_back(std::move(newClip));

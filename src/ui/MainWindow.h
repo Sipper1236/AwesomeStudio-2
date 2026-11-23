@@ -43,6 +43,7 @@ class MainWindow final : public QMainWindow
     friend class MarkerEditCommand;
     friend class TempoMapEditCommand;
     friend class AudioFadeEditCommand;
+    friend class ClipDuplicateCommand;
 
 public:
     explicit MainWindow(AudioEngine& audioEngine, QWidget* parent = nullptr);
@@ -70,6 +71,7 @@ private:
     void createDocks();
     void createMenus();
     void setProject(const ProjectData& project, const QString& path = QString());
+    quint64 nextClipId();
     void refreshProjectUi();
     void refreshPianoRollGhostNotes();
     void refreshMixer();
@@ -95,6 +97,11 @@ private:
     void editSelectedClapInstrument();
     void addClipAt(quint64 trackId, double startBeat);
     void addNewPattern();
+    void duplicateSelectedClip();
+    void duplicateClip(quint64 trackId, quint64 clipId);
+    quint64 applyClipDuplicateHistory(quint64 trackId, const MidiClip& clip, qsizetype insertIndex,
+                                      bool present, quint64 selectionTrackId,
+                                      quint64 selectionClipId);
     void removeClip(quint64 trackId, quint64 clipId);
     void moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
@@ -437,6 +444,7 @@ private:
     bool midiRecordingPending = false;
     bool midiRecordingActive = false;
     bool midiTransportActive = false;
+    quint64 clipIdSequence = 1;
     quint64 selectedTrackId = 0;
     quint64 selectedClipId = 0;
 };
