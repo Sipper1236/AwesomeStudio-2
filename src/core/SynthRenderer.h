@@ -29,6 +29,7 @@ public:
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
     void setLiveLv2ParameterOverride(size_t trackIndex, qsizetype effectIndex,
                                      qsizetype parameterIndex, float value);
+    void captureLv2PluginStates(ProjectData& target) const;
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
     float trackPeakLevel(size_t trackIndex) const;
@@ -168,6 +169,8 @@ private:
     void prepareEffectChain(const QVector<MixerEffect>& settings, std::vector<EffectState>& states);
     void resetEffectChain(std::vector<EffectState>& states);
     bool effectChainHasTail(const std::vector<EffectState>& states) const;
+    void captureEffectStates(const std::vector<EffectState>& states,
+                             QVector<MixerEffect>& target) const;
     StereoSample processEffectChain(std::vector<EffectState>& states, StereoSample input);
 
     std::shared_ptr<const ProjectData> project;

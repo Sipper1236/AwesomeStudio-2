@@ -38,6 +38,7 @@ public:
                                      qsizetype parameterIndex, float value);
     void clearLiveLv2ParameterOverride(quint64 trackId, qsizetype effectIndex,
                                        qsizetype parameterIndex);
+    void captureLv2PluginStates(ProjectData& project);
     void triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity, const InstrumentTrack& track);
     void triggerLiveMidiNoteOff(int channel, int midiPitch);
     void triggerLiveMidiPitchBend(int channel, int value);
@@ -144,6 +145,8 @@ private:
     };
 
     qint64 renderAudio(char* destination, qint64 maxBytes);
+    std::atomic<bool> pluginStateCaptureInProgress{false};
+    std::atomic<size_t> activeRenderCallbacks{0};
     bool enqueueLiveMidiEvent(const LiveMidiEvent& event);
     void applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame);
     void renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer);

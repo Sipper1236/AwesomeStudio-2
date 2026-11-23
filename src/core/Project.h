@@ -200,6 +200,8 @@ enum class MixerEffectType
     Lv2Plugin
 };
 
+inline constexpr qsizetype maximumLv2PluginStateBytes = 1024 * 1024;
+
 struct MixerEffect
 {
     MixerEffectType type = MixerEffectType::Delay;
@@ -220,6 +222,7 @@ struct MixerEffect
     QString pluginName;
     QVector<float> pluginParameterValues;
     QVector<QVector<AutomationPoint>> pluginParameterAutomation;
+    QString pluginState;
 };
 
 MixerEffect defaultMixerEffect(MixerEffectType type);

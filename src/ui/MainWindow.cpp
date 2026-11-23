@@ -5110,6 +5110,7 @@ bool MainWindow::saveToPath(const QString& path)
         finishAudioRecording(true);
     if (midiRecordingActive || midiRecordingPending)
         finishMidiRecording(true);
+    audioEngine.captureLv2PluginStates(project);
     QString savePath = path;
     if (QFileInfo(savePath).suffix().isEmpty())
         savePath += QStringLiteral(".aws");
@@ -5169,6 +5170,7 @@ void MainWindow::savePortableProjectCopy()
     if (midiRecordingActive || midiRecordingPending)
         finishMidiRecording(true);
 
+    audioEngine.captureLv2PluginStates(project);
     ProjectData portable = project;
     portable.normalize();
     const QFileInfo targetInfo(savePath);
@@ -5361,6 +5363,7 @@ void MainWindow::autosaveProject()
     QString error;
     const QString path = projectPath.isEmpty()
         ? unsavedSessionAutosavePath() : projectAutosavePath(projectPath);
+    audioEngine.captureLv2PluginStates(project);
     if (!ProjectFile::save(path, project, &error))
         statusBar()->showMessage(tr("Autosave failed: %1").arg(error), 6000);
 }

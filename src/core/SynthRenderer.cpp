@@ -883,7 +883,8 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
                  effect.type == MixerEffectType::Lv2Plugin && !effect.pluginUri.isEmpty())
         {
             state.lv2Effect = std::make_unique<Lv2AudioEffectInstance>(
-                effect.pluginUri, sampleRate, effect.pluginParameterValues);
+                effect.pluginUri, sampleRate, effect.pluginParameterValues,
+                effect.pluginState);
             if (state.lv2Effect != nullptr)
                 state.liveParameterOverrides.assign(
                     static_cast<size_t>(state.lv2Effect->parameterCount()),
@@ -1210,6 +1211,41 @@ void SynthRenderer::setLiveLv2ParameterOverride(size_t trackIndex, qsizetype eff
     if (parameterIndex < 0 || parameterIndex >= static_cast<qsizetype>(overrides.size()))
         return;
     overrides[static_cast<size_t>(parameterIndex)] = value;
+}
+
+void SynthRenderer::captureEffectStates(const std::vector<EffectState>& states,
+                                        QVector<MixerEffect>& target) const
+{
+    const size_t count = std::min(states.size(), static_cast<size_t>(target.size()));
+    for (size_t index = 0; index < count; ++index)
+    {
+        const EffectState& state = states[index];
+        MixerEffect& effect = target[static_cast<qsizetype>(index)];
+        if (effect.type != MixerEffectType::Lv2Plugin ||
+            state.settings.type != MixerEffectType::Lv2Plugin ||
+            effect.pluginUri != state.settings.pluginUri || state.lv2Effect == nullptr ||
+            !state.lv2Effect->isValid())
+            continue;
+
+        QString savedState;
+        if (state.lv2Effect->saveState(savedState))
+            effect.pluginState = std::move(savedState);
+    }
+}
+
+void SynthRenderer::captureLv2PluginStates(ProjectData& target) const
+{
+    const size_t trackCount = std::min(trackEffectStates.size(),
+                                       static_cast<size_t>(target.tracks.size()));
+    for (size_t index = 0; index < trackCount; ++index)
+        captureEffectStates(trackEffectStates[index], target.tracks[static_cast<qsizetype>(index)].effects);
+
+    const size_t busCount = std::min(busEffectStates.size(),
+                                     static_cast<size_t>(target.buses.size()));
+    for (size_t index = 0; index < busCount; ++index)
+        captureEffectStates(busEffectStates[index], target.buses[static_cast<qsizetype>(index)].effects);
+
+    captureEffectStates(masterEffectStates, target.masterEffects);
 }
 
 void SynthRenderer::resetTrackPeakLevels()

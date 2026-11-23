@@ -12,12 +12,13 @@
 #include <QSaveFile>
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace
 {
-constexpr int currentProjectVersion = 37;
+constexpr int currentProjectVersion = 38;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -164,7 +165,8 @@ QJsonArray saveEffects(const QVector<MixerEffect>& effects)
             {QStringLiteral("pluginUri"), effect.pluginUri},
             {QStringLiteral("pluginName"), effect.pluginName},
             {QStringLiteral("pluginParameterValues"), pluginParameters},
-            {QStringLiteral("pluginParameterAutomation"), pluginParameterAutomation}
+            {QStringLiteral("pluginParameterAutomation"), pluginParameterAutomation},
+            {QStringLiteral("pluginState"), effect.pluginState}
         });
     }
     return result;
@@ -286,6 +288,23 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
                                     version, error))
                     return false;
                 effect.pluginParameterAutomation.push_back(std::move(points));
+            }
+        }
+        if (version >= 38)
+        {
+            const QJsonValue stateValue = object.value(QStringLiteral("pluginState"));
+            if (!stateValue.isUndefined() && !stateValue.isString())
+            {
+                setError(error, QStringLiteral("The %1 contains invalid plugin state data.")
+                                    .arg(ownerName));
+                return false;
+            }
+            effect.pluginState = stateValue.toString();
+            if (effect.pluginState.toUtf8().size() > maximumLv2PluginStateBytes)
+            {
+                setError(error, QStringLiteral("The %1 contains plugin state larger than 1 MiB.")
+                                    .arg(ownerName));
+                return false;
             }
         }
         effects.push_back(effect);
@@ -826,6 +845,25 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
 {
     ProjectData safeProject = project;
     safeProject.normalize();
+
+    const auto statesAreWithinLimit = [](const QVector<MixerEffect>& effects)
+    {
+        return std::all_of(effects.cbegin(), effects.cend(), [](const MixerEffect& effect)
+        {
+            return effect.pluginState.toUtf8().size() <= maximumLv2PluginStateBytes;
+        });
+    };
+    if (!statesAreWithinLimit(safeProject.masterEffects) ||
+        !std::all_of(safeProject.tracks.cbegin(), safeProject.tracks.cend(),
+                     [&statesAreWithinLimit](const InstrumentTrack& track)
+                     { return statesAreWithinLimit(track.effects); }) ||
+        !std::all_of(safeProject.buses.cbegin(), safeProject.buses.cend(),
+                     [&statesAreWithinLimit](const MixerBus& bus)
+                     { return statesAreWithinLimit(bus.effects); }))
+    {
+        setError(error, QStringLiteral("An LV2 plugin state is larger than 1 MiB; the project was not saved."));
+        return false;
+    }
 
     QJsonArray tracks;
     for (const InstrumentTrack& track : safeProject.tracks)

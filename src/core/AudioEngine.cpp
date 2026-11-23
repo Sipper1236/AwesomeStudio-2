@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <thread>
 #include <utility>
 
 namespace
@@ -337,6 +338,39 @@ void AudioEngine::clearLiveLv2ParameterOverride(quint64 trackId, qsizetype effec
         liveLv2EffectIndex.load(std::memory_order_relaxed) == effectIndex &&
         liveLv2ParameterIndex.load(std::memory_order_relaxed) == parameterIndex)
         liveLv2ParameterOverrideActive.store(false, std::memory_order_release);
+}
+
+void AudioEngine::captureLv2PluginStates(ProjectData& project)
+{
+    const bool resumeSink = sink != nullptr && sink->state() == QAudio::ActiveState;
+    if (resumeSink)
+        sink->suspend();
+
+    pluginStateCaptureInProgress.store(true, std::memory_order_release);
+    struct StateCaptureExit
+    {
+        std::atomic<bool>& active;
+        QAudioSink* sink = nullptr;
+        bool resumeSink = false;
+
+        void finish()
+        {
+            active.store(false, std::memory_order_release);
+            if (resumeSink && sink != nullptr)
+                sink->resume();
+            resumeSink = false;
+        }
+
+        ~StateCaptureExit() { finish(); }
+    } captureExit{pluginStateCaptureInProgress, sink.get(), resumeSink};
+    while (activeRenderCallbacks.load(std::memory_order_acquire) != 0)
+        std::this_thread::yield();
+
+    const auto renderState = std::atomic_load_explicit(&preparedRenderState,
+                                                        std::memory_order_acquire);
+    if (renderState != nullptr && renderState->renderer != nullptr)
+        renderState->renderer->captureLv2PluginStates(project);
+    captureExit.finish();
 }
 
 void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity,
@@ -932,6 +966,25 @@ void AudioEngine::pushAudioInputMonitorFrames(const float* interleavedSamples, q
 
 qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
 {
+    activeRenderCallbacks.fetch_add(1, std::memory_order_acq_rel);
+    struct RenderCallbackExit
+    {
+        std::atomic<size_t>& count;
+        ~RenderCallbackExit() { count.fetch_sub(1, std::memory_order_release); }
+    } callbackExit{activeRenderCallbacks};
+
+    if (pluginStateCaptureInProgress.load(std::memory_order_acquire))
+    {
+        if (destination != nullptr && maxBytes > 0)
+        {
+            if (outputFormat != nullptr &&
+                outputFormat->sampleFormat() == QAudioFormat::UInt8)
+                std::memset(destination, 0x80, static_cast<size_t>(maxBytes));
+            else
+                std::memset(destination, 0, static_cast<size_t>(maxBytes));
+        }
+        return destination == nullptr ? 0 : maxBytes;
+    }
     if (destination == nullptr || !outputFormat || bytesPerFrame <= 0)
         return 0;
 

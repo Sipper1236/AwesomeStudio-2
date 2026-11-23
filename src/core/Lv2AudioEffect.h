@@ -37,7 +37,8 @@ public:
     static bool describe(const QString& uri, Lv2EffectDescriptor& descriptor);
 
     Lv2AudioEffectInstance(const QString& uri, double sampleRate,
-                           const QVector<float>& parameterValues);
+                           const QVector<float>& parameterValues,
+                           const QString& pluginState = QString());
     ~Lv2AudioEffectInstance();
 
     Lv2AudioEffectInstance(const Lv2AudioEffectInstance&) = delete;
@@ -46,6 +47,7 @@ public:
     bool isValid() const;
     qsizetype parameterCount() const;
     void setParameter(qsizetype index, float value);
+    bool saveState(QString& pluginState) const;
     void process(float& left, float& right);
 
 private:

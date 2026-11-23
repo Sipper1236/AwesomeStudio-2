@@ -1,12 +1,19 @@
 #include "Lv2AudioEffect.h"
+#include "Project.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <deque>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 
 #if defined(AWESOME_STUDIO_HAS_LILV)
 #include <lilv/lilv.h>
 #include <lv2/core/lv2.h>
+#include <lv2/state/state.h>
+#include <lv2/urid/urid.h>
 #endif
 
 namespace
@@ -16,6 +23,18 @@ struct LilvWorldState
 {
     LilvWorldState()
     {
+        uridMap.handle = this;
+        uridMap.map = &LilvWorldState::mapUri;
+        uridUnmap.handle = this;
+        uridUnmap.unmap = &LilvWorldState::unmapUri;
+        mapFeature.URI = LV2_URID__map;
+        mapFeature.data = &uridMap;
+        unmapFeature.URI = LV2_URID__unmap;
+        unmapFeature.data = &uridUnmap;
+        features[0] = &mapFeature;
+        features[1] = &unmapFeature;
+        features[2] = nullptr;
+
         world = lilv_world_new();
         if (world == nullptr)
             return;
@@ -47,6 +66,41 @@ struct LilvWorldState
     LilvNode* outputPort = nullptr;
     LilvNode* integerProperty = nullptr;
     LilvNode* toggledProperty = nullptr;
+    LV2_URID_Map uridMap{};
+    LV2_URID_Unmap uridUnmap{};
+    LV2_Feature mapFeature{};
+    LV2_Feature unmapFeature{};
+    const LV2_Feature* features[3]{};
+    std::mutex uridMutex;
+    std::unordered_map<std::string, LV2_URID> uridByUri;
+    std::deque<std::string> uriByUrid;
+
+    static LV2_URID mapUri(LV2_URID_Map_Handle handle, const char* uri)
+    {
+        if (handle == nullptr || uri == nullptr || *uri == '\0')
+            return 0;
+        auto& state = *static_cast<LilvWorldState*>(handle);
+        const std::lock_guard<std::mutex> lock(state.uridMutex);
+        const auto found = state.uridByUri.find(uri);
+        if (found != state.uridByUri.end())
+            return found->second;
+        if (state.uriByUrid.size() >= UINT32_MAX - 1)
+            return 0;
+        state.uriByUrid.emplace_back(uri);
+        const LV2_URID id = static_cast<LV2_URID>(state.uriByUrid.size());
+        state.uridByUri.emplace(state.uriByUrid.back(), id);
+        return id;
+    }
+
+    static const char* unmapUri(LV2_URID_Unmap_Handle handle, LV2_URID urid)
+    {
+        if (handle == nullptr || urid == 0)
+            return nullptr;
+        auto& state = *static_cast<LilvWorldState*>(handle);
+        const std::lock_guard<std::mutex> lock(state.uridMutex);
+        const size_t index = static_cast<size_t>(urid - 1);
+        return index < state.uriByUrid.size() ? state.uriByUrid[index].c_str() : nullptr;
+    }
 };
 
 LilvWorldState& lilvState()
@@ -171,6 +225,7 @@ bool describePlugin(const LilvPlugin* plugin, Lv2EffectDescriptor& descriptor)
 struct Lv2AudioEffectInstance::Private
 {
 #if defined(AWESOME_STUDIO_HAS_LILV)
+    const LilvPlugin* plugin = nullptr;
     LilvInstance* instance = nullptr;
     Lv2EffectDescriptor descriptor;
     float inputLeft = 0.0f;
@@ -231,7 +286,8 @@ bool Lv2AudioEffectInstance::describe(const QString& uri, Lv2EffectDescriptor& d
 }
 
 Lv2AudioEffectInstance::Lv2AudioEffectInstance(const QString& uri, double sampleRate,
-                                               const QVector<float>& parameterValues)
+                                               const QVector<float>& parameterValues,
+                                               const QString& pluginState)
     : d(std::make_unique<Private>())
 {
 #if defined(AWESOME_STUDIO_HAS_LILV)
@@ -247,9 +303,10 @@ Lv2AudioEffectInstance::Lv2AudioEffectInstance(const QString& uri, double sample
     if (!describePlugin(plugin, d->descriptor))
         return;
 
-    d->instance = lilv_plugin_instantiate(plugin, sampleRate, nullptr);
+    d->instance = lilv_plugin_instantiate(plugin, sampleRate, state.features);
     if (d->instance == nullptr)
         return;
+    d->plugin = plugin;
     d->controlInputs.reserve(static_cast<size_t>(d->descriptor.parameters.size()));
     for (qsizetype index = 0; index < d->descriptor.parameters.size(); ++index)
     {
@@ -285,6 +342,27 @@ Lv2AudioEffectInstance::Lv2AudioEffectInstance(const QString& uri, double sample
     for (size_t index = 0; index < d->descriptor.controlOutputs.size(); ++index)
         lilv_instance_connect_port(d->instance, d->descriptor.controlOutputs[index],
                                    &d->controlOutputs[index]);
+
+    if (!pluginState.isEmpty())
+    {
+        const QByteArray stateBytes = pluginState.toUtf8();
+        LilvState* savedState = lilv_state_new_from_string(
+            state.world, &state.uridMap, stateBytes.constData());
+        if (savedState != nullptr)
+        {
+            const LilvNode* savedPlugin = lilv_state_get_plugin_uri(savedState);
+            const char* savedPluginUri = savedPlugin == nullptr
+                ? nullptr : lilv_node_as_string(savedPlugin);
+            if (savedPluginUri != nullptr && uri == QString::fromUtf8(savedPluginUri))
+            {
+                lilv_state_restore(savedState, d->instance, nullptr, nullptr,
+                                   LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE,
+                                   state.features);
+            }
+            lilv_state_free(savedState);
+        }
+    }
+
     lilv_instance_activate(d->instance);
 #else
     Q_UNUSED(uri)
@@ -337,6 +415,43 @@ void Lv2AudioEffectInstance::setParameter(qsizetype index, float value)
 #else
     Q_UNUSED(index)
     Q_UNUSED(value)
+#endif
+}
+
+bool Lv2AudioEffectInstance::saveState(QString& pluginState) const
+{
+#if defined(AWESOME_STUDIO_HAS_LILV)
+    if (d == nullptr || d->instance == nullptr || d->plugin == nullptr)
+        return false;
+
+    LilvWorldState& state = lilvState();
+    const std::lock_guard<std::mutex> lock(state.mutex);
+    LilvState* snapshot = lilv_state_new_from_instance(
+        d->plugin, d->instance, &state.uridMap, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE, state.features);
+    if (snapshot == nullptr)
+        return false;
+
+    char* serialized = lilv_state_to_string(
+        state.world, &state.uridMap, &state.uridUnmap, snapshot,
+        "urn:awesome-studio:lv2-state", nullptr);
+    lilv_state_free(snapshot);
+    if (serialized == nullptr)
+        return false;
+
+    const size_t serializedSize = std::strlen(serialized);
+    if (serializedSize == 0 || serializedSize >
+        static_cast<size_t>(maximumLv2PluginStateBytes))
+    {
+        lilv_free(serialized);
+        return false;
+    }
+    pluginState = QString::fromUtf8(serialized, static_cast<qsizetype>(serializedSize));
+    lilv_free(serialized);
+    return !pluginState.isEmpty();
+#else
+    Q_UNUSED(pluginState)
+    return false;
 #endif
 }
 
