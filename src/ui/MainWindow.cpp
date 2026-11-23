@@ -1874,6 +1874,45 @@ private:
     bool applied = false;
 };
 
+class ClipMoveCommand final : public QUndoCommand
+{
+public:
+    ClipMoveCommand(MainWindow* window, quint64 clipId,
+                    quint64 previousTrackId, qsizetype previousIndex, double previousStartBeat,
+                    quint64 nextTrackId, qsizetype nextIndex, double nextStartBeat)
+        : window(window), clipId(clipId), previousTrackId(previousTrackId),
+          previousIndex(previousIndex), previousStartBeat(previousStartBeat),
+          nextTrackId(nextTrackId), nextIndex(nextIndex), nextStartBeat(nextStartBeat)
+    {
+        setText(QObject::tr("Move Playlist clip"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr && applied)
+            window->applyClipMoveHistory(clipId, previousTrackId, previousIndex,
+                                         previousStartBeat, previousTrackId, clipId);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            applied = window->applyClipMoveHistory(clipId, nextTrackId, nextIndex,
+                                                   nextStartBeat, nextTrackId, clipId);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 clipId;
+    quint64 previousTrackId;
+    qsizetype previousIndex;
+    double previousStartBeat;
+    quint64 nextTrackId;
+    qsizetype nextIndex;
+    double nextStartBeat;
+    bool applied = false;
+};
+
 class NoteEditCommand final : public QUndoCommand
 {
 public:
@@ -6497,27 +6536,71 @@ void MainWindow::moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 
         statusBar()->showMessage(tr("Audio regions stay on audio tracks; MIDI patterns stay on instrument tracks"), 2500);
         return;
     }
-    MidiClip movedClip;
-    bool found = false;
-    for (auto it = source->clips.begin(); it != source->clips.end(); ++it)
+    if (source != target && target->clips.size() >= 10000)
     {
-        if (it->id == clipId)
-        {
-            movedClip = *it;
-            source->clips.erase(it);
-            found = true;
-            break;
-        }
-    }
-    if (!found)
+        statusBar()->showMessage(tr("The destination track already has the maximum of 10,000 clips"), 2600);
         return;
-    movedClip.startBeat = std::clamp(startBeat, 0.0, 100000.0);
-    target->clips.push_back(movedClip);
-    selectedTrackId = targetTrackId;
-    selectedClipId = clipId;
-    settingsDirty = true;
+    }
+
+    qsizetype sourceIndex = 0;
+    while (sourceIndex < source->clips.size() && source->clips[sourceIndex].id != clipId)
+        ++sourceIndex;
+    if (sourceIndex >= source->clips.size())
+        return;
+
+    const double nextStartBeat = std::clamp(startBeat, 0.0, 16384.0);
+    if (source == target && sourceIndex == source->clips.size() - 1 &&
+        std::abs(source->clips[sourceIndex].startBeat - nextStartBeat) < 1.0e-9)
+        return;
+    const qsizetype nextIndex = target->clips.size() - (source == target ? 1 : 0);
+    undoStack.push(new ClipMoveCommand(this, clipId, sourceTrackId, sourceIndex,
+        source->clips[sourceIndex].startBeat, targetTrackId, nextIndex, nextStartBeat));
+}
+
+bool MainWindow::applyClipMoveHistory(quint64 clipId, quint64 targetTrackId,
+                                      qsizetype insertIndex, double startBeat,
+                                      quint64 selectionTrackId, quint64 selectionClipId)
+{
+    InstrumentTrack* target = project.findTrack(targetTrackId);
+    if (target == nullptr)
+        return false;
+
+    InstrumentTrack* source = nullptr;
+    qsizetype sourceIndex = -1;
+    MidiClip movedClip;
+    for (InstrumentTrack& candidateTrack : project.tracks)
+    {
+        for (qsizetype index = 0; index < candidateTrack.clips.size(); ++index)
+        {
+            if (candidateTrack.clips[index].id == clipId)
+            {
+                source = &candidateTrack;
+                sourceIndex = index;
+                movedClip = candidateTrack.clips[index];
+                break;
+            }
+        }
+        if (source != nullptr)
+            break;
+    }
+    if (source == nullptr || movedClip.isAudioRegion() !=
+        (target->instrumentType == InstrumentType::Audio))
+        return false;
+    if (source != target && target->clips.size() >= 10000)
+    {
+        statusBar()->showMessage(tr("The destination track already has the maximum of 10,000 clips"), 2600);
+        return false;
+    }
+
+    source->clips.removeAt(sourceIndex);
+    movedClip.startBeat = std::clamp(startBeat, 0.0, 16384.0);
+    target->clips.insert(std::clamp<qsizetype>(insertIndex, 0, target->clips.size()), movedClip);
+    selectedTrackId = selectionTrackId;
+    selectedClipId = selectionClipId;
+    project.normalize();
     refreshProjectUi();
     refreshDirtyState();
+    return true;
 }
 
 void MainWindow::trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,

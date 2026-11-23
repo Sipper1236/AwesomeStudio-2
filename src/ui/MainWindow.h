@@ -45,6 +45,7 @@ class MainWindow final : public QMainWindow
     friend class AudioFadeEditCommand;
     friend class ClipDuplicateCommand;
     friend class ClipRemoveCommand;
+    friend class ClipMoveCommand;
 
 public:
     explicit MainWindow(AudioEngine& audioEngine, QWidget* parent = nullptr);
@@ -103,6 +104,9 @@ private:
     quint64 applyClipListHistory(quint64 trackId, const MidiClip& clip, qsizetype insertIndex,
                                  bool present, quint64 selectionTrackId,
                                  quint64 selectionClipId);
+    bool applyClipMoveHistory(quint64 clipId, quint64 targetTrackId, qsizetype insertIndex,
+                              double startBeat, quint64 selectionTrackId,
+                              quint64 selectionClipId);
     void removeClip(quint64 trackId, quint64 clipId);
     void moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
