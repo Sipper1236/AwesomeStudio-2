@@ -45,7 +45,9 @@
 #include <QSlider>
 #include <QStatusBar>
 #include <QStyle>
+#include <QStringList>
 #include <QTabWidget>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -64,6 +66,113 @@ constexpr double automationWritePointSpacingBeats = 0.04;
 QString projectAutosavePath(const QString& projectPath)
 {
     return projectPath + QStringLiteral(".autosave");
+}
+
+QString projectBackupPath(const QString& projectPath, int generation)
+{
+    return projectPath + QStringLiteral(".bak%1").arg(generation);
+}
+
+QString projectPathForBackup(const QString& path)
+{
+    for (int generation = 1; generation <= 3; ++generation)
+    {
+        const QString backupSuffix = QStringLiteral(".bak%1").arg(generation);
+        const QString suffix = QStringLiteral(".aws") + backupSuffix;
+        if (path.endsWith(suffix, Qt::CaseInsensitive))
+            return path.left(path.size() - backupSuffix.size());
+    }
+    return path;
+}
+
+bool stageProjectBackup(const QString& projectPath, QString& stagedPath, QString& error)
+{
+    stagedPath.clear();
+    if (!QFileInfo::exists(projectPath))
+        return true;
+
+    QFile source(projectPath);
+    if (!source.open(QIODevice::ReadOnly))
+    {
+        error = source.errorString();
+        return false;
+    }
+
+    const QFileInfo projectInfo(projectPath);
+    const QString temporaryTemplate = QDir(projectInfo.absolutePath()).filePath(
+        QStringLiteral(".%1.backup-XXXXXX").arg(projectInfo.fileName()));
+    QTemporaryFile staged(temporaryTemplate);
+    if (!staged.open())
+    {
+        error = staged.errorString();
+        return false;
+    }
+
+    QByteArray buffer(64 * 1024, '\0');
+    while (!source.atEnd())
+    {
+        const qint64 bytesRead = source.read(buffer.data(), buffer.size());
+        if (bytesRead < 0)
+        {
+            error = source.errorString();
+            return false;
+        }
+        if (bytesRead == 0)
+            break;
+        if (staged.write(buffer.constData(), bytesRead) != bytesRead)
+        {
+            error = staged.errorString();
+            return false;
+        }
+    }
+    if (!staged.flush())
+    {
+        error = staged.errorString();
+        return false;
+    }
+
+    stagedPath = staged.fileName();
+    staged.setAutoRemove(false);
+    staged.close();
+    return true;
+}
+
+QString rotateProjectBackups(const QString& projectPath, const QString& stagedPath)
+{
+    QStringList errors;
+    for (int generation = 3; generation >= 1; --generation)
+    {
+        const QString sourcePath = projectBackupPath(projectPath, generation);
+        if (!QFileInfo::exists(sourcePath))
+            continue;
+        if (generation == 3)
+        {
+            if (!QFile::remove(sourcePath))
+                errors.push_back(QObject::tr("could not remove %1").arg(QFileInfo(sourcePath).fileName()));
+            continue;
+        }
+
+        const QString destinationPath = projectBackupPath(projectPath, generation + 1);
+        if (QFileInfo::exists(destinationPath) && !QFile::remove(destinationPath))
+        {
+            errors.push_back(QObject::tr("could not replace %1").arg(QFileInfo(destinationPath).fileName()));
+            continue;
+        }
+        if (!QFile::rename(sourcePath, destinationPath))
+            errors.push_back(QObject::tr("could not rotate %1").arg(QFileInfo(sourcePath).fileName()));
+    }
+
+    const QString newestBackup = projectBackupPath(projectPath, 1);
+    if (QFileInfo::exists(newestBackup) && !QFile::remove(newestBackup))
+    {
+        errors.push_back(QObject::tr("could not replace %1").arg(QFileInfo(newestBackup).fileName()));
+    }
+    else if (!QFile::rename(stagedPath, newestBackup))
+    {
+        errors.push_back(QObject::tr("could not install the newest backup"));
+    }
+
+    return errors.join(QStringLiteral("; "));
 }
 
 bool chooseExportRange(QWidget* parent, double songLengthBeats, bool& useRange,
@@ -781,15 +890,19 @@ void MainWindow::createActions()
     {
         if (!maybeSave())
             return;
-        const QString path = QFileDialog::getOpenFileName(this, tr("Open project"), projectPath,
-                                                          tr("Awesome Studio project (*.aws)"));
-        if (path.isEmpty())
+        const QString selectedPath = QFileDialog::getOpenFileName(
+            this, tr("Open project"), projectPath,
+            tr("Awesome Studio project (*.aws *.aws.bak1 *.aws.bak2 *.aws.bak3)"));
+        if (selectedPath.isEmpty())
             return;
-        QString loadPath = path;
+        const QString path = projectPathForBackup(selectedPath);
+        const bool recoveredBackup = path != selectedPath;
+        QString loadPath = selectedPath;
         const QFileInfo autosaveInfo(projectAutosavePath(path));
         const QFileInfo projectInfo(path);
         bool recoveredAutosave = false;
-        if (autosaveInfo.exists() && autosaveInfo.lastModified() >= projectInfo.lastModified())
+        if (!recoveredBackup && autosaveInfo.exists() &&
+            autosaveInfo.lastModified() >= projectInfo.lastModified())
         {
             const QMessageBox::StandardButton choice = QMessageBox::question(
                 this, tr("Recover autosave"),
@@ -832,6 +945,13 @@ void MainWindow::createActions()
             settingsDirty = true;
             refreshDirtyState();
             statusBar()->showMessage(tr("Recovered autosave for %1; save the project to keep it.")
+                                         .arg(QFileInfo(path).fileName()), 6000);
+        }
+        else if (recoveredBackup)
+        {
+            settingsDirty = true;
+            refreshDirtyState();
+            statusBar()->showMessage(tr("Opened backup for %1; save to restore it as the current project.")
                                          .arg(QFileInfo(path).fileName()), 6000);
         }
     });
@@ -4083,15 +4203,23 @@ bool MainWindow::saveToPath(const QString& path)
     QString savePath = path;
     if (QFileInfo(savePath).suffix().isEmpty())
         savePath += QStringLiteral(".aws");
+    QString stagedBackupPath;
+    QString backupError;
+    const bool backupStaged = stageProjectBackup(savePath, stagedBackupPath, backupError);
     const QString previousTitle = project.title;
     project.title = QFileInfo(savePath).completeBaseName();
     QString error;
     if (!ProjectFile::save(savePath, project, &error))
     {
+        if (!stagedBackupPath.isEmpty())
+            QFile::remove(stagedBackupPath);
         project.title = previousTitle;
         QMessageBox::critical(this, tr("Could not save project"), error);
         return false;
     }
+
+    if (backupStaged && !stagedBackupPath.isEmpty())
+        backupError = rotateProjectBackups(savePath, stagedBackupPath);
 
     projectPath = savePath;
     QFile::remove(projectAutosavePath(savePath));
@@ -4099,7 +4227,11 @@ bool MainWindow::saveToPath(const QString& path)
     undoStack.setClean();
     audioEngine.setProject(project);
     updateProjectTitle();
-    statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(savePath).fileName()), 2500);
+    if (!backupError.isEmpty())
+        statusBar()->showMessage(tr("Saved %1, but backup update failed: %2")
+                                     .arg(QFileInfo(savePath).fileName(), backupError), 7000);
+    else
+        statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(savePath).fileName()), 2500);
     return true;
 }
 
