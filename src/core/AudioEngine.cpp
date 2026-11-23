@@ -314,7 +314,7 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
 void AudioEngine::setLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
                                                  qsizetype parameterIndex, float value)
 {
-    if (trackId == 0 || effectIndex < 0 || effectIndex >= 8 ||
+    if (trackId == 0 || effectIndex < -1 || effectIndex >= 8 ||
         parameterIndex < 0 || parameterIndex >= 256 || !std::isfinite(value))
         return;
     const bool sameTarget = livePluginTrackId.load(std::memory_order_acquire) == trackId &&
@@ -1148,7 +1148,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     const quint64 livePluginTrackId = this->livePluginTrackId.load(std::memory_order_acquire);
     const qsizetype livePluginEffectIndex = this->livePluginEffectIndex.load(std::memory_order_relaxed);
     const qsizetype livePluginParameterIndex = this->livePluginParameterIndex.load(std::memory_order_relaxed);
-    if (livePluginTrackId != 0 && livePluginEffectIndex >= 0 && livePluginParameterIndex >= 0)
+    if (livePluginTrackId != 0 && livePluginEffectIndex >= -1 && livePluginParameterIndex >= 0)
     {
         for (size_t trackIndex = 0;
              trackIndex < static_cast<size_t>(project->tracks.size()) &&

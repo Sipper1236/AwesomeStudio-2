@@ -548,6 +548,10 @@ void ProjectData::normalize()
         for (float& value : track.clapParameterValues)
             if (!std::isfinite(value))
                 value = 0.0f;
+        if (track.clapParameterAutomation.size() > 256)
+            track.clapParameterAutomation.resize(256);
+        for (QVector<AutomationPoint>& points : track.clapParameterAutomation)
+            normalizeAutomation(points, -1.0e9f, 1.0e9f);
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
         if (!std::isfinite(track.eqLowDb)) track.eqLowDb = 0.0f;

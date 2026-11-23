@@ -212,6 +212,7 @@ private:
     std::vector<unsigned char> trackInstrumentFilterHasTail;
     std::vector<std::vector<EffectState>> trackEffectStates;
     std::vector<std::unique_ptr<ClapAudioPluginInstance>> clapInstruments;
+    std::vector<std::vector<float>> clapInstrumentLiveParameterOverrides;
     std::vector<unsigned char> trackEffectHasTail;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;

@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 40;
+constexpr int currentProjectVersion = 41;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -490,6 +490,13 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                  values.push_back(value);
              return values;
          }()},
+        {QStringLiteral("clapParameterAutomation"), [&track]
+         {
+             QJsonArray automation;
+             for (const QVector<AutomationPoint>& points : track.clapParameterAutomation)
+                 automation.push_back(saveAutomation(points));
+             return automation;
+         }()},
         {QStringLiteral("waveform"), static_cast<int>(track.waveform)},
         {QStringLiteral("secondOscillatorEnabled"), track.secondOscillatorEnabled},
         {QStringLiteral("secondOscillatorWaveform"), static_cast<int>(track.secondOscillatorWaveform)},
@@ -674,6 +681,25 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                 return false;
             }
             track.clapParameterValues.push_back(static_cast<float>(number));
+        }
+        if (version >= 41)
+        {
+            const QJsonValue parameterAutomation =
+                object.value(QStringLiteral("clapParameterAutomation"));
+            if (!parameterAutomation.isUndefined() &&
+                (!parameterAutomation.isArray() || parameterAutomation.toArray().size() > 256))
+            {
+                setError(error, QStringLiteral("The track contains invalid CLAP instrument automation."));
+                return false;
+            }
+            for (const QJsonValue& curve : parameterAutomation.toArray())
+            {
+                QVector<AutomationPoint> points;
+                if (!loadAutomation(curve, points, QStringLiteral("CLAP instrument parameter"),
+                                    version, error))
+                    return false;
+                track.clapParameterAutomation.push_back(std::move(points));
+            }
         }
     }
     track.waveform = static_cast<SynthWaveform>(object.value(QStringLiteral("waveform")).toInt(0));

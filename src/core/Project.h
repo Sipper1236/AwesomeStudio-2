@@ -256,6 +256,7 @@ struct InstrumentTrack
     QString clapPluginName;
     QString clapPluginState;
     QVector<float> clapParameterValues;
+    QVector<QVector<AutomationPoint>> clapParameterAutomation;
     SynthWaveform waveform = SynthWaveform::Sine;
     bool secondOscillatorEnabled = false;
     SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;

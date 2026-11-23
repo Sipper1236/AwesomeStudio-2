@@ -21,6 +21,18 @@ constexpr int trackHeight = 72;
 constexpr int automationLaneHeight = 50;
 constexpr int pluginAutomationTargetBase = 2;
 constexpr int pluginParametersPerEffect = 256;
+constexpr int maximumPluginEffectCount = 8;
+constexpr int clapInstrumentAutomationTargetBase =
+    pluginAutomationTargetBase + pluginParametersPerEffect * maximumPluginEffectCount;
+
+bool decodeClapInstrumentAutomationTarget(int target, qsizetype& parameterIndex)
+{
+    const int encoded = target - clapInstrumentAutomationTargetBase;
+    if (encoded < 0 || encoded >= pluginParametersPerEffect)
+        return false;
+    parameterIndex = encoded;
+    return true;
+}
 QColor trackColour(int index)
 {
     static const QColor palette[] = {
@@ -855,8 +867,18 @@ private:
         if (automationParameter == 1)
             return track.panAutomation;
         static const QVector<AutomationPoint> empty;
+        qsizetype instrumentParameterIndex = 0;
+        if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+        {
+            if (track.instrumentType != InstrumentType::ClapInstrument ||
+                automationPluginUri.isEmpty() || track.clapPluginId != automationPluginUri ||
+                instrumentParameterIndex >= track.clapParameterAutomation.size())
+                return empty;
+            return track.clapParameterAutomation[instrumentParameterIndex];
+        }
         const int encoded = automationParameter - pluginAutomationTargetBase;
-        if (encoded < 0 || automationPluginUri.isEmpty())
+        if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
+            automationPluginUri.isEmpty())
             return empty;
         const qsizetype effectIndex = encoded / pluginParametersPerEffect;
         const qsizetype parameterIndex = encoded % pluginParametersPerEffect;
@@ -875,8 +897,18 @@ private:
             return track.gain;
         if (automationParameter == 1)
             return track.pan;
+        qsizetype instrumentParameterIndex = 0;
+        if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+        {
+            if (track.instrumentType != InstrumentType::ClapInstrument ||
+                automationPluginUri.isEmpty() || track.clapPluginId != automationPluginUri)
+                return automationDefaultValue;
+            return instrumentParameterIndex < track.clapParameterValues.size()
+                ? track.clapParameterValues[instrumentParameterIndex] : automationDefaultValue;
+        }
         const int encoded = automationParameter - pluginAutomationTargetBase;
-        if (encoded < 0 || automationPluginUri.isEmpty())
+        if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
+            automationPluginUri.isEmpty())
             return automationDefaultValue;
         const qsizetype effectIndex = encoded / pluginParametersPerEffect;
         const qsizetype parameterIndex = encoded % pluginParametersPerEffect;
@@ -896,8 +928,19 @@ private:
         if (automationParameter == 1)
             return track.panAutomation;
         static QVector<AutomationPoint> invalid;
+        qsizetype instrumentParameterIndex = 0;
+        if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+        {
+            if (track.instrumentType != InstrumentType::ClapInstrument ||
+                automationPluginUri.isEmpty() || track.clapPluginId != automationPluginUri)
+                return invalid;
+            while (track.clapParameterAutomation.size() <= instrumentParameterIndex)
+                track.clapParameterAutomation.push_back({});
+            return track.clapParameterAutomation[instrumentParameterIndex];
+        }
         const int encoded = automationParameter - pluginAutomationTargetBase;
-        if (encoded < 0 || automationPluginUri.isEmpty())
+        if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
+            automationPluginUri.isEmpty())
             return invalid;
         const qsizetype effectIndex = encoded / pluginParametersPerEffect;
         const qsizetype parameterIndex = encoded % pluginParametersPerEffect;
@@ -915,8 +958,13 @@ private:
     {
         if (automationParameter == 0 || automationParameter == 1)
             return true;
+        qsizetype instrumentParameterIndex = 0;
+        if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+            return track.instrumentType == InstrumentType::ClapInstrument &&
+                !automationPluginUri.isEmpty() && track.clapPluginId == automationPluginUri;
         const int encoded = automationParameter - pluginAutomationTargetBase;
-        if (encoded < 0 || automationPluginUri.isEmpty())
+        if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
+            automationPluginUri.isEmpty())
             return false;
         const qsizetype effectIndex = encoded / pluginParametersPerEffect;
         if (effectIndex >= track.effects.size())

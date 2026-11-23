@@ -172,6 +172,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackInstrumentFilterHasTail.clear();
     trackEffectStates.clear();
     clapInstruments.clear();
+    clapInstrumentLiveParameterOverrides.clear();
     trackEffectHasTail.clear();
     activeEqualizerTailTracks.clear();
     trackBusIndices.clear();
@@ -216,6 +217,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackInstrumentFilterHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackEffectStates.resize(static_cast<size_t>(project->tracks.size()));
     clapInstruments.resize(static_cast<size_t>(project->tracks.size()));
+    clapInstrumentLiveParameterOverrides.resize(static_cast<size_t>(project->tracks.size()));
     trackEffectHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackBusIndices.resize(static_cast<size_t>(project->tracks.size()), -1);
     trackSends.resize(static_cast<size_t>(project->tracks.size()));
@@ -264,6 +266,9 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             clapInstruments[trackIndex] = std::make_unique<ClapAudioPluginInstance>(
                 track.clapPluginId, ClapPluginKind::Instrument, sampleRate,
                 track.clapParameterValues, track.clapPluginState);
+            clapInstrumentLiveParameterOverrides[trackIndex].assign(
+                static_cast<size_t>(clapInstruments[trackIndex]->parameterCount()),
+                std::numeric_limits<float>::quiet_NaN());
         }
         prepareEffectChain(track.effects, trackEffectStates[trackIndex]);
     }
@@ -769,6 +774,29 @@ StereoSample SynthRenderer::finishMixerFrame()
         if (instrument == nullptr || !instrument->isValid() || trackIndex >= trackAudible.size() ||
             trackAudible[trackIndex] == 0)
             continue;
+        const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+        const std::vector<float>& liveOverrides =
+            clapInstrumentLiveParameterOverrides[trackIndex];
+        static const QVector<AutomationPoint> empty;
+        for (qsizetype parameterIndex = 0; parameterIndex < instrument->parameterCount();
+             ++parameterIndex)
+        {
+            const QVector<AutomationPoint>& points =
+                parameterIndex < track.clapParameterAutomation.size()
+                    ? track.clapParameterAutomation[parameterIndex] : empty;
+            const float liveValue = static_cast<size_t>(parameterIndex) < liveOverrides.size()
+                ? liveOverrides[static_cast<size_t>(parameterIndex)]
+                : std::numeric_limits<float>::quiet_NaN();
+            if (points.isEmpty() && !std::isfinite(liveValue))
+                continue;
+            const float baseValue = parameterIndex < track.clapParameterValues.size()
+                ? track.clapParameterValues[parameterIndex]
+                : instrument->parameterValue(parameterIndex);
+            float value = automationValue(points, currentBeat, baseValue);
+            if (std::isfinite(liveValue))
+                value = liveValue;
+            instrument->setParameter(parameterIndex, value);
+        }
         float left = 0.0f;
         float right = 0.0f;
         if (instrument->process(left, right))
@@ -1371,7 +1399,19 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
 void SynthRenderer::setLivePluginParameterOverride(size_t trackIndex, qsizetype effectIndex,
                                                    qsizetype parameterIndex, float value)
 {
-    if (trackIndex >= trackEffectStates.size() || effectIndex < 0 ||
+    if (trackIndex >= trackEffectStates.size() || parameterIndex < 0)
+        return;
+    if (effectIndex == -1)
+    {
+        if (trackIndex >= clapInstrumentLiveParameterOverrides.size())
+            return;
+        std::vector<float>& overrides = clapInstrumentLiveParameterOverrides[trackIndex];
+        if (static_cast<size_t>(parameterIndex) >= overrides.size())
+            return;
+        overrides[static_cast<size_t>(parameterIndex)] = value;
+        return;
+    }
+    if (effectIndex < 0 ||
         effectIndex >= static_cast<qsizetype>(trackEffectStates[trackIndex].size()))
         return;
     std::vector<float>& overrides =

@@ -100,6 +100,9 @@ QString automationCurveName(AutomationPoint::Curve curve)
 
 constexpr int pluginAutomationTargetBase = 2;
 constexpr int pluginParametersPerEffect = 256;
+constexpr int maximumPluginEffectCount = 8;
+constexpr int clapInstrumentAutomationTargetBase =
+    pluginAutomationTargetBase + pluginParametersPerEffect * maximumPluginEffectCount;
 
 int pluginAutomationTarget(qsizetype effectIndex, qsizetype parameterIndex)
 {
@@ -107,11 +110,27 @@ int pluginAutomationTarget(qsizetype effectIndex, qsizetype parameterIndex)
            static_cast<int>(parameterIndex);
 }
 
+int clapInstrumentAutomationTarget(qsizetype parameterIndex)
+{
+    return clapInstrumentAutomationTargetBase + static_cast<int>(parameterIndex);
+}
+
+bool decodeClapInstrumentAutomationTarget(int target, qsizetype& parameterIndex)
+{
+    const int encoded = target - clapInstrumentAutomationTargetBase;
+    if (encoded < 0 || encoded >= pluginParametersPerEffect)
+        return false;
+    parameterIndex = encoded;
+    return true;
+}
+
 bool decodePluginAutomationTarget(int target, qsizetype& effectIndex, qsizetype& parameterIndex)
 {
     if (target < pluginAutomationTargetBase)
         return false;
     const int encoded = target - pluginAutomationTargetBase;
+    if (encoded >= pluginParametersPerEffect * maximumPluginEffectCount)
+        return false;
     effectIndex = encoded / pluginParametersPerEffect;
     parameterIndex = encoded % pluginParametersPerEffect;
     return true;
@@ -124,6 +143,17 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    qsizetype instrumentParameterIndex = 0;
+    if (decodeClapInstrumentAutomationTarget(target, instrumentParameterIndex))
+    {
+        if (track.instrumentType != InstrumentType::ClapInstrument || pluginUri.isEmpty() ||
+            track.clapPluginId != pluginUri)
+            return nullptr;
+        static const QVector<AutomationPoint> empty;
+        if (instrumentParameterIndex >= track.clapParameterAutomation.size())
+            return &empty;
+        return &track.clapParameterAutomation[instrumentParameterIndex];
+    }
     qsizetype effectIndex = 0;
     qsizetype parameterIndex = 0;
     if (!decodePluginAutomationTarget(target, effectIndex, parameterIndex) ||
@@ -145,6 +175,16 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    qsizetype instrumentParameterIndex = 0;
+    if (decodeClapInstrumentAutomationTarget(target, instrumentParameterIndex))
+    {
+        if (track.instrumentType != InstrumentType::ClapInstrument || pluginUri.isEmpty() ||
+            track.clapPluginId != pluginUri)
+            return nullptr;
+        while (track.clapParameterAutomation.size() <= instrumentParameterIndex)
+            track.clapParameterAutomation.push_back({});
+        return &track.clapParameterAutomation[instrumentParameterIndex];
+    }
     qsizetype effectIndex = 0;
     qsizetype parameterIndex = 0;
     if (!decodePluginAutomationTarget(target, effectIndex, parameterIndex) ||
@@ -233,6 +273,33 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
                               .arg(effectIndex + 1).arg(pluginName, parameter.name),
                           pluginAutomationTarget(effectIndex, parameterIndex),
                           parameter.minimum, parameter.maximum, defaultValue, effect.pluginUri);
+            }
+        }
+        if (track->instrumentType == InstrumentType::ClapInstrument &&
+            !track->clapPluginId.isEmpty())
+        {
+            ClapPluginDescriptor descriptor;
+            if (ClapAudioPluginInstance::describe(track->clapPluginId,
+                                                  ClapPluginKind::Instrument, descriptor))
+            {
+                const QString pluginName = track->clapPluginName.isEmpty()
+                    ? descriptor.name : track->clapPluginName;
+                for (qsizetype parameterIndex = 0;
+                     parameterIndex < descriptor.parameters.size() &&
+                         parameterIndex < pluginParametersPerEffect;
+                     ++parameterIndex)
+                {
+                    const ClapPluginParameter& parameter = descriptor.parameters[parameterIndex];
+                    if (parameter.hidden || parameter.readOnly)
+                        continue;
+                    const float defaultValue = parameterIndex < track->clapParameterValues.size()
+                        ? track->clapParameterValues[parameterIndex] : parameter.defaultValue;
+                    addTarget(QObject::tr("Instrument · %1 · %2")
+                                  .arg(pluginName, parameter.name),
+                              clapInstrumentAutomationTarget(parameterIndex),
+                              parameter.minimum, parameter.maximum, defaultValue,
+                              track->clapPluginId);
+                }
             }
         }
     }
@@ -4327,6 +4394,8 @@ void MainWindow::editSelectedClapInstrument()
                 .arg(track->clapPluginName.isEmpty() ? track->name : track->clapPluginName));
         return;
     }
+    const quint64 trackId = track->id;
+    const QString instrumentPluginId = track->clapPluginId;
 
     struct ParameterControl
     {
@@ -4354,12 +4423,55 @@ void MainWindow::editSelectedClapInstrument()
         if (parameter.hidden)
             continue;
         const float value = std::clamp(values[index], parameter.minimum, parameter.maximum);
+        const int automationTarget = clapInstrumentAutomationTarget(index);
+        const auto recordInstrumentParameterChange =
+            [this, trackId, instrumentPluginId, automationTarget, index, parameter](float newValue)
+        {
+            if (automationWriteSession.active &&
+                automationWriteSession.trackId == trackId &&
+                automationWriteSession.parameter == automationTarget &&
+                automationWriteSession.pluginUri == instrumentPluginId)
+            {
+                recordAutomationValue(trackId, automationTarget, newValue);
+                if (automationWriteModeControl->currentData().toInt() != 1)
+                    automationWriteIdleTimer->start(250);
+                return;
+            }
+            if (automationWriteAction == nullptr || !automationWriteAction->isChecked() ||
+                !audioEngine.isPlaying() || automationLaneParameterControl == nullptr ||
+                automationLaneParameterControl->currentData().toInt() != automationTarget)
+                return;
+            InstrumentTrack* currentTrack = project.findTrack(trackId);
+            if (currentTrack == nullptr ||
+                currentTrack->instrumentType != InstrumentType::ClapInstrument ||
+                currentTrack->clapPluginId != instrumentPluginId)
+                return;
+            const float baseValue = index < currentTrack->clapParameterValues.size()
+                ? currentTrack->clapParameterValues[index] : parameter.defaultValue;
+            beginAutomationWrite(trackId, automationTarget, baseValue, instrumentPluginId,
+                                 -1, index, parameter.minimum, parameter.maximum,
+                                 parameter.name);
+            if (automationWriteSession.active &&
+                automationWriteSession.trackId == trackId &&
+                automationWriteSession.parameter == automationTarget &&
+                automationWriteSession.pluginUri == instrumentPluginId)
+            {
+                recordAutomationValue(trackId, automationTarget, newValue);
+                if (automationWriteModeControl->currentData().toInt() != 1)
+                    automationWriteIdleTimer->start(250);
+            }
+        };
         if (parameter.toggled)
         {
             auto* editor = new QCheckBox(formContents);
             editor->setChecked(value >= (parameter.minimum + parameter.maximum) * 0.5f);
             editor->setEnabled(!parameter.readOnly);
             form->addRow(parameter.name, editor);
+            connect(editor, &QCheckBox::toggled, this,
+                    [parameter, recordInstrumentParameterChange](bool checked)
+            {
+                recordInstrumentParameterChange(checked ? parameter.maximum : parameter.minimum);
+            });
             controls.push_back({index, editor});
         }
         else
@@ -4374,6 +4486,11 @@ void MainWindow::editSelectedClapInstrument()
             editor->setValue(value);
             editor->setEnabled(!parameter.readOnly);
             form->addRow(parameter.name, editor);
+            connect(editor, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                    [recordInstrumentParameterChange](double newValue)
+            {
+                recordInstrumentParameterChange(static_cast<float>(newValue));
+            });
             controls.push_back({index, editor});
         }
     }
@@ -4393,7 +4510,6 @@ void MainWindow::editSelectedClapInstrument()
     if (dialog.exec() != QDialog::Accepted)
         return;
 
-    const quint64 trackId = track->id;
     audioEngine.capturePluginStates(project);
     track = project.findTrack(trackId);
     if (track == nullptr)

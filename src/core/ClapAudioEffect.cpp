@@ -769,6 +769,18 @@ qsizetype ClapAudioPluginInstance::parameterCount() const
 #endif
 }
 
+float ClapAudioPluginInstance::parameterValue(qsizetype index) const
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d == nullptr || index < 0 || index >= static_cast<qsizetype>(d->controlValues.size()))
+        return 0.0f;
+    return d->controlValues[static_cast<size_t>(index)];
+#else
+    Q_UNUSED(index)
+    return 0.0f;
+#endif
+}
+
 void ClapAudioPluginInstance::setParameter(qsizetype index, float value)
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)

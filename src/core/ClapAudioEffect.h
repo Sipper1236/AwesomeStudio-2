@@ -55,6 +55,7 @@ public:
 
     bool isValid() const;
     qsizetype parameterCount() const;
+    float parameterValue(qsizetype index) const;
     void setParameter(qsizetype index, float value);
     void noteOn(std::int32_t noteId, int channel, int key, float velocity);
     void noteOff(std::int32_t noteId, int channel, int key, float velocity = 0.0f);
