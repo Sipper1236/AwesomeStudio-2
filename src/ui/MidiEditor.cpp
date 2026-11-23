@@ -1,550 +1,511 @@
-// MidiEditor.cpp
-// MIDI piano roll editor implementation for Awesome Studio DAW
-
 #include "MidiEditor.h"
-#include <JuceHeader.h>
-#include <cmath>
+
+#include <QKeyEvent>
+#include <QPainter>
+#include <QScrollBar>
+#include <QSet>
+#include <QMouseEvent>
+#include <QTimer>
+
 #include <algorithm>
+#include <cmath>
 
-//==============================================================================
-MidiEditor::MidiEditor()
-    : isEditing(false), editingNoteIndex(-1), editingStartTime(0),
-      transportPosition(0.0), playbackRate(1.0),
-      horizontalZoom(1.0), verticalZoom(1.0),
-      visibleStartTime(0), visibleEndTime(120), // 2 minutes visible
-      isDraggingNote(false), isDraggingBottomEdge(false),
-      isDraggingLeftEdge(false), isEditingVelocity(false)
+namespace
 {
-    // Initialize note colors for different pitch ranges
-    for (int i = 0; i < 128; i++) {
-        // Color based on octave - higher octaves = brighter colors
-        int octave = i / 12;
-        int noteInOctave = i % 12;
+constexpr int sidebarWidth = 58;
+constexpr int rulerHeight = 30;
+constexpr int rowHeight = 18;
+constexpr int velocityHeight = 100;
+constexpr int lowestPitch = 0;
+constexpr int highestPitch = 127;
+constexpr int pitchCount = highestPitch - lowestPitch + 1;
 
-        // Create a hue based on the note
-        float hue = (noteInOctave * 30.0f) % 360.0f;
-        float saturation = 0.7f + (octave * 0.1f);
-        float value = 0.9f - (octave * 0.05f);
-
-        // Clamp value
-        value = jlimit(0.1f, 1.0f, value);
-
-        noteColours[i] = juce::Colour::fromHSV(hue, saturation, value);
-    }
-
-    // Set timer for updates (every 50ms)
-    startTimer(50);
+bool isBlackKey(int pitchClass)
+{
+    return pitchClass == 1 || pitchClass == 3 || pitchClass == 6 ||
+           pitchClass == 8 || pitchClass == 10;
 }
 
-//==============================================================================
-MidiEditor::~MidiEditor()
+QString noteLabel(int pitch)
 {
-    stopTimer();
+    static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    return QStringLiteral("%1%2").arg(QString::fromLatin1(names[pitch % 12])).arg(pitch / 12 - 1);
+}
 }
 
-//==============================================================================
-void MidiEditor::paint(juce::Graphics& g)
+class MidiEditor::Canvas final : public QWidget
 {
-    // Background
-    g.fillAll(juce::Colours::black);
-
-    // Draw grid
-    g.setColour(juce::Colours::darkgrey);
-
-    // Calculate visible area
-    int width = getWidth();
-    int height = getHeight();
-
-    // Horizontal grid lines (note rows)
-    for (int i = 0; i <= 128; i += 12) { // Every octave
-        int y = jmap(i, 0, 128, height, 0); // Inverted Y axis
-        g.drawLine(0, y, width, y, 1.0f);
+public:
+    explicit Canvas(MidiEditor* owner) : QWidget(owner), owner(owner)
+    {
+        setFocusPolicy(Qt::StrongFocus);
+        setMouseTracking(true);
+        setLengthBeats(16.0);
     }
 
-    // Vertical grid lines (time divisions)
-    int beatsPerView = 4; // Show 4 beats
-    int secondsPerBeat = 2.0; // 2 seconds per beat at current tempo
-    int pixelsPerBeat = jmap(beatsPerView, 1, 16, 50, width);
+    void setNotes(const QVector<MidiNote>& newNotes)
+    {
+        notes = newNotes;
+        QSet<quint64> existingIds;
+        for (const MidiNote& note : notes)
+            existingIds.insert(note.id);
+        for (auto it = selected.cbegin(); it != selected.cend();)
+        {
+            if (!existingIds.contains(*it))
+                it = selected.erase(it);
+            else
+                ++it;
+        }
+        update();
 
-    for (int i = 0; i < (width / pixelsPerBeat) + 2; i++) {
-        int x = jmap(i, 0, width / pixelsPerBeat + 2, 0, width);
-        if (x > 0 && x < width) {
-            g.drawLine(x, 0, x, height, 0.5f);
+        int topPitch = 84;
+        if (!notes.isEmpty())
+        {
+            int highestNote = lowestPitch;
+            for (const MidiNote& note : notes)
+                highestNote = std::max(highestNote, note.pitch);
+            topPitch = std::min(highestPitch, highestNote + 2);
+        }
+        const int scrollTo = (highestPitch - topPitch) * rowHeight;
+        QTimer::singleShot(0, owner, [this, scrollTo]
+        {
+            owner->verticalScrollBar()->setValue(scrollTo);
+        });
+    }
+
+    void setLengthBeats(double beats)
+    {
+        patternLength = std::max(1.0, beats);
+        updateCanvasSize();
+    }
+
+    void setSnap(double beatStep)
+    {
+        snap = std::clamp(beatStep, 1.0 / 64.0, 4.0);
+    }
+
+    void setPixelsPerBeat(int pixels)
+    {
+        pixelsPerBeat = std::clamp(pixels, 36, 180);
+        updateCanvasSize();
+    }
+
+    void setPlayheadBeat(double beat)
+    {
+        playheadBeat = beat;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.fillRect(rect(), QColor(QStringLiteral("#12161c")));
+
+        const int gridTop = rulerHeight;
+        const int gridBottom = gridTop + pitchCount * rowHeight;
+        const int velocityTop = gridBottom;
+        const int gridWidth = static_cast<int>(std::ceil(patternLength * pixelsPerBeat));
+
+        painter.fillRect(QRect(sidebarWidth, 0, gridWidth, rulerHeight), QColor(QStringLiteral("#1c222a")));
+        painter.fillRect(QRect(0, 0, sidebarWidth, rulerHeight), QColor(QStringLiteral("#202731")));
+        painter.fillRect(QRect(0, gridTop, sidebarWidth, pitchCount * rowHeight), QColor(QStringLiteral("#303844")));
+        painter.fillRect(QRect(sidebarWidth, velocityTop, gridWidth, velocityHeight), QColor(QStringLiteral("#171c23")));
+
+        for (int row = 0; row < pitchCount; ++row)
+        {
+            const int pitch = highestPitch - row;
+            const int y = gridTop + row * rowHeight;
+            const bool blackKey = isBlackKey(pitch % 12);
+            const QColor lane = blackKey ? QColor(QStringLiteral("#171c23")) : QColor(QStringLiteral("#1b2129"));
+            painter.fillRect(QRect(sidebarWidth, y, gridWidth, rowHeight), lane);
+            painter.setPen(QColor(QStringLiteral("#29313b")));
+            painter.drawLine(sidebarWidth, y + rowHeight - 1, sidebarWidth + gridWidth, y + rowHeight - 1);
+
+            const QColor key = blackKey ? QColor(QStringLiteral("#303944")) : QColor(QStringLiteral("#b9c1cc"));
+            painter.fillRect(QRect(0, y, sidebarWidth - (blackKey ? 0 : 1), rowHeight - 1), key);
+            if (pitch % 12 == 0)
+            {
+                painter.setPen(blackKey ? QColor(QStringLiteral("#f2f5f8")) : QColor(QStringLiteral("#202730")));
+                painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
+                painter.drawText(QRect(7, y, sidebarWidth - 11, rowHeight - 1), Qt::AlignVCenter | Qt::AlignLeft,
+                                 noteLabel(pitch));
+            }
+        }
+
+        const int totalBeats = static_cast<int>(std::ceil(patternLength));
+        for (int beat = 0; beat <= totalBeats; ++beat)
+        {
+            const int x = sidebarWidth + beat * pixelsPerBeat;
+            const bool barLine = beat % 4 == 0;
+            painter.setPen(barLine ? QColor(QStringLiteral("#56616e")) : QColor(QStringLiteral("#303944")));
+            painter.drawLine(x, rulerHeight, x, velocityTop + velocityHeight);
+            if (barLine && beat < patternLength)
+            {
+                painter.setPen(QColor(QStringLiteral("#e3e9ef")));
+                painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
+                painter.drawText(QRect(x + 6, 0, pixelsPerBeat * 4 - 12, rulerHeight), Qt::AlignVCenter,
+                                 QString::number(beat / 4 + 1));
+            }
+        }
+
+        painter.setPen(QColor(QStringLiteral("#75818e")));
+        painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
+        painter.drawText(QRect(8, velocityTop + 7, sidebarWidth - 12, 20), Qt::AlignLeft | Qt::AlignVCenter,
+                         QStringLiteral("VELOCITY"));
+
+        if (notes.isEmpty())
+        {
+            painter.setPen(QColor(QStringLiteral("#85919e")));
+            painter.setFont(QFont(QStringLiteral("Sans Serif"), 10));
+            painter.drawText(QRect(sidebarWidth + 12, gridTop + 12, gridWidth - 24, 28), Qt::AlignLeft | Qt::AlignVCenter,
+                             QStringLiteral("Click and drag on the grid to draw notes. Right-click to delete."));
+        }
+
+        for (const MidiNote& note : notes)
+        {
+            const QRectF bounds = noteBounds(note);
+            const bool isSelected = selected.contains(note.id);
+            const QColor fill = isSelected ? QColor(QStringLiteral("#4ccfbd")) : QColor(QStringLiteral("#4e9dc1"));
+            painter.setPen(QPen(isSelected ? QColor(QStringLiteral("#b9fff3")) : QColor(QStringLiteral("#79c7df")), 1.0));
+            painter.setBrush(fill);
+            painter.drawRoundedRect(bounds, 3.0, 3.0);
+
+            painter.setPen(isSelected ? QColor(QStringLiteral("#112b2c")) : QColor(QStringLiteral("#10232c")));
+            painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
+            if (bounds.width() > 48.0)
+                painter.drawText(bounds.adjusted(6.0, 0.0, -3.0, 0.0), Qt::AlignVCenter | Qt::AlignLeft,
+                                 noteLabel(note.pitch));
+
+            const int velocityX = static_cast<int>(std::round(sidebarWidth +
+                (note.startBeat + note.lengthBeats * 0.5) * pixelsPerBeat));
+            const int velocityY = velocityTop + velocityHeight - 8 - note.velocity * (velocityHeight - 25) / 127;
+            painter.setPen(QPen(isSelected ? QColor(QStringLiteral("#70e0ce")) : QColor(QStringLiteral("#6a8c9b")),
+                                isSelected ? 2.0 : 1.0));
+            painter.drawLine(velocityX, velocityTop + velocityHeight - 5, velocityX, velocityY);
+            painter.setBrush(isSelected ? QColor(QStringLiteral("#70e0ce")) : QColor(QStringLiteral("#6a8c9b")));
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(QPointF(velocityX, velocityY), 3.0, 3.0);
+        }
+
+        if (playheadBeat >= 0.0 && playheadBeat <= patternLength)
+        {
+            const int x = sidebarWidth + static_cast<int>(std::round(playheadBeat * pixelsPerBeat));
+            painter.setPen(QPen(QColor(QStringLiteral("#f1a85c")), 2.0));
+            painter.drawLine(x, rulerHeight, x, velocityTop + velocityHeight);
+            painter.setBrush(QColor(QStringLiteral("#f1a85c")));
+            painter.setPen(Qt::NoPen);
+            painter.drawPolygon(QPolygon{QPoint(x - 5, 0), QPoint(x + 5, 0), QPoint(x, 7)});
         }
     }
 
-    // Draw notes
-    for (const auto& note : notes) {
-        // Check if note is in visible range
-        if (note.endTime < visibleStartTime * getSampleRate() ||
-            note.startTime > visibleEndTime * getSampleRate()) {
-            continue;
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        setFocus(Qt::MouseFocusReason);
+        const QPoint point = event->position().toPoint();
+        if (event->button() == Qt::LeftButton && point.x() < sidebarWidth &&
+            point.y() >= rulerHeight && point.y() < rulerHeight + pitchCount * rowHeight)
+        {
+            emit owner->previewRequested(pitchAt(point.y()));
+            return;
         }
 
-        // Calculate position
-        int noteY = jmap(note.noteNumber, 0, 128, height, 0);
-        int64_t noteStart = note.startTime;
-        int64_t noteEnd = note.endTime;
-
-        // Clip to visible range
-        int64_t startClip = jmax(noteStart, visibleStartTime * getSampleRate());
-        int64_t endClip = jmin(noteEnd, visibleEndTime * getSampleRate());
-
-        if (startClip >= endClip) continue;
-
-        int xStart = jmap(startClip, visibleStartTime * getSampleRate(), visibleEndTime * getSampleRate(), 0, width);
-        int xEnd = jmap(endClip, visibleStartTime * getSampleRate(), visibleEndTime * getSampleRate(), 0, width);
-
-        // Skip if note is completely outside visible area
-        if (xEnd <= 0 || xStart >= width) continue;
-
-        // Ensure valid coordinates
-        xStart = jmax(0, xStart);
-        xEnd = jmin(width, xEnd);
-        noteY = jmax(0, jmin(height, noteY));
-
-        // Draw note rectangle
-        g.setColour(note.colour);
-        g.fillRect(xStart, noteY + 2, xEnd - xStart, 12); // 12px height note
-
-        // Draw note border
-        g.setColour(juce::Colours::white);
-        g.drawRect(xStart, noteY + 2, xStart + xStart - xStart, 12, 1.0f);
-
-        // Draw selected border
-        if (note.isSelected) {
-            g.setColour(juce::Colours::yellow);
-            g.drawRect(xStart - 2, noteY, xEnd - xStart + 4, 16, 2.0f);
+        if (event->button() == Qt::RightButton)
+        {
+            const int hit = noteAt(point);
+            if (hit >= 0)
+            {
+                const QVector<MidiNote> before = notes;
+                selected.remove(notes[hit].id);
+                notes.removeAt(hit);
+                commitIfChanged(before);
+                update();
+            }
+            return;
         }
+        if (event->button() != Qt::LeftButton)
+            return;
 
-        // Draw note name/number
-        g.setColour(juce::Colours::white);
-        g.setFont(9.0f);
-        juce::String noteName = juce::MidiMessage::getMidiNoteName(note.noteNumber);
-        g.drawText(noteName, xStart, noteY + 14, xEnd - xStart, 10,
-                   juce::Justification::centredTop);
+        const int velocityTop = rulerHeight + pitchCount * rowHeight;
+        if (point.y() >= velocityTop && point.y() < velocityTop + velocityHeight)
+        {
+            const int hit = noteNearVelocity(point.x());
+            if (hit < 0)
+                return;
+            beforeEdit = notes;
+            if (!selected.contains(notes[hit].id))
+                selected = {notes[hit].id};
+            draggedNoteId = notes[hit].id;
+            dragMode = DragMode::Velocity;
+            setVelocityAt(point.y());
+            update();
+            return;
+        }
+        if (point.y() < rulerHeight || point.y() >= velocityTop || point.x() < sidebarWidth)
+            return;
+
+        const int hit = noteAt(point);
+        beforeEdit = notes;
+        dragStart = point;
+        originalNotes = notes;
+        if (hit >= 0)
+        {
+            const MidiNote target = notes[hit];
+            if (event->modifiers().testFlag(Qt::ShiftModifier))
+            {
+                selected.insert(target.id);
+            }
+            else if (!selected.contains(target.id))
+            {
+                selected = {target.id};
+            }
+            draggedNoteId = target.id;
+            const QRectF bounds = noteBounds(target);
+            dragMode = point.x() >= bounds.right() - 9.0 ? DragMode::Resize : DragMode::Move;
+        }
+        else
+        {
+            selected.clear();
+            const double minimumLength = std::min(snap, patternLength);
+            const double startBeat = std::min(snapDown(beatAt(point.x())),
+                                              std::max(0.0, patternLength - minimumLength));
+            MidiNote note;
+            note.id = nextId();
+            note.pitch = pitchAt(point.y());
+            note.velocity = 96;
+            note.startBeat = startBeat;
+            note.lengthBeats = std::min(snap, std::max(1.0 / 64.0, patternLength - startBeat));
+            notes.push_back(note);
+            selected.insert(note.id);
+            draggedNoteId = note.id;
+            dragMode = DragMode::Create;
+            emit owner->previewRequested(note.pitch);
+        }
+        update();
     }
 
-    // Draw selected notes highlight
-    for (const auto& note : selectedNotes) {
-        if (note.endTime < visibleStartTime * getSampleRate() ||
-            note.startTime > visibleEndTime * getSampleRate()) {
-            continue;
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        if (dragMode == DragMode::None)
+            return;
+        const QPoint point = event->position().toPoint();
+
+        if (dragMode == DragMode::Velocity)
+        {
+            setVelocityAt(point.y());
+            update();
+            return;
         }
 
-        int noteY = jmap(note.noteNumber, 0, 128, height, 0);
-        int64_t noteStart = note.startTime;
-        int64_t noteEnd = note.endTime;
-
-        int64_t startClip = jmax(noteStart, visibleStartTime * getSampleRate());
-        int64_t endClip = jmin(noteEnd, visibleEndTime * getSampleRate());
-
-        if (startClip >= endClip) continue;
-
-        int xStart = jmap(startClip, visibleStartTime * getSampleRate(), visibleEndTime * getSampleRate(), 0, width);
-        int xEnd = jmap(endClip, visibleStartTime * getSampleRate(), visibleEndTime * getSampleRate(), 0, width);
-
-        xStart = jmax(0, xStart);
-        xEnd = jmin(width, xEnd);
-        noteY = jmax(0, jmin(height, noteY));
-
-        g.setColour(juce::Colours::yellow.withAlpha(0.5f));
-        g.fillRect(xStart - 2, noteY, xEnd - xStart + 4, 16);
-    }
-
-    // Draw playhead (current position)
-    double playheadX = jmap(transportPosition, visibleStartTime * getSampleRate(),
-                            visibleEndTime * getSampleRate(), 0, width);
-    g.setColour(juce::Colours::yellow);
-    g.drawLine(playheadX, 0, playheadX, getHeight(), 2.0f);
-
-    // Draw rulers
-    g.setColour(juce::Colours::darkgrey);
-    g.drawLine(0, 0, 0, getHeight(), 1.0f);
-    g.drawLine(0, getHeight() - 12, getWidth(), getHeight() - 12, 1.0f);
-}
-
-//==============================================================================
-void MidiEditor::resized()
-{
-    // Component resized - no child components to layout explicitly
-}
-
-//==============================================================================
-void MidiEditor::mouseDown(const juce::MouseEvent& event)
-{
-    isDraggingNote = false;
-    isDraggingBottomEdge = false;
-    isDraggingLeftEdge = false;
-    isEditingVelocity = false;
-
-    // Find note under mouse
-    int mouseY = event.y;
-    int mouseX = event.x;
-
-    // Convert Y to note number
-    int noteNumber = jmap(mouseY, getHeight(), 0, 0, 127);
-    noteNumber = jclamp(noteNumber, 0, 127);
-
-    // Find note at this position
-    for (int i = 0; i < (int)notes.size(); i++) {
-        const auto& note = notes[i];
-
-        // Check if mouse is within note bounds
-        int noteY = jmap(note.noteNumber, 0, 128, getHeight(), 0);
-        int noteHeight = 12;
-
-        if (mouseY >= noteY && mouseY <= noteY + noteHeight) {
-            // Check if within note time range
-            int64_t noteStart = note.startTime;
-            int64_t noteEnd = note.endTime;
-            int64_t startClip = jmax(noteStart, visibleStartTime * getSampleRate());
-            int64_t endClip = jmin(noteEnd, visibleEndTime * getSampleRate());
-
-            int noteXStart = jmap(startClip, visibleStartTime * getSampleRate(), visibleEndTime * getSampleRate(), 0, getWidth());
-            int xEnd = jmap(endClip, visibleStartTime * getSampleRate(), visibleEndTime * getSampleRate(), 0, getWidth());
-            int noteXEnd = xStart + (endClip - startClip) * getWidth() / ((visibleEndTime - visibleStartTime) * getSampleRate());
-
-            if (mouseX >= xStart && mouseX <= noteXEnd) {
-                // Found note under mouse
-                isDraggingNote = true;
-                editingNoteIndex = i;
-                editingStartTime = note.startTime;
-                dragStartPos = event.eventPosition;
-
-                // Select this note
-                selectedNotes.clear();
-                selectedNotes.push_back(note);
-
-                // Begin dragging based on where clicked
-                int clickYRelativeToNote = mouseY - noteY;
-                if (clickYRelativeToNote < 4) { // Near top edge - drag up/down
-                    isDraggingBottomEdge = false;
-                    isDraggingLeftEdge = false;
-                }
-                else if (clickYRelativeToNote > noteHeight - 4) { // Near bottom edge
-                    isDraggingBottomEdge = true;
-                }
-                else if (mouseX < getWidth() / 2) { // Left half - velocity edit
-                    isEditingVelocity = true;
-                }
-
+        if (dragMode == DragMode::Move)
+        {
+            const double deltaBeat = std::round(((point.x() - dragStart.x()) / static_cast<double>(pixelsPerBeat)) / snap) * snap;
+            const int deltaPitch = static_cast<int>(std::round((dragStart.y() - point.y()) / static_cast<double>(rowHeight)));
+            notes = originalNotes;
+            for (MidiNote& note : notes)
+            {
+                if (!selected.contains(note.id))
+                    continue;
+                note.startBeat = std::clamp(note.startBeat + deltaBeat, 0.0,
+                                            std::max(0.0, patternLength - note.lengthBeats));
+                note.pitch = std::clamp(note.pitch + deltaPitch, 0, 127);
+            }
+        }
+        else if (dragMode == DragMode::Resize || dragMode == DragMode::Create)
+        {
+            const double endBeat = snapNearest(beatAt(point.x()));
+            const double minimumLength = std::min(snap, patternLength);
+            for (MidiNote& note : notes)
+            {
+                if (note.id != draggedNoteId)
+                    continue;
+                note.lengthBeats = std::clamp(endBeat - note.startBeat, minimumLength,
+                                              std::max(minimumLength, patternLength - note.startBeat));
                 break;
             }
-    }
-
-    // Start a new note if clicking in empty space (with modifier)
-    if (!isDraggingNote && !isEditingVelocity && !ModifierKeys::getCurrentModifiers().isCommandDown()) {
-        // Add new note at mouse position
-        int64_t mouseTime = visibleStartTime * getSampleRate() +
-            jmap(mouseX, 0, getWidth(), visibleStartTime * getSampleRate(),
-                 visibleEndTime * getSampleRate());
-
-        addNote(noteNumber, 100, mouseTime, mouseTime + getSampleRate() / 4); // 1/4 note default
-        selectedNotes.clear();
-        selectedNotes.push_back(notes.back());
-        isDraggingNote = true;
-        editingNoteIndex = (int)notes.size() - 1;
-        editingStartTime = notes.back().startTime;
-    }
-}
-
-//==============================================================================
-void MidiEditor::mouseUp(const juce::MouseEvent& event)
-{
-    isDraggingNote = false;
-    isDraggingBottomEdge = false;
-    isDraggingLeftEdge = false;
-    isEditingVelocity = false;
-
-    // If dragging a note, handle the drag completion
-    if (editingNoteIndex >= 0 && editingNoteIndex < (int)notes.size()) {
-        // Snap to grid
-        // ... would implement grid snapping here
-    }
-
-    // Deselect if clicking outside notes
-    if (!isDraggingNote && !ModifierKeys::getCurrentModifiers().isShiftDown()) {
-        deselectAllNotes();
-    }
-}
-
-//==============================================================================
-void MidiEditor::mouseMove(const juce::MouseEvent& event)
-{
-    if (isDraggingNote && editingNoteIndex >= 0 && editingNoteIndex < (int)notes.size()) {
-        // Drag note horizontally (change time)
-        if (!isEditingVelocity && !isDraggingBottomEdge && !isDraggingLeftEdge) {
-            int64_t newTime = editNoteTime(editingNoteIndex, event.eventPosition.x);
-            if (newTime != notes[editingNoteIndex].startTime) {
-                notes[editingNoteIndex].startTime = newTime;
-                // Also adjust end time to maintain note duration
-                notes[editingNoteIndex].endTime = notes[editingNoteIndex].startTime +
-                    (notes[editingNoteIndex].endTime - notes[editingNoteIndex].startTime);
-            }
         }
-        // Drag bottom edge (change duration)
-        else if (isDraggingBottomEdge) {
-            int64_t newEndTime = editNoteTime(editingNoteIndex, event.eventPosition.x, true);
-            if (newEndTime != notes[editingNoteIndex].endTime) {
-                notes[editingNoteIndex].endTime = newEndTime;
-            }
-        }
-        // Drag left edge (change start time)
-        else if (isDraggingLeftEdge) {
-            int64_t newStartTime = editNoteTime(editingNoteIndex, event.eventPosition.x, false, true);
-            if (newStartTime != notes[editingNoteIndex].startTime) {
-                notes[editingNoteIndex].startTime = newStartTime;
-                // Adjust end time to maintain duration or velocity
-                notes[editingNoteIndex].endTime = notes[editingNoteIndex].startTime +
-                    (notes[editingNoteIndex].endTime - notes[editingNoteIndex].startTime);
-            }
-        }
-
-        // Update velocity if in velocity edit mode
-        if (isEditingVelocity) {
-            // ... would update velocity based on Y position
-        }
-
-        // Repaint
-        repaint();
-        return;
+        update();
     }
 
-    // If editing velocity
-    if (isEditingVelocity) {
-        // Update velocity based on Y position
-        int mouseY = event.y;
-        int noteY = 0; // Would need to know which note
-        // ... would update velocity
-        repaint();
-    }
-}
-
-//==============================================================================
-void MidiEditor::mouseDoubleClick(const juce::MouseEvent& event)
-{
-    // Double-click on empty space - might open note properties
-    // or start a new note at that position
-    if (!isDraggingNote) {
-        int mouseY = event.y;
-        int mouseX = event.x;
-
-        // Convert Y to note number
-        int noteNumber = jmap(mouseY, getHeight(), 0, 0, 127);
-        noteNumber = jclamp(noteNumber, 0, 127);
-
-        // Add new note at mouse position
-        int64_t mouseTime = visibleStartTime * getSampleRate() +
-            jmap(mouseX, 0, getWidth(), visibleStartTime * getSampleRate(),
-                 visibleEndTime * getSampleRate());
-
-        addNote(noteNumber, 100, mouseTime, mouseTime + getSampleRate() / 4);
-        selectedNotes.clear();
-        selectedNotes.push_back(notes.back());
-    }
-}
-
-//==============================================================================
-void MidiEditor::keyPressed(const juce::KeyPress& key)
-{
-    // Handle keyboard commands for the piano roll
-    if (key == juce::KeyPress('delete', juce::ModifierKeys::deleteKey, 0)) {
-        // Delete selected notes
-        deselectAllNotes();
-        // Remove selected notes from list
-        for (auto it = notes.rbegin(); it != notes.rend(); ) {
-            if (std::find(selectedNotes.begin(), selectedNotes.end(), *it) != selectedNotes.end()) {
-                it = notes.erase(std::next(it).base());
-            }
-            else {
-                ++it;
-            }
-        }
-        selectedNotes.clear();
-        repaint();
-    }
-    else if (key == juce::KeyPress('c', juce::ModifierKeys::controlKey, 0)) {
-        // Copy selected notes
-        // ... would implement copy
-    }
-    else if (key == juce::KeyPress('x', juce::ModifierKeys::controlKey, 0)) {
-        // Cut selected notes
-        // ... would implement cut
-    }
-    else if (key == juce::KeyPress('v', juce::ModifierKeys::controlKey, 0)) {
-        // Paste notes
-        // ... would implement paste
-    }
-    else if (key == juce::KeyPress('z', juce::ModifierKeys::controlKey, 0)) {
-        // Undo
-        // ... would implement undo
-    }
-    else if (key == juce::KeyPress('y', juce::ModifierKeys::controlKey, 0)) {
-        // Redo
-        // ... would implement redo
-    }
-    else {
-        // Handle arrow keys for note movement
-        if (key == juce::KeyPress::arrowUpKey) {
-            // Move selected notes up one semitone
-            for (auto& note : selectedNotes) {
-                note.noteNumber = jclamp(note.noteNumber - 1, 0, 127);
-            }
-            repaint();
-        }
-        else if (key == juce::KeyPress::arrowDownKey) {
-            // Move selected notes down one semitone
-            for (auto& note : selectedNotes) {
-                note.noteNumber = jclamp(note.noteNumber + 1, 0, 127);
-            }
-            repaint();
-        }
-        else if (key == juce::KeyPress::arrowLeftKey) {
-            // Move selected notes left (earlier)
-            for (auto& note : selectedNotes) {
-                note.startTime = jmax(0, note.startTime - getSampleRate() / 4); // 16th note
-            }
-            repaint();
-        }
-        else if (key == juce::KeyPress::arrowRightKey) {
-            // Move selected notes right (later)
-            for (auto& note : selectedNotes) {
-                note.startTime = note.startTime + getSampleRate() / 4; // 16th note
-            }
-            repaint();
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton && dragMode != DragMode::None)
+        {
+            dragMode = DragMode::None;
+            commitIfChanged(beforeEdit);
+            update();
         }
     }
-}
 
-//==============================================================================
-void MidiEditor::keyReleased(const juce::KeyPress& key)
-{
-    // Handle key release if needed
-}
-
-//==============================================================================
-void MidiEditor::timerCallback()
-{
-    // Update transport position based on playback state
-    // This would be connected to the actual transport
-    // For now, just repaint to show playhead position
-    repaint();
-}
-
-//==============================================================================
-void MidiEditor::addNote(int noteNumber, int velocity, int64_t startTime, int64_t endTime)
-{
-    MidiNote note;
-    note.noteNumber = jclamp(noteNumber, 0, 127);
-    note.velocity = jclamp(velocity, 0, 127);
-    note.startTime = jclamp(startTime, 0, 999999999);
-    note.endTime = jclamp(endTime, 0, 999999999);
-    note.isPlaying = false;
-    note.isSelected = false;
-    note.colour = noteColours[note.noteNumber];
-
-    notes.push_back(note);
-}
-
-//==============================================================================
-void MidiEditor::removeNote(int noteNumber, int64_t startTime)
-{
-    for (auto it = notes.begin(); it != notes.end(); ++it) {
-        if (it->noteNumber == noteNumber && it->startTime == startTime) {
-            notes.erase(it);
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !selected.isEmpty())
+        {
+            const QVector<MidiNote> before = notes;
+            notes.erase(std::remove_if(notes.begin(), notes.end(), [this](const MidiNote& note)
+            {
+                return selected.contains(note.id);
+            }), notes.end());
+            selected.clear();
+            commitIfChanged(before);
+            update();
             return;
         }
-    }
-}
-
-//==============================================================================
-void MidiEditor::selectNote(int noteNumber, int64_t startTime)
-{
-    // Find and select note
-    for (auto& note : notes) {
-        if (note.noteNumber == noteNumber && note.startTime == startTime) {
-            note.isSelected = true;
-            selectedNotes.push_back(note);
+        if (event->key() == Qt::Key_Escape)
+        {
+            selected.clear();
+            update();
             return;
         }
+        QWidget::keyPressEvent(event);
     }
-}
 
-//==============================================================================
-void MidiEditor::deselectAllNotes()
-{
-    for (auto& note : notes) {
-        note.isSelected = false;
+private:
+    enum class DragMode { None, Create, Move, Resize, Velocity };
+
+    void updateCanvasSize()
+    {
+        const int width = sidebarWidth + static_cast<int>(std::ceil(patternLength * pixelsPerBeat)) + 40;
+        const int height = rulerHeight + pitchCount * rowHeight + velocityHeight;
+        setMinimumSize(width, height);
+        resize(width, height);
+        update();
     }
-    selectedNotes.clear();
-}
 
-//==============================================================================
-const std::vector<MidiNote>& MidiEditor::getSelectedNotes() const
-{
-    return selectedNotes;
-}
-
-//==============================================================================
-const std::vector<MidiNote>& MidiEditor::getAllNotes() const
-{
-    return notes;
-}
-
-//==============================================================================
-void MidiEditor::setTransportInfo(double position, double playbackRate)
-{
-    this->transportPosition = position;
-    this->playbackRate = playbackRate;
-    repaint(); // Update playhead position
-}
-
-//==============================================================================
-double MidiEditor::getTransportPosition() const
-{
-    return transportPosition;
-}
-
-//==============================================================================
-int64_t MidiEditor::editNoteTime(int noteIndex, int mouseX, bool isEnd /*= false*/,
-                                  bool isStart /*= false*/)
-{
-    // Convert mouse X position to time
-    int64_t mouseTime = visibleStartTime * getSampleRate() +
-        jmap(mouseX, 0, getWidth(), visibleStartTime * getSampleRate(),
-             visibleEndTime * getSampleRate());
-
-    if (isEnd) {
-        // Clip to valid range
-        int64_t minTime = notes[noteIndex].startTime;
-        int64_t maxTime = visibleEndTime * getSampleRate();
-        return jmax(minTime, jmin(mouseTime, maxTime));
+    double beatAt(int x) const
+    {
+        return std::clamp((x - sidebarWidth) / static_cast<double>(pixelsPerBeat), 0.0, patternLength);
     }
-    else if (isStart) {
-        int64_t minTime = visibleStartTime * getSampleRate();
-        int64_t maxTime = jmin(notes[noteIndex].endTime - 1, visibleEndTime * getSampleRate());
-        return jmax(minTime, jmin(mouseTime, maxTime));
+
+    int pitchAt(int y) const
+    {
+        const int row = std::clamp((y - rulerHeight) / rowHeight, 0, pitchCount - 1);
+        return std::clamp(highestPitch - row, 0, 127);
     }
-    else {
-        // Just return the time
-        return mouseTime;
+
+    double snapDown(double beat) const
+    {
+        return std::floor(beat / snap) * snap;
     }
+
+    double snapNearest(double beat) const
+    {
+        return std::round(beat / snap) * snap;
+    }
+
+    QRectF noteBounds(const MidiNote& note) const
+    {
+        const int row = highestPitch - note.pitch;
+        const qreal x = sidebarWidth + note.startBeat * pixelsPerBeat + 1.0;
+        const qreal y = rulerHeight + row * rowHeight + 1.0;
+        return QRectF(x, y, std::max(3.0, note.lengthBeats * pixelsPerBeat - 2.0), rowHeight - 2.0);
+    }
+
+    int noteAt(const QPoint& point) const
+    {
+        for (int index = notes.size() - 1; index >= 0; --index)
+        {
+            if (noteBounds(notes[index]).contains(point))
+                return index;
+        }
+        return -1;
+    }
+
+    int noteNearVelocity(int x) const
+    {
+        int nearest = -1;
+        int nearestDistance = 8;
+        for (int index = 0; index < notes.size(); ++index)
+        {
+            const int noteX = static_cast<int>(std::round(sidebarWidth +
+                (notes[index].startBeat + notes[index].lengthBeats * 0.5) * pixelsPerBeat));
+            const int distance = std::abs(noteX - x);
+            if (distance < nearestDistance)
+            {
+                nearest = index;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    void setVelocityAt(int y)
+    {
+        const int velocityTop = rulerHeight + pitchCount * rowHeight;
+        const int usableHeight = velocityHeight - 25;
+        const int value = std::clamp((velocityTop + velocityHeight - 8 - y) * 127 / usableHeight, 1, 127);
+        for (MidiNote& note : notes)
+        {
+            if (note.id == draggedNoteId)
+            {
+                note.velocity = value;
+                break;
+            }
+        }
+    }
+
+    quint64 nextId() const
+    {
+        quint64 id = 1;
+        for (const MidiNote& note : notes)
+            id = std::max(id, note.id + 1);
+        return id;
+    }
+
+    void commitIfChanged(const QVector<MidiNote>& before)
+    {
+        if (before != notes)
+            emit owner->notesEdited(before, notes);
+    }
+
+    MidiEditor* owner;
+    QVector<MidiNote> notes;
+    QVector<MidiNote> beforeEdit;
+    QVector<MidiNote> originalNotes;
+    QSet<quint64> selected;
+    QPoint dragStart;
+    DragMode dragMode = DragMode::None;
+    quint64 draggedNoteId = 0;
+    double patternLength = 16.0;
+    double snap = 0.25;
+    double playheadBeat = -1.0;
+    int pixelsPerBeat = 84;
+};
+
+MidiEditor::MidiEditor(QWidget* parent) : QScrollArea(parent)
+{
+    setObjectName(QStringLiteral("midiEditor"));
+    setFrameShape(QFrame::NoFrame);
+    setWidgetResizable(false);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    canvas = new Canvas(this);
+    setWidget(canvas);
 }
 
-//==============================================================================
-// Helper: Map value from one range to another
-int jmap(int value, int inMin, int inMax, int outMin, int outMax)
+void MidiEditor::setNotes(const QVector<MidiNote>& notes)
 {
-    return outMin + (outMax - outMin) * (value - inMin) / (inMax - inMin);
+    canvas->setNotes(notes);
 }
 
-int jmap(double value, double inMin, double inMax, double outMin, double outMax)
+void MidiEditor::setPatternLengthBeats(double beats)
 {
-    return outMin + (outMax - outMin) * (value - inMin) / (inMax - inMin);
+    canvas->setLengthBeats(beats);
 }
 
-int jclamp(int val, int minVal, int maxVal)
+void MidiEditor::setSnap(double beatStep)
 {
-    return jmin(jmax(val, minVal), maxVal);
+    canvas->setSnap(beatStep);
+}
+
+void MidiEditor::setPixelsPerBeat(int pixels)
+{
+    canvas->setPixelsPerBeat(pixels);
+}
+
+void MidiEditor::setPlayheadBeat(double beat)
+{
+    canvas->setPlayheadBeat(beat);
 }

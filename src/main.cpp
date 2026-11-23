@@ -1,20 +1,17 @@
-// main.cpp
-// Entry point for Awesome Studio
+#include "core/AudioEngine.h"
+#include "ui/MainWindow.h"
 
 #include <QApplication>
-#include "core/Application.h"
 
-int main(int argc, char* argv[]) {
-    QApplication app(argc, argv);
-    app.setApplicationName("Awesome Studio");
-    app.setApplicationVersion("1.0.0");
-    app.setOrganizationName("Awesome Studio Team");
+int main(int argc, char* argv[])
+{
+    QApplication application(argc, argv);
+    application.setApplicationName(QStringLiteral("Awesome Studio"));
+    application.setApplicationVersion(QStringLiteral("0.2.0"));
+    application.setOrganizationName(QStringLiteral("Awesome Studio"));
 
-    Application awesomeStudio;
-
-    if (!awesomeStudio.initialize()) {
-        return -1;
-    }
-
-    return awesomeStudio.run();
+    AudioEngine audioEngine;
+    MainWindow mainWindow(audioEngine);
+    mainWindow.show();
+    return application.exec();
 }

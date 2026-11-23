@@ -1,51 +1,66 @@
-// AudioEngine.h
-// Core audio processing engine for Awesome Studio
-
 #pragma once
 
-#include <vector>
+#include "Project.h"
+#include "SynthRenderer.h"
+
+#include <QString>
+#include <atomic>
 #include <memory>
-#include <string>
 
-class AudioDeviceManager;
-class PluginHost;
-class MIDIController;
+class QAudioFormat;
+class QAudioSink;
 
-class AudioEngine {
+class AudioEngine
+{
 public:
     AudioEngine();
     ~AudioEngine();
 
-    // Initialize the audio engine
     bool initialize();
+    bool isAudioAvailable() const;
+    QString deviceName() const;
+    QString errorMessage() const;
 
-    // Start audio processing
-    void start();
-
-    // Stop audio processing
-    void stop();
-
-    // Process audio
-    void processAudio(float** inputs, float** outputs, int numSamples);
-
-    // Add a plugin to the engine
-    void addPlugin(std::shared_ptr<PluginHost> plugin);
-
-    // Remove a plugin from the engine
-    void removePlugin(std::shared_ptr<PluginHost> plugin);
-
-    // Set the MIDI controller
-    void setMIDIController(std::shared_ptr<MIDIController> controller);
-
-    // Get available audio devices
-    std::vector<std::string> getAvailableDevices();
-
-    // Set the active audio device
-    bool setActiveDevice(const std::string& deviceName);
+    void setProject(const ProjectData& project);
+    void startPlayback();
+    void stopPlayback();
+    bool isPlaying() const;
+    double positionBeats() const;
+    void triggerPreview(int midiPitch, int velocity = 96,
+                        SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f);
+    void setMasterGain(float gain);
 
 private:
-    std::unique_ptr<AudioDeviceManager> deviceManager;
-    std::vector<std::shared_ptr<PluginHost>> plugins;
-    std::shared_ptr<MIDIController> midiController;
-    bool isRunning;
+    class AudioStream;
+
+    qint64 renderAudio(char* destination, qint64 maxBytes);
+    void prepareNotes(const std::shared_ptr<const ProjectData>& project);
+
+    std::shared_ptr<const ProjectData> projectSnapshot;
+    std::shared_ptr<const ProjectData> preparedProject;
+    SynthRenderer renderer;
+    std::unique_ptr<AudioStream> stream;
+    std::unique_ptr<QAudioSink> sink;
+    std::unique_ptr<QAudioFormat> outputFormat;
+
+    QString outputDeviceName;
+    QString initializationError;
+    double outputSampleRate = 48000.0;
+    int outputChannels = 2;
+    int bytesPerFrame = 0;
+    std::atomic<bool> playing{false};
+    std::atomic<bool> resetPosition{true};
+    std::atomic<qint64> publishedPositionFrames{0};
+    std::atomic<qint64> audioClockFrames{0};
+    std::atomic<float> masterGain{0.8f};
+    std::atomic<int> previewPitch{-1};
+    std::atomic<int> previewVelocity{96};
+    std::atomic<double> previewFrequency{440.0};
+    std::atomic<int> previewWaveform{static_cast<int>(SynthWaveform::Sine)};
+    std::atomic<float> previewLeftGain{0.70710678f};
+    std::atomic<float> previewRightGain{0.70710678f};
+    std::atomic<qint64> previewStartFrame{0};
+    std::atomic<qint64> previewEndFrame{0};
+
+    qint64 playbackFrame = 0;
 };
