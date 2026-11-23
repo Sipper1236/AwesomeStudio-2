@@ -181,6 +181,17 @@ bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options)
     dialog.setWindowTitle(QObject::tr("WAV export format"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
+    auto* sampleRateControl = new QComboBox(&dialog);
+    sampleRateControl->addItem(QObject::tr("44.1 kHz"), 44100);
+    sampleRateControl->addItem(QObject::tr("48 kHz"), 48000);
+    sampleRateControl->addItem(QObject::tr("88.2 kHz"), 88200);
+    sampleRateControl->addItem(QObject::tr("96 kHz"), 96000);
+    sampleRateControl->addItem(QObject::tr("192 kHz"), 192000);
+    const int sampleRateIndex = sampleRateControl->findData(options.sampleRate);
+    if (sampleRateIndex >= 0)
+        sampleRateControl->setCurrentIndex(sampleRateIndex);
+    form->addRow(QObject::tr("Sample rate"), sampleRateControl);
+
     auto* formatControl = new QComboBox(&dialog);
     formatControl->addItem(QObject::tr("16-bit PCM"), static_cast<int>(WavSampleFormat::Pcm16));
     formatControl->addItem(QObject::tr("24-bit PCM"), static_cast<int>(WavSampleFormat::Pcm24));
@@ -209,9 +220,16 @@ bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options)
     if (dialog.exec() != QDialog::Accepted)
         return false;
 
+    options.sampleRate = sampleRateControl->currentData().toInt();
     options.sampleFormat = static_cast<WavSampleFormat>(formatControl->currentData().toInt());
     options.dither = ditherControl->isEnabled() && ditherControl->isChecked();
     return true;
+}
+
+WavExportOptions& previousWavExportOptions()
+{
+    static WavExportOptions options;
+    return options;
 }
 
 bool chooseExportRange(QWidget* parent, double songLengthBeats, bool& useRange,
@@ -4363,7 +4381,7 @@ void MainWindow::applyStepDivisionHistory(quint64 trackId, quint64 clipId, int r
 
 void MainWindow::exportAudio()
 {
-    WavExportOptions exportOptions;
+    WavExportOptions& exportOptions = previousWavExportOptions();
     if (!chooseWavExportOptions(this, exportOptions))
         return;
     bool useRange = false;
@@ -4394,7 +4412,7 @@ void MainWindow::exportAudio()
 
 void MainWindow::exportStems()
 {
-    WavExportOptions exportOptions;
+    WavExportOptions& exportOptions = previousWavExportOptions();
     if (!chooseWavExportOptions(this, exportOptions))
         return;
     bool useRange = false;

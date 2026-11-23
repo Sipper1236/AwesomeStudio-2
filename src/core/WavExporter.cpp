@@ -17,7 +17,6 @@
 
 namespace
 {
-constexpr quint32 sampleRate = 44100;
 constexpr quint16 channelCount = 2;
 
 struct SampleFormatInfo
@@ -121,6 +120,20 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     }
     if (customRange)
         safeProject.countInBars = 0;
+
+    switch (options.sampleRate)
+    {
+    case 44100:
+    case 48000:
+    case 88200:
+    case 96000:
+    case 192000:
+        break;
+    default:
+        setError(error, QStringLiteral("Choose a supported WAV sample rate."));
+        return false;
+    }
+    const quint32 sampleRate = static_cast<quint32>(options.sampleRate);
 
     SampleFormatInfo formatInfo;
     if (!sampleFormatInfo(options.sampleFormat, formatInfo))
