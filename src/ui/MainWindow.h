@@ -197,7 +197,9 @@ private:
         SelectedTrackPan = 2,
         Tempo = 3,
         SelectedTrackMute = 4,
-        SelectedTrackSolo = 5
+        SelectedTrackSolo = 5,
+        SelectedTrackFilterCutoff = 6,
+        SelectedTrackFilterResonance = 7
     };
     struct MidiControllerMapping
     {
