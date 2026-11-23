@@ -49,7 +49,7 @@ void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBud
     for (MixerEffect& effect : effects)
     {
         effect.type = static_cast<MixerEffectType>(
-            std::clamp(static_cast<int>(effect.type), 0, 2));
+            std::clamp(static_cast<int>(effect.type), 0, 3));
         if (!std::isfinite(effect.wet)) effect.wet = 0.25f;
         if (!std::isfinite(effect.delayMs)) effect.delayMs = 250.0f;
         if (!std::isfinite(effect.feedback)) effect.feedback = 0.3f;
@@ -60,6 +60,8 @@ void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBud
         if (!std::isfinite(effect.attackMs)) effect.attackMs = 10.0f;
         if (!std::isfinite(effect.releaseMs)) effect.releaseMs = 100.0f;
         if (!std::isfinite(effect.makeupDb)) effect.makeupDb = 0.0f;
+        if (!std::isfinite(effect.cutoffHz)) effect.cutoffHz = 20000.0f;
+        if (!std::isfinite(effect.resonance)) effect.resonance = 0.707f;
         effect.wet = std::clamp(effect.wet, 0.0f, 1.0f);
         effect.delayMs = std::clamp(effect.delayMs, 1.0f, 2000.0f);
         effect.feedback = std::clamp(effect.feedback, 0.0f, 0.95f);
@@ -70,6 +72,8 @@ void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBud
         effect.attackMs = std::clamp(effect.attackMs, 0.1f, 200.0f);
         effect.releaseMs = std::clamp(effect.releaseMs, 1.0f, 2000.0f);
         effect.makeupDb = std::clamp(effect.makeupDb, -12.0f, 24.0f);
+        effect.cutoffHz = std::clamp(effect.cutoffHz, 20.0f, 20000.0f);
+        effect.resonance = std::clamp(effect.resonance, 0.1f, 10.0f);
     }
 }
 }
@@ -78,7 +82,7 @@ MixerEffect defaultMixerEffect(MixerEffectType type)
 {
     MixerEffect effect;
     effect.type = type;
-    if (type == MixerEffectType::Compressor)
+    if (type == MixerEffectType::Compressor || type == MixerEffectType::LowPass)
         effect.wet = 1.0f;
     return effect;
 }

@@ -1651,7 +1651,8 @@ void MainWindow::refreshMixer()
         {
             const MixerEffect effect = effects[index];
             const QString effectName = effect.type == MixerEffectType::Delay ? tr("Delay") :
-                effect.type == MixerEffectType::Reverb ? tr("Reverb") : tr("Compressor");
+                effect.type == MixerEffectType::Reverb ? tr("Reverb") :
+                effect.type == MixerEffectType::Compressor ? tr("Compressor") : tr("Low-pass filter");
             auto* effectBox = new QGroupBox(tr("%1. %2").arg(index + 1).arg(effectName), chain);
             auto* effectForm = new QFormLayout(effectBox);
             auto* stateRow = new QWidget(effectBox);
@@ -1694,7 +1695,7 @@ void MainWindow::refreshMixer()
                                 1.0f, 0, QStringLiteral("%"), index, updateEffect,
                                 [](MixerEffect& target, float value) { target.damping = value / 100.0f; });
             }
-            else
+            else if (effect.type == MixerEffectType::Compressor)
             {
                 addFloatControl(effectForm, tr("Threshold"), effect.thresholdDb, -60.0f, 0.0f,
                                 0.5f, 1, tr(" dB"), index, updateEffect,
@@ -1712,6 +1713,15 @@ void MainWindow::refreshMixer()
                                 0.5f, 1, tr(" dB"), index, updateEffect,
                                 [](MixerEffect& target, float value) { target.makeupDb = value; });
             }
+            else
+            {
+                addFloatControl(effectForm, tr("Cutoff"), effect.cutoffHz, 20.0f, 20000.0f,
+                                10.0f, 0, tr(" Hz"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.cutoffHz = value; });
+                addFloatControl(effectForm, tr("Resonance"), effect.resonance, 0.1f, 10.0f,
+                                0.1f, 1, QStringLiteral(" Q"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.resonance = value; });
+            }
             chainLayout->addWidget(effectBox);
         }
         auto* addRow = new QWidget(chain);
@@ -1721,6 +1731,7 @@ void MainWindow::refreshMixer()
         type->addItem(tr("Delay"), static_cast<int>(MixerEffectType::Delay));
         type->addItem(tr("Reverb"), static_cast<int>(MixerEffectType::Reverb));
         type->addItem(tr("Compressor"), static_cast<int>(MixerEffectType::Compressor));
+        type->addItem(tr("Low-pass filter"), static_cast<int>(MixerEffectType::LowPass));
         auto* add = new QPushButton(tr("Add effect"), addRow);
         add->setEnabled(canAddEffect && effects.size() < 8);
         addLayout->addWidget(type, 1);

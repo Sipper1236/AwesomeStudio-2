@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 19;
+constexpr int currentProjectVersion = 20;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -122,7 +122,9 @@ QJsonArray saveEffects(const QVector<MixerEffect>& effects)
             {QStringLiteral("ratio"), effect.ratio},
             {QStringLiteral("attackMs"), effect.attackMs},
             {QStringLiteral("releaseMs"), effect.releaseMs},
-            {QStringLiteral("makeupDb"), effect.makeupDb}
+            {QStringLiteral("makeupDb"), effect.makeupDb},
+            {QStringLiteral("cutoffHz"), effect.cutoffHz},
+            {QStringLiteral("resonance"), effect.resonance}
         });
     }
     return result;
@@ -145,7 +147,7 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
         }
         const QJsonObject object = effectValue.toObject();
         const int type = object.value(QStringLiteral("type")).toInt(-1);
-        if (type < 0 || type > 2)
+        if (type < 0 || type > 3)
         {
             setError(error, QStringLiteral("The %1 contains an unsupported effect type.").arg(ownerName));
             return false;
@@ -172,10 +174,12 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
             std::numeric_limits<double>::quiet_NaN());
         const double makeupDb = object.value(QStringLiteral("makeupDb")).toDouble(
             std::numeric_limits<double>::quiet_NaN());
+        const double cutoffHz = object.value(QStringLiteral("cutoffHz")).toDouble(20000.0);
+        const double resonance = object.value(QStringLiteral("resonance")).toDouble(0.707);
         if (!std::isfinite(wet) || !std::isfinite(delayMs) || !std::isfinite(feedback) ||
             !std::isfinite(roomSize) || !std::isfinite(damping) || !std::isfinite(thresholdDb) ||
             !std::isfinite(ratio) || !std::isfinite(attackMs) || !std::isfinite(releaseMs) ||
-            !std::isfinite(makeupDb))
+            !std::isfinite(makeupDb) || !std::isfinite(cutoffHz) || !std::isfinite(resonance))
         {
             setError(error, QStringLiteral("The %1 contains invalid effect settings.").arg(ownerName));
             return false;
@@ -190,6 +194,8 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
         effect.attackMs = static_cast<float>(attackMs);
         effect.releaseMs = static_cast<float>(releaseMs);
         effect.makeupDb = static_cast<float>(makeupDb);
+        effect.cutoffHz = static_cast<float>(cutoffHz);
+        effect.resonance = static_cast<float>(resonance);
         effects.push_back(effect);
     }
     return true;

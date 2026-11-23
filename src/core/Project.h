@@ -107,7 +107,8 @@ enum class MixerEffectType
 {
     Delay,
     Reverb,
-    Compressor
+    Compressor,
+    LowPass
 };
 
 struct MixerEffect
@@ -124,6 +125,8 @@ struct MixerEffect
     float attackMs = 10.0f;
     float releaseMs = 100.0f;
     float makeupDb = 0.0f;
+    float cutoffHz = 20000.0f;
+    float resonance = 0.707f;
 };
 
 MixerEffect defaultMixerEffect(MixerEffectType type);

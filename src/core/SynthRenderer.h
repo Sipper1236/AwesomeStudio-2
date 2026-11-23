@@ -113,6 +113,15 @@ private:
         std::array<std::vector<float>, 8> reverbLines;
         std::array<size_t, 8> reverbIndices{};
         std::array<float, 8> reverbDamped{};
+        std::array<float, 2> filterX1{};
+        std::array<float, 2> filterX2{};
+        std::array<float, 2> filterY1{};
+        std::array<float, 2> filterY2{};
+        float filterB0 = 1.0f;
+        float filterB1 = 0.0f;
+        float filterB2 = 0.0f;
+        float filterA1 = 0.0f;
+        float filterA2 = 0.0f;
         float compressorEnvelope = 0.0f;
         qint64 tailFramesRemaining = 0;
     };

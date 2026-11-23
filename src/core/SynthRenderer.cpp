@@ -694,6 +694,20 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
                 state.reverbLines[line].assign(lineFrames, 0.0f);
             }
         }
+        else if (effect.type == MixerEffectType::LowPass)
+        {
+            const double cutoff = std::clamp(static_cast<double>(effect.cutoffHz), 20.0,
+                                              std::max(20.0, sampleRate * 0.49));
+            const double omega = twoPi * cutoff / sampleRate;
+            const double cosine = std::cos(omega);
+            const double alpha = std::sin(omega) / (2.0 * std::max(0.1f, effect.resonance));
+            const double a0 = 1.0 + alpha;
+            state.filterB0 = static_cast<float>(((1.0 - cosine) * 0.5) / a0);
+            state.filterB1 = static_cast<float>((1.0 - cosine) / a0);
+            state.filterB2 = state.filterB0;
+            state.filterA1 = static_cast<float>((-2.0 * cosine) / a0);
+            state.filterA2 = static_cast<float>((1.0 - alpha) / a0);
+        }
         states.push_back(std::move(state));
     }
 }
@@ -709,6 +723,10 @@ void SynthRenderer::resetEffectChain(std::vector<EffectState>& states)
         state.delayIndex = 0;
         state.reverbIndices.fill(0);
         state.reverbDamped.fill(0.0f);
+        state.filterX1.fill(0.0f);
+        state.filterX2.fill(0.0f);
+        state.filterY1.fill(0.0f);
+        state.filterY2.fill(0.0f);
         state.compressorEnvelope = 0.0f;
         state.tailFramesRemaining = 0;
     }
@@ -818,6 +836,35 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
             gain *= std::pow(10.0f, effect.makeupDb / 20.0f);
             wet = {dry.left * gain, dry.right * gain};
         }
+        else if (effect.type == MixerEffectType::LowPass)
+        {
+            const std::array<float, 2> inputSamples{dry.left, dry.right};
+            std::array<float, 2> filtered{};
+            for (size_t channel = 0; channel < inputSamples.size(); ++channel)
+            {
+                const float inputSample = inputSamples[channel];
+                const float outputSample = state.filterB0 * inputSample +
+                    state.filterB1 * state.filterX1[channel] +
+                    state.filterB2 * state.filterX2[channel] -
+                    state.filterA1 * state.filterY1[channel] -
+                    state.filterA2 * state.filterY2[channel];
+                state.filterX2[channel] = state.filterX1[channel];
+                state.filterX1[channel] = inputSample;
+                state.filterY2[channel] = state.filterY1[channel];
+                state.filterY1[channel] = outputSample;
+                filtered[channel] = outputSample;
+            }
+            wet = {filtered[0], filtered[1]};
+            tailLevel = std::max(std::abs(wet.left), std::abs(wet.right));
+            if (std::max(std::abs(dry.left), std::abs(dry.right)) > 1.0e-5f)
+            {
+                const double cutoff = std::max(20.0, std::min<double>(effect.cutoffHz, sampleRate * 0.49));
+                const double tailSeconds = std::min(4.0,
+                    7.0 * effect.resonance / (3.14159265358979323846 * cutoff));
+                state.tailFramesRemaining = std::max(state.tailFramesRemaining,
+                    static_cast<qint64>(std::ceil(tailSeconds * sampleRate)));
+            }
+        }
 
         if (state.tailFramesRemaining > 0)
             --state.tailFramesRemaining;
@@ -834,6 +881,14 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
             state.tailFramesRemaining = std::max(state.tailFramesRemaining,
                 static_cast<qint64>(std::ceil(seconds * sampleRate)));
         }
+        else if (effect.type == MixerEffectType::LowPass && tailLevel > 1.0e-5f)
+        {
+            const double cutoff = std::max(20.0, std::min<double>(effect.cutoffHz, sampleRate * 0.49));
+            const double tailSeconds = std::min(4.0,
+                7.0 * effect.resonance / (3.14159265358979323846 * cutoff));
+            state.tailFramesRemaining = std::max(state.tailFramesRemaining,
+                static_cast<qint64>(std::ceil(tailSeconds * sampleRate)));
+        }
         output = {dry.left * (1.0f - effect.wet) + wet.left * effect.wet,
                   dry.right * (1.0f - effect.wet) + wet.right * effect.wet};
     }
@@ -849,7 +904,7 @@ double SynthRenderer::effectTailSeconds() const
 {
     if (!project)
         return 0.0;
-    const auto chainTail = [](const QVector<MixerEffect>& effects)
+    const auto chainTail = [this](const QVector<MixerEffect>& effects)
     {
         double seconds = 0.0;
         for (const MixerEffect& effect : effects)
@@ -864,6 +919,12 @@ double SynthRenderer::effectTailSeconds() const
             }
             else if (effect.type == MixerEffectType::Reverb)
                 seconds += 0.25 + effect.roomSize * 3.75;
+            else if (effect.type == MixerEffectType::LowPass)
+            {
+                const double cutoff = std::max(20.0, std::min<double>(effect.cutoffHz, sampleRate * 0.49));
+                seconds += std::min(4.0,
+                    7.0 * effect.resonance / (3.14159265358979323846 * cutoff));
+            }
         }
         return seconds;
     };
