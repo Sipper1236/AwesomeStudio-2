@@ -68,6 +68,7 @@ private:
 
 AudioEngine::AudioEngine()
 {
+    liveMidiChannelPitchBendValues.fill(8192);
     for (size_t index = 0; index < maximumTrackCount; ++index)
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_relaxed);
@@ -148,6 +149,8 @@ void AudioEngine::setProject(const ProjectData& project)
 {
     ProjectData safeProject = project;
     safeProject.normalize();
+    liveMidiPitchBendRangeSemitones.store(
+        static_cast<float>(safeProject.pitchBendRangeSemitones), std::memory_order_release);
     for (size_t index = 0; index < maximumTrackCount; ++index)
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_release);
@@ -358,6 +361,7 @@ void AudioEngine::clearLiveMidiVoices()
     for (LiveMidiVoice& voice : liveMidiVoices)
         voice = LiveMidiVoice{};
     liveMidiChannelPitchBends.fill(0.0f);
+    liveMidiChannelPitchBendValues.fill(8192);
 }
 
 void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
@@ -365,8 +369,10 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     if (event.pitchBend)
     {
         const float bendSemitones = (static_cast<float>(event.pitchBendValue) - 8192.0f) /
-                                    8192.0f * 2.0f;
+                                    8192.0f * liveMidiPitchBendRangeSemitones.load(
+                                        std::memory_order_acquire);
         liveMidiChannelPitchBends[static_cast<size_t>(event.channel)] = bendSemitones;
+        liveMidiChannelPitchBendValues[static_cast<size_t>(event.channel)] = event.pitchBendValue;
         const double bendRatio = std::pow(2.0, static_cast<double>(bendSemitones) / 12.0);
         for (LiveMidiVoice& voice : liveMidiVoices)
         {
@@ -743,6 +749,24 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         clearLiveMidiVoices();
         const size_t writeIndex = liveMidiWriteIndex.load(std::memory_order_acquire);
         liveMidiReadIndex.store(writeIndex, std::memory_order_release);
+    }
+    const float bendRange = liveMidiPitchBendRangeSemitones.load(std::memory_order_acquire);
+    if (std::abs(bendRange - liveMidiAppliedPitchBendRangeSemitones) > 1.0e-6f)
+    {
+        liveMidiAppliedPitchBendRangeSemitones = bendRange;
+        for (int channel = 0; channel < 16; ++channel)
+        {
+            const float bendSemitones =
+                (static_cast<float>(liveMidiChannelPitchBendValues[static_cast<size_t>(channel)]) - 8192.0f) /
+                8192.0f * bendRange;
+            liveMidiChannelPitchBends[static_cast<size_t>(channel)] = bendSemitones;
+            const double bendRatio = std::pow(2.0, static_cast<double>(bendSemitones) / 12.0);
+            for (LiveMidiVoice& voice : liveMidiVoices)
+            {
+                if (voice.active && !voice.percussion && voice.channel == channel)
+                    voice.frequency = voice.baseFrequency * bendRatio;
+            }
+        }
     }
     size_t midiReadIndex = liveMidiReadIndex.load(std::memory_order_relaxed);
     size_t midiWriteIndex = liveMidiWriteIndex.load(std::memory_order_acquire);

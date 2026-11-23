@@ -15,6 +15,7 @@ public:
     void setPitchBends(const QVector<MidiPitchBend>& pitchBends);
     void setDefaultPitchBendChannel(int channel);
     void setPitchBendLaneEnabled(bool enabled);
+    void setPitchBendRange(double semitones);
     void setPatternLengthBeats(double beats);
     void setTimeSignature(int beatsPerBar, int beatUnit);
     void setSnap(double beatStep);

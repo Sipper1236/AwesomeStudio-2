@@ -214,6 +214,33 @@ private:
     bool firstRedo = true;
 };
 
+class PitchBendRangeCommand final : public QUndoCommand
+{
+public:
+    PitchBendRangeCommand(MainWindow* window, double before, double after)
+        : window(window), before(before), after(after)
+    {
+        setText(QObject::tr("Change MIDI pitch-bend range"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyPitchBendRangeHistory(before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyPitchBendRangeHistory(after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    double before;
+    double after;
+};
+
 class AutomationEditCommand final : public QUndoCommand
 {
 public:
@@ -1441,6 +1468,17 @@ void MainWindow::createMenus()
     });
 
     QMenu* midiMenu = menuBar()->addMenu(tr("&MIDI"));
+    midiMenu->addAction(tr("Set pitch-bend range…"), this, [this]
+    {
+        bool accepted = false;
+        const double range = QInputDialog::getDouble(
+            this, tr("MIDI pitch-bend range"),
+            tr("Set the project-wide pitch-bend range in semitones:"),
+            project.pitchBendRangeSemitones, 0.01, 48.0, 2, &accepted, Qt::WindowFlags(), 0.5);
+        if (!accepted || std::abs(range - project.pitchBendRangeSemitones) < 1.0e-9)
+            return;
+        undoStack.push(new PitchBendRangeCommand(this, project.pitchBendRangeSemitones, range));
+    });
     midiControllerListenAction = new QAction(tr("Enable controller mappings"), this);
     midiControllerListenAction->setCheckable(true);
     midiControllerListenAction->setEnabled(MidiInput::isSupported());
@@ -1600,6 +1638,7 @@ void MainWindow::refreshProjectUi()
     midiEditor->setNotes(clip == nullptr ? QVector<MidiNote>{} : clip->notes);
     midiEditor->setPitchBends(clip == nullptr ? QVector<MidiPitchBend>{} : clip->pitchBends);
     midiEditor->setPitchBendLaneEnabled(clip != nullptr && !clip->isAudioRegion());
+    midiEditor->setPitchBendRange(project.pitchBendRangeSemitones);
     midiEditor->setDefaultPitchBendChannel(midiExportChannelForTrack(project, selectedTrackId));
     refreshPianoRollGhostNotes();
     const bool drumTrack = track != nullptr && track->instrumentType == InstrumentType::DrumRack;
@@ -3559,6 +3598,15 @@ void MainWindow::updateProjectTitle()
 void MainWindow::refreshDirtyState()
 {
     setWindowModified(settingsDirty || !undoStack.isClean());
+}
+
+void MainWindow::applyPitchBendRangeHistory(double semitones)
+{
+    project.pitchBendRangeSemitones = semitones;
+    project.normalize();
+    midiEditor->setPitchBendRange(project.pitchBendRangeSemitones);
+    audioEngine.setProject(project);
+    refreshDirtyState();
 }
 
 void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,

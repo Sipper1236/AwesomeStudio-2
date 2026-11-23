@@ -5,6 +5,7 @@
 #include <QSaveFile>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -143,6 +144,7 @@ struct ParsedTrack
     QString name;
     QVector<RawNote> notes;
     QVector<RawPitchBend> pitchBends;
+    double pitchBendRangeSemitones = -1.0;
     qint64 lastTick = 0;
     bool percussion = false;
 };
@@ -156,6 +158,12 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
     quint8 runningStatus = 0;
     qint64 absoluteTick = 0;
     std::map<std::pair<int, int>, std::deque<NoteOn>> activeNotes;
+    std::array<int, 16> rpnMsb;
+    std::array<int, 16> rpnLsb;
+    std::array<int, 16> bendRangeSemitones{};
+    std::array<int, 16> bendRangeCents{};
+    rpnMsb.fill(-1);
+    rpnLsb.fill(-1);
 
     while (position < end)
     {
@@ -314,6 +322,31 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
             track.pitchBends.push_back({absoluteTick,
                 (static_cast<int>(data2) << 7) | static_cast<int>(data1), channel});
         }
+        else if (eventType == 0xb0 && dataCount == 2)
+        {
+            if (data1 == 101)
+                rpnMsb[static_cast<size_t>(channel)] = data2;
+            else if (data1 == 100)
+                rpnLsb[static_cast<size_t>(channel)] = data2;
+            else if (rpnMsb[static_cast<size_t>(channel)] == 0 &&
+                     rpnLsb[static_cast<size_t>(channel)] == 0 &&
+                     (data1 == 6 || data1 == 38))
+            {
+                bool validRangeUpdate = true;
+                if (data1 == 6)
+                    bendRangeSemitones[static_cast<size_t>(channel)] = data2;
+                else if (data2 < 100)
+                    bendRangeCents[static_cast<size_t>(channel)] = data2;
+                else
+                    validRangeUpdate = false;
+                if (validRangeUpdate)
+                {
+                    track.pitchBendRangeSemitones =
+                        bendRangeSemitones[static_cast<size_t>(channel)] +
+                        bendRangeCents[static_cast<size_t>(channel)] / 100.0;
+                }
+            }
+        }
         track.lastTick = absoluteTick;
     }
 
@@ -338,6 +371,7 @@ struct ExportEvent
     bool noteOn = false;
     int channel = 0;
     bool pitchBend = false;
+    bool controlChange = false;
 };
 
 QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
@@ -374,7 +408,7 @@ QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
 }
 
 QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
-                               qint64 songEndTick)
+                               double projectPitchBendRangeSemitones, qint64 songEndTick)
 {
     QByteArray track;
     QByteArray name = instrument.name.toUtf8();
@@ -384,6 +418,7 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
     appendMeta(track, 0x03, name);
 
     QVector<ExportEvent> events;
+    std::array<bool, 16> channelUsed{};
     for (const MidiClip& clip : instrument.clips)
     {
         for (const MidiNote& note : clip.notes)
@@ -392,18 +427,39 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
             const qint64 end = std::max(start + 1, std::llround(
                 (clip.startBeat + note.startBeat + note.lengthBeats) * exportPpqn));
             const int noteChannel = note.channel >= 0 ? note.channel : channel;
-            events.push_back({start, 2, std::clamp(note.pitch, 0, 127),
+            channelUsed[static_cast<size_t>(noteChannel)] = true;
+            events.push_back({start, 8, std::clamp(note.pitch, 0, 127),
                               std::clamp(note.velocity, 1, 127), true, noteChannel});
-            events.push_back({end, 0, std::clamp(note.pitch, 0, 127), 0, false, noteChannel});
+            events.push_back({end, 6, std::clamp(note.pitch, 0, 127), 0, false, noteChannel});
         }
         for (const MidiPitchBend& bend : clip.pitchBends)
         {
             const qint64 tick = std::max<qint64>(0, std::llround(
                 (clip.startBeat + bend.beat) * exportPpqn));
             const int value = std::clamp(bend.value, 0, 16383);
-            events.push_back({tick, 1, value & 0x7f, (value >> 7) & 0x7f,
-                              false, bend.channel, true});
+            const int bendChannel = std::clamp(bend.channel, 0, 15);
+            channelUsed[static_cast<size_t>(bendChannel)] = true;
+            events.push_back({tick, 7, value & 0x7f, (value >> 7) & 0x7f,
+                              false, bendChannel, true});
         }
+    }
+    if (std::none_of(channelUsed.cbegin(), channelUsed.cend(), [](bool used) { return used; }))
+        channelUsed[static_cast<size_t>(std::clamp(channel, 0, 15))] = true;
+
+    const int pitchBendRangeHundredths = static_cast<int>(std::llround(
+        projectPitchBendRangeSemitones * 100.0));
+    const int rangeSemitones = pitchBendRangeHundredths / 100;
+    const int rangeCents = pitchBendRangeHundredths % 100;
+    for (int bendChannel = 0; bendChannel < 16; ++bendChannel)
+    {
+        if (!channelUsed[static_cast<size_t>(bendChannel)])
+            continue;
+        events.push_back({0, 0, 101, 0, false, bendChannel, false, true});
+        events.push_back({0, 1, 100, 0, false, bendChannel, false, true});
+        events.push_back({0, 2, 6, rangeSemitones, false, bendChannel, false, true});
+        events.push_back({0, 3, 38, rangeCents, false, bendChannel, false, true});
+        events.push_back({0, 4, 101, 127, false, bendChannel, false, true});
+        events.push_back({0, 5, 100, 127, false, bendChannel, false, true});
     }
     std::stable_sort(events.begin(), events.end(), [](const ExportEvent& left, const ExportEvent& right)
     {
@@ -419,7 +475,8 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
     {
         const qint64 tick = std::max(previousTick, event.tick);
         appendVariableLength(track, static_cast<quint32>(tick - previousTick));
-        const quint8 eventStatus = event.pitchBend ? 0xe0 : (event.noteOn ? 0x90 : 0x80);
+        const quint8 eventStatus = event.controlChange ? 0xb0
+            : event.pitchBend ? 0xe0 : (event.noteOn ? 0x90 : 0x80);
         appendByte(track, static_cast<quint8>(eventStatus | (event.channel & 0x0f)));
         appendByte(track, static_cast<quint8>(event.pitch));
         appendByte(track, static_cast<quint8>(event.velocity));
@@ -507,6 +564,15 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     loaded.beatsPerBar = beatsPerBar;
     loaded.beatUnit = beatUnit;
     loaded.loopEnabled = false;
+    for (const ParsedTrack& sourceTrack : parsedTracks)
+    {
+        if (sourceTrack.pitchBendRangeSemitones >= 0.01 &&
+            sourceTrack.pitchBendRangeSemitones <= 48.0)
+        {
+            loaded.pitchBendRangeSemitones = sourceTrack.pitchBendRangeSemitones;
+            break;
+        }
+    }
     double longestBeat = 0.0;
     for (const ParsedTrack& sourceTrack : parsedTracks)
     {
@@ -596,7 +662,8 @@ bool MidiFile::save(const QString& path, const ProjectData& project, QString* er
             const int channelSlot = synthChannel++ % 15;
             channel = channelSlot < 9 ? channelSlot : channelSlot + 1;
         }
-        appendTrackChunk(file, makeInstrumentTrack(track, channel, songEndTick));
+        appendTrackChunk(file, makeInstrumentTrack(track, channel,
+            safeProject.pitchBendRangeSemitones, songEndTick));
     }
 
     QSaveFile output(path);

@@ -137,6 +137,7 @@ private:
     std::array<LiveMidiEvent, liveMidiQueueCapacity> liveMidiEvents;
     std::array<LiveMidiVoice, maximumLiveMidiVoices> liveMidiVoices;
     std::array<float, 16> liveMidiChannelPitchBends{};
+    std::array<int, 16> liveMidiChannelPitchBendValues{};
     std::array<StereoSample, maximumTrackCount> liveMidiTrackFrameSamples{};
     std::array<bool, maximumTrackCount> liveMidiTrackFrameTouched{};
     std::array<size_t, maximumLiveMidiVoices> liveMidiTouchedTracks{};
@@ -154,6 +155,8 @@ private:
     std::atomic<size_t> liveMidiWriteIndex{0};
     std::atomic<size_t> liveMidiReadIndex{0};
     std::atomic<bool> liveMidiPanic{false};
+    std::atomic<float> liveMidiPitchBendRangeSemitones{2.0f};
+    float liveMidiAppliedPitchBendRangeSemitones = 2.0f;
     quint64 nextLiveMidiSerial = 1;
     std::array<std::atomic<float>, maximumTrackCount> trackPeakValues;
     std::array<std::atomic<float>, maximumBusCount> busPeakValues;

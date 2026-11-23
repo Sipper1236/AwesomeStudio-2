@@ -413,7 +413,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 event.trackIndex = trackIndex;
                 event.channel = std::clamp(bend.channel, 0, 15);
                 event.semitones = (static_cast<float>(std::clamp(bend.value, 0, 16383)) - 8192.0f) /
-                                  8192.0f * 2.0f;
+                                  8192.0f * static_cast<float>(project->pitchBendRangeSemitones);
                 pitchBendEvents.push_back(event);
             }
             for (const MidiNote& note : clip.notes)

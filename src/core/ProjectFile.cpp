@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 21;
+constexpr int currentProjectVersion = 22;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -639,6 +639,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("metronomeEnabled"), safeProject.metronomeEnabled},
         {QStringLiteral("countInBars"), safeProject.countInBars},
         {QStringLiteral("masterGain"), safeProject.masterGain},
+        {QStringLiteral("pitchBendRangeSemitones"), safeProject.pitchBendRangeSemitones},
         {QStringLiteral("masterEffects"), saveEffects(safeProject.masterEffects)},
         {QStringLiteral("markers"), markers},
         {QStringLiteral("buses"), buses},
@@ -709,6 +710,17 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     loaded.metronomeEnabled = version >= 5 ? root.value(QStringLiteral("metronomeEnabled")).toBool(false) : false;
     loaded.countInBars = version >= 5 ? root.value(QStringLiteral("countInBars")).toInt(0) : 0;
     loaded.masterGain = static_cast<float>(root.value(QStringLiteral("masterGain")).toDouble(0.8));
+    if (version >= 22)
+    {
+        const double pitchBendRange = root.value(QStringLiteral("pitchBendRangeSemitones")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        if (!std::isfinite(pitchBendRange) || pitchBendRange < 0.01 || pitchBendRange > 48.0)
+        {
+            setError(error, QStringLiteral("The project has an invalid MIDI pitch-bend range."));
+            return false;
+        }
+        loaded.pitchBendRangeSemitones = pitchBendRange;
+    }
     if (version >= 19 &&
         !loadEffects(root.value(QStringLiteral("masterEffects")), loaded.masterEffects,
                      QStringLiteral("Master channel"), error))

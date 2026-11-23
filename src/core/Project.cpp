@@ -235,6 +235,10 @@ void ProjectData::normalize()
     bars = std::clamp(bars, 1, 64);
     countInBars = std::clamp(countInBars, 0, 4);
     masterGain = std::clamp(masterGain, 0.0f, 1.0f);
+    if (!std::isfinite(pitchBendRangeSemitones))
+        pitchBendRangeSemitones = 2.0;
+    pitchBendRangeSemitones = std::clamp(pitchBendRangeSemitones, 0.01, 48.0);
+    pitchBendRangeSemitones = std::round(pitchBendRangeSemitones * 100.0) / 100.0;
     qsizetype effectBudget = 48;
     normalizeEffectChain(masterEffects, effectBudget);
     if (markers.size() > 1000)

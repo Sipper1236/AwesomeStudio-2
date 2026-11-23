@@ -35,6 +35,7 @@ class MainWindow final : public QMainWindow
 {
     Q_OBJECT
     friend class NoteEditCommand;
+    friend class PitchBendRangeCommand;
     friend class AutomationEditCommand;
     friend class MarkerEditCommand;
     friend class AudioFadeEditCommand;
@@ -120,6 +121,7 @@ private:
     void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,
                           double clipLengthBeats = -1.0,
                           const QVector<MidiPitchBend>* pitchBends = nullptr);
+    void applyPitchBendRangeHistory(double semitones);
     void exportAudio();
     void exportStems();
     void importAudio();

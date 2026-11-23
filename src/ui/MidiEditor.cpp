@@ -39,6 +39,16 @@ QString noteLabel(int pitch)
     static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     return QStringLiteral("%1%2").arg(QString::fromLatin1(names[pitch % 12])).arg(pitch / 12 - 1);
 }
+
+QString pitchBendRangeLabel(double semitones)
+{
+    QString label = QString::number(semitones, 'f', 2);
+    while (label.contains('.') && label.endsWith('0'))
+        label.chop(1);
+    if (label.endsWith('.'))
+        label.chop(1);
+    return label;
+}
 }
 
 class MidiEditor::Canvas final : public QWidget
@@ -48,7 +58,7 @@ public:
     {
         setFocusPolicy(Qt::StrongFocus);
         setMouseTracking(true);
-        setToolTip(tr("Pitch bend: click to add a point, drag to shape it, and right-click or press Delete to remove it. Range: ±2 semitones."));
+        updatePitchBendToolTip();
         setLengthBeats(16.0);
     }
 
@@ -102,6 +112,13 @@ public:
     void setPitchBendLaneEnabled(bool enabled)
     {
         pitchBendLaneEnabled = enabled;
+        update();
+    }
+
+    void setPitchBendRange(double semitones)
+    {
+        pitchBendRangeSemitones = std::clamp(semitones, 0.01, 48.0);
+        updatePitchBendToolTip();
         update();
     }
 
@@ -512,12 +529,13 @@ protected:
         painter.setFont(QFont(QStringLiteral("Sans Serif"), 7));
         painter.drawText(QRect(8, pitchBendTop + 4, sidebarWidth - 12, 12),
                          Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("PITCH BEND"));
+        const QString rangeLabel = pitchBendRangeLabel(pitchBendRangeSemitones);
         painter.drawText(QRect(8, pitchBendTop + 18, sidebarWidth - 12, 9),
-                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("+2 st"));
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("+%1 st").arg(rangeLabel));
         painter.drawText(QRect(8, bendCenterY - 4, sidebarWidth - 12, 9),
                          Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("0"));
         painter.drawText(QRect(8, pitchBendTop + pitchBendHeight - 14, sidebarWidth - 12, 9),
-                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("-2 st"));
+                         Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("-%1 st").arg(rangeLabel));
 
         if (!pitchBendLaneEnabled)
         {
@@ -891,6 +909,12 @@ protected:
 private:
     enum class DragMode { None, Create, Move, Resize, Velocity, PitchBend };
 
+    void updatePitchBendToolTip()
+    {
+        setToolTip(tr("Pitch bend: click to add a point, drag to shape it, and right-click or press Delete to remove it. Range: ±%1 semitones.")
+                       .arg(pitchBendRangeLabel(pitchBendRangeSemitones)));
+    }
+
     void editNoteProperties(int index)
     {
         if (index < 0 || index >= notes.size())
@@ -1168,6 +1192,7 @@ private:
     int selectedPitchBendIndex = -1;
     int draggedPitchBendIndex = -1;
     int defaultPitchBendChannel = 0;
+    double pitchBendRangeSemitones = 2.0;
     bool pitchBendLaneEnabled = false;
     double patternLength = 16.0;
     double quarterNotesPerBar = 4.0;
@@ -1209,6 +1234,11 @@ void MidiEditor::setDefaultPitchBendChannel(int channel)
 void MidiEditor::setPitchBendLaneEnabled(bool enabled)
 {
     canvas->setPitchBendLaneEnabled(enabled);
+}
+
+void MidiEditor::setPitchBendRange(double semitones)
+{
+    canvas->setPitchBendRange(semitones);
 }
 
 void MidiEditor::setPatternLengthBeats(double beats)
