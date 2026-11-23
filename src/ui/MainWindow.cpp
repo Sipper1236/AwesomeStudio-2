@@ -3086,11 +3086,10 @@ void MainWindow::createToolBars()
     transportBar->addWidget(tempoControl);
     connect(tempoControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value)
     {
-        project.tempoBpm = value;
-        project.rebuildTempoCache();
-        audioEngine.setProject(project);
-        settingsDirty = true;
-        refreshDirtyState();
+        if (std::abs(project.tempoBpm - value) < 1.0e-9)
+            return;
+        undoStack.push(new TempoMapEditCommand(this, project.tempoBpm, project.tempoChanges,
+                                               value, project.tempoChanges));
     });
     transportBar->addSeparator();
     transportBar->addWidget(new QLabel(tr("METER"), transportBar));
