@@ -2,6 +2,7 @@
 
 #include "Project.h"
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -73,13 +74,27 @@ private:
         float pan = 2.0f;
     };
 
+    struct TrackEqualizerState
+    {
+        float lowLeft = 0.0f;
+        float lowRight = 0.0f;
+        float upperLeft = 0.0f;
+        float upperRight = 0.0f;
+        bool tailActive = false;
+    };
+
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
     void addTrackSample(size_t trackIndex, float left, float right);
+    StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
+    void resetTrackEqualizers();
 
     std::shared_ptr<const ProjectData> project;
     std::vector<TrackMixAutomation> trackMixAutomations;
     std::vector<TrackMixValue> trackMixValues;
     std::vector<LiveTrackMixOverride> liveTrackMixOverrides;
+    std::vector<std::array<float, 3>> trackEqualizerGains;
+    std::vector<TrackEqualizerState> trackEqualizerStates;
+    std::vector<size_t> activeEqualizerTailTracks;
     std::vector<StereoSample> trackFrameSamples;
     std::vector<unsigned char> trackFrameTouched;
     std::vector<size_t> touchedTrackIndices;
@@ -92,4 +107,6 @@ private:
     size_t nextAudioStartIndex = 0;
     qint64 lastFrame = -1;
     double sampleRate = 48000.0;
+    float lowBandCoefficient = 0.0f;
+    float highBandCoefficient = 0.0f;
 };

@@ -98,6 +98,9 @@ struct InstrumentTrack
     float releaseSeconds = 0.06f;
     float gain = 0.8f;
     float pan = 0.0f;
+    float eqLowDb = 0.0f;
+    float eqMidDb = 0.0f;
+    float eqHighDb = 0.0f;
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
     bool muted = false;

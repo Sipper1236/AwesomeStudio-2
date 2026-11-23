@@ -204,6 +204,12 @@ void ProjectData::normalize()
             std::clamp(static_cast<int>(track.instrumentType), 0, 2));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
+        if (!std::isfinite(track.eqLowDb)) track.eqLowDb = 0.0f;
+        if (!std::isfinite(track.eqMidDb)) track.eqMidDb = 0.0f;
+        if (!std::isfinite(track.eqHighDb)) track.eqHighDb = 0.0f;
+        track.eqLowDb = std::clamp(track.eqLowDb, -18.0f, 18.0f);
+        track.eqMidDb = std::clamp(track.eqMidDb, -18.0f, 18.0f);
+        track.eqHighDb = std::clamp(track.eqHighDb, -18.0f, 18.0f);
         normalizeAutomation(track.volumeAutomation, 0.0f, 1.0f);
         normalizeAutomation(track.panAutomation, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));

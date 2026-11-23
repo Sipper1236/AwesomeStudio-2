@@ -129,6 +129,9 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixAutomations.clear();
     trackMixValues.clear();
     liveTrackMixOverrides.clear();
+    trackEqualizerGains.clear();
+    trackEqualizerStates.clear();
+    activeEqualizerTailTracks.clear();
     trackFrameSamples.clear();
     trackFrameTouched.clear();
     touchedTrackIndices.clear();
@@ -142,14 +145,23 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixAutomations.reserve(static_cast<size_t>(project->tracks.size()));
     trackMixValues.resize(static_cast<size_t>(project->tracks.size()));
     liveTrackMixOverrides.resize(static_cast<size_t>(project->tracks.size()));
+    trackEqualizerGains.reserve(static_cast<size_t>(project->tracks.size()));
+    trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
     trackFrameSamples.resize(static_cast<size_t>(project->tracks.size()));
     trackFrameTouched.assign(static_cast<size_t>(project->tracks.size()), 0);
     touchedTrackIndices.reserve(static_cast<size_t>(project->tracks.size()));
     trackPeakLevels.assign(static_cast<size_t>(project->tracks.size()), 0.0f);
+    lowBandCoefficient = static_cast<float>(1.0 - std::exp(-twoPi * 120.0 / sampleRate));
+    highBandCoefficient = static_cast<float>(1.0 - std::exp(-twoPi * 6000.0 / sampleRate));
     for (const InstrumentTrack& track : project->tracks)
     {
         trackMixAutomations.push_back({track.gain, track.pan,
                                        track.volumeAutomation, track.panAutomation});
+        trackEqualizerGains.push_back({
+            static_cast<float>(std::pow(10.0, track.eqLowDb / 20.0)),
+            static_cast<float>(std::pow(10.0, track.eqMidDb / 20.0)),
+            static_cast<float>(std::pow(10.0, track.eqHighDb / 20.0))
+        });
     }
 
     bool hasSolo = false;
@@ -264,9 +276,45 @@ void SynthRenderer::resetTransport()
 {
     activeNotes.clear();
     activeAudioRegions.clear();
+    resetTrackEqualizers();
     nextStartIndex = 0;
     nextAudioStartIndex = 0;
     lastFrame = -1;
+}
+
+StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample input)
+{
+    if (trackIndex >= trackEqualizerGains.size() || trackIndex >= trackEqualizerStates.size())
+        return input;
+    const std::array<float, 3>& gains = trackEqualizerGains[trackIndex];
+    if (std::abs(gains[0] - 1.0f) < 1.0e-6f && std::abs(gains[1] - 1.0f) < 1.0e-6f &&
+        std::abs(gains[2] - 1.0f) < 1.0e-6f)
+    {
+        trackEqualizerStates[trackIndex] = {};
+        return input;
+    }
+
+    TrackEqualizerState& state = trackEqualizerStates[trackIndex];
+    state.lowLeft += lowBandCoefficient * (input.left - state.lowLeft);
+    state.lowRight += lowBandCoefficient * (input.right - state.lowRight);
+    state.upperLeft += highBandCoefficient * (input.left - state.upperLeft);
+    state.upperRight += highBandCoefficient * (input.right - state.upperRight);
+
+    const float midLeft = state.upperLeft - state.lowLeft;
+    const float midRight = state.upperRight - state.lowRight;
+    const float highLeft = input.left - state.upperLeft;
+    const float highRight = input.right - state.upperRight;
+    return {
+        state.lowLeft * gains[0] + midLeft * gains[1] + highLeft * gains[2],
+        state.lowRight * gains[0] + midRight * gains[1] + highRight * gains[2]
+    };
+}
+
+void SynthRenderer::resetTrackEqualizers()
+{
+    for (TrackEqualizerState& state : trackEqualizerStates)
+        state = {};
+    activeEqualizerTailTracks.clear();
 }
 
 void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, float value)
@@ -313,6 +361,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     {
         activeNotes.clear();
         activeAudioRegions.clear();
+        resetTrackEqualizers();
         nextStartIndex = 0;
         nextAudioStartIndex = 0;
     }
@@ -419,9 +468,23 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
                        right * region.sourceGain * mix.rightGain * fadeEnvelope);
     }
 
+    for (const size_t trackIndex : activeEqualizerTailTracks)
+    {
+        if (trackIndex < trackFrameTouched.size() && !trackFrameTouched[trackIndex])
+            addTrackSample(trackIndex, 0.0f, 0.0f);
+    }
+
     for (const size_t trackIndex : touchedTrackIndices)
     {
-        const StereoSample& trackSample = trackFrameSamples[trackIndex];
+        StereoSample trackSample = applyTrackEqualizer(trackIndex, trackFrameSamples[trackIndex]);
+        TrackEqualizerState& equalizerState = trackEqualizerStates[trackIndex];
+        if (!equalizerState.tailActive &&
+            std::max({std::abs(equalizerState.lowLeft), std::abs(equalizerState.lowRight),
+                      std::abs(equalizerState.upperLeft), std::abs(equalizerState.upperRight)}) > 1.0e-5f)
+        {
+            equalizerState.tailActive = true;
+            activeEqualizerTailTracks.push_back(trackIndex);
+        }
         sample.left += trackSample.left;
         sample.right += trackSample.right;
         trackPeakLevels[trackIndex] = std::max(trackPeakLevels[trackIndex],
@@ -430,6 +493,18 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         trackFrameTouched[trackIndex] = 0;
     }
     touchedTrackIndices.clear();
+
+    auto activeTail = activeEqualizerTailTracks.begin();
+    for (size_t trackIndex : activeEqualizerTailTracks)
+    {
+        TrackEqualizerState& state = trackEqualizerStates[trackIndex];
+        const bool hasTail = std::max({std::abs(state.lowLeft), std::abs(state.lowRight),
+                                       std::abs(state.upperLeft), std::abs(state.upperRight)}) > 1.0e-5f;
+        state.tailActive = hasTail;
+        if (hasTail)
+            *activeTail++ = trackIndex;
+    }
+    activeEqualizerTailTracks.erase(activeTail, activeEqualizerTailTracks.end());
 
     const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
         sampleRate * 60.0 / project->tempoBpm * 4.0 / project->beatUnit)));

@@ -1070,6 +1070,26 @@ void MainWindow::createDocks()
     }
     browserLayout->addWidget(synthEnvelopeGroup);
 
+    auto* equalizerGroup = new QGroupBox(tr("TRACK EQUALIZER"), browser);
+    equalizerControls = equalizerGroup;
+    auto* equalizerForm = new QFormLayout(equalizerGroup);
+    const std::array<QString, 3> equalizerLabels = {
+        tr("Low · below 120 Hz"), tr("Mid · 120 Hz–6 kHz"), tr("High · above 6 kHz")
+    };
+    for (int band = 0; band < static_cast<int>(equalizerGainControls.size()); ++band)
+    {
+        QDoubleSpinBox* control = new QDoubleSpinBox(equalizerGroup);
+        control->setRange(-18.0, 18.0);
+        control->setDecimals(1);
+        control->setSingleStep(0.5);
+        control->setSuffix(tr(" dB"));
+        equalizerGainControls[static_cast<size_t>(band)] = control;
+        equalizerForm->addRow(equalizerLabels[static_cast<size_t>(band)], control);
+        connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, band](double value) { setSelectedTrackEqualizer(band, value); });
+    }
+    browserLayout->addWidget(equalizerGroup);
+
     auto* automationGroup = new QGroupBox(tr("TRACK AUTOMATION"), browser);
     automationEditorPanel = automationGroup;
     auto* automationLayout = new QVBoxLayout(automationGroup);
@@ -1428,6 +1448,16 @@ void MainWindow::refreshProjectUi()
         envelopeControls[index]->setValue(envelopeValues[index]);
         envelopeControls[index]->setEnabled(synthTrackSelected);
     }
+    equalizerControls->setVisible(track != nullptr);
+    const std::array<float, 3> equalizerValues = track == nullptr
+        ? std::array<float, 3>{0.0f, 0.0f, 0.0f}
+        : std::array<float, 3>{track->eqLowDb, track->eqMidDb, track->eqHighDb};
+    for (size_t index = 0; index < equalizerGainControls.size(); ++index)
+    {
+        const QSignalBlocker equalizerBlocker(equalizerGainControls[index]);
+        equalizerGainControls[index]->setValue(equalizerValues[index]);
+        equalizerGainControls[index]->setEnabled(track != nullptr);
+    }
     refreshAutomationEditor();
     instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
                                track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
@@ -1598,7 +1628,7 @@ void MainWindow::refreshMixer()
         form->addRow(tr("Pan"), panRow);
         auto* peakMeter = createPeakMeter(group);
         peakMeter->setObjectName(QStringLiteral("trackPeakMeter"));
-        peakMeter->setToolTip(tr("Track peak level after volume and pan"));
+        peakMeter->setToolTip(tr("Track peak level after volume, pan, and EQ"));
         mixerTrackMeters.push_back({trackId, peakMeter});
         form->addRow(tr("Peak"), peakMeter);
         layout->addWidget(group);
@@ -2050,6 +2080,24 @@ void MainWindow::setSelectedSynthEnvelope(int parameter, double value)
         case 1: track->decaySeconds = static_cast<float>(value); break;
         case 2: track->sustainLevel = static_cast<float>(value); break;
         case 3: track->releaseSeconds = static_cast<float>(value); break;
+        default: return;
+    }
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::setSelectedTrackEqualizer(int band, double gainDb)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || band < 0 || band > 2)
+        return;
+    const float normalizedGain = static_cast<float>(std::clamp(gainDb, -18.0, 18.0));
+    switch (band)
+    {
+        case 0: track->eqLowDb = normalizedGain; break;
+        case 1: track->eqMidDb = normalizedGain; break;
+        case 2: track->eqHighDb = normalizedGain; break;
         default: return;
     }
     audioEngine.setProject(project);

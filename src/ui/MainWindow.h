@@ -77,6 +77,7 @@ private:
     void createSelectedAudioCrossfade();
     void applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades);
     void setSelectedSynthEnvelope(int parameter, double value);
+    void setSelectedTrackEqualizer(int band, double gainDb);
     void refreshAutomationEditor();
     void addAutomationPoint();
     void removeAutomationPoint();
@@ -162,9 +163,11 @@ private:
     QSlider* masterControl = nullptr;
     QWidget* audioRegionControls = nullptr;
     QWidget* synthEnvelopePanel = nullptr;
+    QWidget* equalizerControls = nullptr;
     QWidget* automationEditorPanel = nullptr;
     QWidget* drumSampleControls = nullptr;
     std::array<QDoubleSpinBox*, 4> envelopeControls{};
+    std::array<QDoubleSpinBox*, 3> equalizerGainControls{};
     QDoubleSpinBox* audioFadeInControl = nullptr;
     QDoubleSpinBox* audioFadeOutControl = nullptr;
     QPushButton* audioCrossfadeButton = nullptr;

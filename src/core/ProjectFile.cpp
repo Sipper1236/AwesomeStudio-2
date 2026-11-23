@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 12;
+constexpr int currentProjectVersion = 13;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -219,6 +219,9 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("releaseSeconds"), track.releaseSeconds},
         {QStringLiteral("gain"), track.gain},
         {QStringLiteral("pan"), track.pan},
+        {QStringLiteral("eqLowDb"), track.eqLowDb},
+        {QStringLiteral("eqMidDb"), track.eqMidDb},
+        {QStringLiteral("eqHighDb"), track.eqHighDb},
         {QStringLiteral("volumeAutomation"), saveAutomation(track.volumeAutomation)},
         {QStringLiteral("panAutomation"), saveAutomation(track.panAutomation)},
         {QStringLiteral("muted"), track.muted},
@@ -280,7 +283,7 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
 }
 
 bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& mediaBaseDir,
-               MediaLoadContext& media, QString* error)
+               MediaLoadContext& media, int version, QString* error)
 {
     if (!value.isObject())
     {
@@ -303,6 +306,12 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         object.value(QStringLiteral("releaseSeconds")).toDouble(track.releaseSeconds));
     track.gain = static_cast<float>(object.value(QStringLiteral("gain")).toDouble(0.8));
     track.pan = static_cast<float>(object.value(QStringLiteral("pan")).toDouble(0.0));
+    if (version >= 13)
+    {
+        track.eqLowDb = static_cast<float>(object.value(QStringLiteral("eqLowDb")).toDouble(0.0));
+        track.eqMidDb = static_cast<float>(object.value(QStringLiteral("eqMidDb")).toDouble(0.0));
+        track.eqHighDb = static_cast<float>(object.value(QStringLiteral("eqHighDb")).toDouble(0.0));
+    }
     if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
                         QStringLiteral("volume"), error) ||
         !loadAutomation(object.value(QStringLiteral("panAutomation")), track.panAutomation,
@@ -504,7 +513,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
         for (const QJsonValue& trackJson : trackValue.toArray())
         {
             InstrumentTrack track;
-            if (!loadTrack(trackJson, track, mediaBaseDir, media, error))
+            if (!loadTrack(trackJson, track, mediaBaseDir, media, version, error))
                 return false;
             loaded.tracks.push_back(std::move(track));
         }
