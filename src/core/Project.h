@@ -340,6 +340,8 @@ struct ParametricEqBand
     float q = 0.707f;
 };
 
+constexpr int parametricEqBandCount = 7;
+
 struct InstrumentTrack
 {
     quint64 id = 0;
@@ -376,8 +378,10 @@ struct InstrumentTrack
     float eqHighDb = 0.0f;
     float eqLowCrossoverHz = 120.0f;
     float eqHighCrossoverHz = 6000.0f;
-    std::array<ParametricEqBand, 3> eqParametricBands{{
-        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f}
+    std::array<ParametricEqBand, parametricEqBandCount> eqParametricBands{{
+        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f},
+        {40.0f, 0.0f, 0.707f}, {350.0f, 0.0f, 0.707f},
+        {3000.0f, 0.0f, 0.707f}, {16000.0f, 0.0f, 0.707f}
     }};
     quint64 outputBusId = 0;
     QVector<MixerSend> sends;

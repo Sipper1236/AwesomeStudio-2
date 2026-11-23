@@ -174,7 +174,7 @@ private:
         float upperRight = 0.0f;
         float lowBandCoefficient = 0.0f;
         float highBandCoefficient = 0.0f;
-        std::array<ParametricEqCoefficients, 3> parametricCoefficients{};
+        std::array<ParametricEqCoefficients, parametricEqBandCount> parametricCoefficients{};
         std::array<std::array<ParametricEqDelay, 2>, 3> parametricDelays{};
         bool tailActive = false;
     };

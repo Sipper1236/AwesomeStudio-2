@@ -92,7 +92,7 @@ public:
         setToolTip(tr("Drag a band point to change its frequency and gain"));
     }
 
-    void setBands(const std::array<ParametricEqBand, 3>& bands)
+    void setBands(const std::array<ParametricEqBand, parametricEqBandCount>& bands)
     {
         parametricBands = bands;
         update();
@@ -108,7 +108,7 @@ public:
 
     void setSelectedBand(int band)
     {
-        selectedBand = std::clamp(band, 0, 2);
+        selectedBand = std::clamp(band, 0, parametricEqBandCount - 1);
         update();
     }
 
@@ -339,8 +339,10 @@ private:
         changeHandler(selectedBand, frequency, gainDb);
     }
 
-    std::array<ParametricEqBand, 3> parametricBands{{
-        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f}
+    std::array<ParametricEqBand, parametricEqBandCount> parametricBands{{
+        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f},
+        {40.0f, 0.0f, 0.707f}, {350.0f, 0.0f, 0.707f},
+        {3000.0f, 0.0f, 0.707f}, {16000.0f, 0.0f, 0.707f}
     }};
     std::array<float, 3> legacyGains{};
     std::array<float, 2> legacyCrossovers{120.0f, 6000.0f};
@@ -2902,7 +2904,7 @@ void MainWindow::createDocks()
     equalizerResponseGraph = responseGraph;
     parametricEqLayout->addWidget(responseGraph);
     parametricEqBandControl = new QComboBox(parametricEqGroup);
-    for (int band = 0; band < 3; ++band)
+    for (int band = 0; band < parametricEqBandCount; ++band)
         parametricEqBandControl->addItem(tr("Bell %1").arg(band + 1), band);
     parametricEqLayout->addWidget(parametricEqBandControl);
     auto* parametricEqForm = new QFormLayout;
@@ -6072,11 +6074,14 @@ void MainWindow::refreshParametricEqualizerControls()
     if (parametricEqBandControl == nullptr || equalizerResponseGraph == nullptr)
         return;
     InstrumentTrack* track = selectedTrack();
-    const int band = std::clamp(parametricEqBandControl->currentData().toInt(), 0, 2);
-    const std::array<ParametricEqBand, 3> defaults{{
-        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f}
+    const int band = std::clamp(parametricEqBandControl->currentData().toInt(),
+                                0, parametricEqBandCount - 1);
+    const std::array<ParametricEqBand, parametricEqBandCount> defaults{{
+        {120.0f, 0.0f, 0.707f}, {1000.0f, 0.0f, 0.707f}, {8000.0f, 0.0f, 0.707f},
+        {40.0f, 0.0f, 0.707f}, {350.0f, 0.0f, 0.707f},
+        {3000.0f, 0.0f, 0.707f}, {16000.0f, 0.0f, 0.707f}
     }};
-    const std::array<ParametricEqBand, 3>& bands = track == nullptr
+    const std::array<ParametricEqBand, parametricEqBandCount>& bands = track == nullptr
         ? defaults : track->eqParametricBands;
     const ParametricEqBand& selectedBand = bands[static_cast<size_t>(band)];
     const std::array<double, 3> values = {

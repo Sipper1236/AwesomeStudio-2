@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 48;
+constexpr int currentProjectVersion = 49;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
