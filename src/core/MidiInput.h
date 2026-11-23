@@ -18,6 +18,9 @@ struct MidiInputEvent
     int pitch = 0;
     int velocity = 0;
     bool noteOn = false;
+    bool controlChange = false;
+    int controller = 0;
+    int value = 0;
 };
 
 class MidiInput

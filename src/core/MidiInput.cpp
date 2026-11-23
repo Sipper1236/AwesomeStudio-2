@@ -181,6 +181,15 @@ QVector<MidiInputEvent> MidiInput::readAvailable()
                               event->data.note.velocity,
                               noteOn});
         }
+        else if (event->type == SND_SEQ_EVENT_CONTROLLER)
+        {
+            MidiInputEvent control;
+            control.channel = event->data.control.channel;
+            control.controlChange = true;
+            control.controller = event->data.control.param;
+            control.value = event->data.control.value;
+            events.push_back(control);
+        }
         snd_seq_free_event(event);
     }
 #endif

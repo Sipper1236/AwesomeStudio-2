@@ -100,7 +100,27 @@ private:
     void refreshMidiInputs();
     void pollMidiInput();
     void setMidiMonitorEnabled(bool enabled);
+    void setMidiControllerListening(bool enabled);
+    void beginMidiControllerLearn(int target);
+    void clearMidiControllerMapping(int target);
+    void loadMidiControllerMappings();
+    void saveMidiControllerMappings() const;
+    void handleMidiControlChange(int channel, int controller, int value);
+    void applyMidiControllerTarget(int target, int value);
     double currentMidiRecordingBeat();
+
+    enum class MidiControllerTarget : int
+    {
+        MasterLevel = 0,
+        SelectedTrackLevel = 1,
+        SelectedTrackPan = 2,
+        Tempo = 3
+    };
+    struct MidiControllerMapping
+    {
+        int channel = -1;
+        int controller = -1;
+    };
 
     AudioEngine& audioEngine;
     ProjectData project;
@@ -179,6 +199,10 @@ private:
     QComboBox* midiInputControl = nullptr;
     QTimer* midiInputPollTimer = nullptr;
     QString activeMidiInputPortId;
+    QAction* midiControllerListenAction = nullptr;
+    QHash<int, MidiControllerMapping> midiControllerMappings;
+    int pendingMidiControllerTarget = -1;
+    bool midiControllerListenerEnabled = false;
     QString pendingRecordingPath;
     QByteArray pendingRecordingDeviceId;
     QString pendingRecordingDeviceName;

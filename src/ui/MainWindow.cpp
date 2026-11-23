@@ -192,6 +192,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     createToolBars();
     createDocks();
     createMenus();
+    loadMidiControllerMappings();
 
     const auto applyEditedNotes = [this](const QVector<MidiNote>& before, const QVector<MidiNote>& after)
     {
@@ -1210,6 +1211,30 @@ void MainWindow::createMenus()
     transportMenu->addAction(loopAction);
     transportMenu->addAction(metronomeAction);
 
+    QMenu* midiMenu = menuBar()->addMenu(tr("&MIDI"));
+    midiControllerListenAction = new QAction(tr("Enable controller mappings"), this);
+    midiControllerListenAction->setCheckable(true);
+    midiControllerListenAction->setEnabled(MidiInput::isSupported());
+    midiControllerListenAction->setToolTip(tr("Listen for mapped MIDI CC controls on the selected input"));
+    midiMenu->addAction(midiControllerListenAction);
+    connect(midiControllerListenAction, &QAction::toggled,
+            this, &MainWindow::setMidiControllerListening);
+
+    const std::array<QString, 4> controllerTargets = {
+        tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo")
+    };
+    QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
+    QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
+    for (int target = 0; target < static_cast<int>(MidiControllerTarget::Tempo) + 1; ++target)
+    {
+        QAction* learnAction = learnControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
+        connect(learnAction, &QAction::triggered, this,
+                [this, target] { beginMidiControllerLearn(target); });
+        QAction* clearAction = clearControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
+        connect(clearAction, &QAction::triggered, this,
+                [this, target] { clearMidiControllerMapping(target); });
+    }
+
     QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(tr("About Awesome Studio"), this, [this]
     {
@@ -1430,6 +1455,7 @@ void MainWindow::refreshMixer()
         form->addRow(stateRow);
 
         auto* volume = new QSlider(Qt::Horizontal, group);
+        volume->setObjectName(QStringLiteral("mixerTrackVolume_%1").arg(item.id));
         volume->setRange(0, 100);
         volume->setValue(static_cast<int>(std::round(item.gain * 100.0f)));
         auto* volumeLabel = new QLabel(tr("%1%").arg(volume->value()), group);
@@ -1441,6 +1467,7 @@ void MainWindow::refreshMixer()
         form->addRow(tr("Level"), volumeRow);
 
         auto* pan = new QSlider(Qt::Horizontal, group);
+        pan->setObjectName(QStringLiteral("mixerTrackPan_%1").arg(item.id));
         pan->setRange(-100, 100);
         pan->setValue(static_cast<int>(std::round(item.pan * 100.0f)));
         auto* panLabel = new QLabel(item.pan < -0.02f ? tr("L %1").arg(std::abs(pan->value())) :
@@ -2474,11 +2501,202 @@ void MainWindow::refreshMidiInputs()
     }
     midiInputControl->setEnabled(!ports.isEmpty() && !audioRecorder && !recordingPending &&
                                  !midiMonitorAction->isChecked() &&
-                                 !midiRecordingActive && !midiRecordingPending);
+                                 !midiRecordingActive && !midiRecordingPending &&
+                                 !midiControllerListenerEnabled);
     midiRecordAction->setEnabled(!audioRecorder && !recordingPending &&
                                  (midiRecordingActive || midiRecordingPending || MidiInput::isSupported()));
     midiMonitorAction->setEnabled((!audioRecorder && !recordingPending) ||
                                   midiMonitorAction->isChecked());
+}
+
+void MainWindow::setMidiControllerListening(bool enabled)
+{
+    const auto rejectEnable = [this](const QString& message)
+    {
+        const QSignalBlocker blocker(midiControllerListenAction);
+        midiControllerListenAction->setChecked(false);
+        midiControllerListenerEnabled = false;
+        pendingMidiControllerTarget = -1;
+        statusBar()->showMessage(message, 5000);
+        refreshMidiInputs();
+    };
+
+    if (!enabled)
+    {
+        midiControllerListenerEnabled = false;
+        pendingMidiControllerTarget = -1;
+        if (!midiMonitorAction->isChecked() && !midiRecordingActive && !midiRecordingPending)
+        {
+            if (midiInputPollTimer != nullptr)
+                midiInputPollTimer->stop();
+            if (midiInput != nullptr)
+                midiInput->disconnect();
+            activeMidiInputPortId.clear();
+        }
+        refreshMidiInputs();
+        statusBar()->showMessage(tr("MIDI controller mappings stopped"), 1800);
+        return;
+    }
+
+    if (audioRecorder || recordingPending)
+    {
+        rejectEnable(tr("Stop audio recording before enabling MIDI controller mappings."));
+        return;
+    }
+    const QString portId = midiInputControl->currentData().toString();
+    if (portId.isEmpty())
+    {
+        rejectEnable(MidiInput::isSupported()
+            ? tr("No MIDI input devices are available. Connect a device and try again.")
+            : tr("MIDI controller mappings require an ALSA enabled Linux build."));
+        return;
+    }
+    if (midiInput == nullptr)
+        midiInput = std::make_unique<MidiInput>();
+    if (midiInput->isConnected() && activeMidiInputPortId != portId)
+    {
+        if (midiMonitorAction->isChecked() || midiRecordingActive || midiRecordingPending)
+        {
+            rejectEnable(tr("The active MIDI input is already being used by monitoring or recording."));
+            return;
+        }
+        midiInput->disconnect();
+    }
+    if (!midiInput->isConnected())
+    {
+        QString error;
+        if (!midiInput->connectTo(portId, &error))
+        {
+            rejectEnable(tr("Could not open MIDI input: %1").arg(error));
+            return;
+        }
+    }
+    activeMidiInputPortId = portId;
+    midiControllerListenerEnabled = true;
+    midiInputPollTimer->start();
+    refreshMidiInputs();
+    statusBar()->showMessage(tr("Listening for mapped MIDI controllers"), 2000);
+}
+
+void MainWindow::beginMidiControllerLearn(int target)
+{
+    const int targetCount = static_cast<int>(MidiControllerTarget::Tempo) + 1;
+    if (target < 0 || target >= targetCount)
+        return;
+    if ((target == static_cast<int>(MidiControllerTarget::SelectedTrackLevel) ||
+         target == static_cast<int>(MidiControllerTarget::SelectedTrackPan)) && selectedTrack() == nullptr)
+    {
+        statusBar()->showMessage(tr("Select a track before learning its MIDI control"), 3000);
+        return;
+    }
+    if (midiInput == nullptr || !midiInput->isConnected())
+    {
+        if (midiControllerListenAction == nullptr)
+            return;
+        midiControllerListenAction->setChecked(true);
+        if (midiInput == nullptr || !midiInput->isConnected())
+            return;
+    }
+    else if (midiControllerListenAction != nullptr && !midiControllerListenAction->isChecked())
+    {
+        midiControllerListenAction->setChecked(true);
+    }
+    pendingMidiControllerTarget = target;
+    statusBar()->showMessage(tr("Move a MIDI CC control to assign it to the selected target…"), 5000);
+}
+
+void MainWindow::clearMidiControllerMapping(int target)
+{
+    if (!midiControllerMappings.remove(target))
+    {
+        statusBar()->showMessage(tr("No MIDI controller mapping is assigned to that target"), 2200);
+        return;
+    }
+    if (pendingMidiControllerTarget == target)
+        pendingMidiControllerTarget = -1;
+    saveMidiControllerMappings();
+    statusBar()->showMessage(tr("MIDI controller mapping cleared"), 1800);
+}
+
+void MainWindow::loadMidiControllerMappings()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("midiControllerMappings"));
+    const int targetCount = static_cast<int>(MidiControllerTarget::Tempo) + 1;
+    for (int target = 0; target < targetCount; ++target)
+    {
+        const QString prefix = QString::number(target);
+        const int controller = settings.value(prefix + QStringLiteral("/controller"), -1).toInt();
+        const int channel = settings.value(prefix + QStringLiteral("/channel"), -1).toInt();
+        if (controller >= 0 && controller <= 127 && channel >= 0 && channel <= 15)
+            midiControllerMappings.insert(target, {channel, controller});
+    }
+    settings.endGroup();
+}
+
+void MainWindow::saveMidiControllerMappings() const
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("midiControllerMappings"));
+    const int targetCount = static_cast<int>(MidiControllerTarget::Tempo) + 1;
+    for (int target = 0; target < targetCount; ++target)
+    {
+        const MidiControllerMapping mapping = midiControllerMappings.value(target);
+        const QString prefix = QString::number(target);
+        settings.setValue(prefix + QStringLiteral("/controller"), mapping.controller);
+        settings.setValue(prefix + QStringLiteral("/channel"), mapping.channel);
+    }
+    settings.endGroup();
+    settings.sync();
+}
+
+void MainWindow::handleMidiControlChange(int channel, int controller, int value)
+{
+    if (pendingMidiControllerTarget >= 0)
+    {
+        const int target = pendingMidiControllerTarget;
+        pendingMidiControllerTarget = -1;
+        midiControllerMappings.insert(target, {channel, controller});
+        saveMidiControllerMappings();
+        statusBar()->showMessage(tr("Mapped MIDI CC %1 on channel %2").arg(controller).arg(channel + 1), 3000);
+        return;
+    }
+
+    for (auto it = midiControllerMappings.cbegin(); it != midiControllerMappings.cend(); ++it)
+    {
+        if (it->channel == channel && it->controller == controller)
+            applyMidiControllerTarget(it.key(), value);
+    }
+}
+
+void MainWindow::applyMidiControllerTarget(int target, int value)
+{
+    value = std::clamp(value, 0, 127);
+    if (target == static_cast<int>(MidiControllerTarget::MasterLevel))
+    {
+        masterControl->setValue(static_cast<int>(std::lround(value * 100.0 / 127.0)));
+        return;
+    }
+    if (target == static_cast<int>(MidiControllerTarget::Tempo))
+    {
+        tempoControl->setValue(20.0 + value * 280.0 / 127.0);
+        return;
+    }
+
+    const InstrumentTrack* track = selectedTrack();
+    if (track == nullptr)
+        return;
+    const bool levelTarget = target == static_cast<int>(MidiControllerTarget::SelectedTrackLevel);
+    QSlider* control = mixerDock->findChild<QSlider*>(
+        QStringLiteral("mixerTrack%1_%2").arg(levelTarget ? QStringLiteral("Volume") : QStringLiteral("Pan"))
+                                         .arg(track->id));
+    if (control == nullptr)
+        return;
+    const int controlValue = levelTarget
+        ? static_cast<int>(std::lround(value * 100.0 / 127.0))
+        : value <= 64 ? static_cast<int>(std::lround((value - 64) * 100.0 / 64.0))
+                      : static_cast<int>(std::lround((value - 64) * 100.0 / 63.0));
+    control->setValue(controlValue);
 }
 
 void MainWindow::setMidiMonitorEnabled(bool enabled)
@@ -2494,7 +2712,7 @@ void MainWindow::setMidiMonitorEnabled(bool enabled)
     if (!enabled)
     {
         audioEngine.stopLiveMidiNotes();
-        if (!midiRecordingActive && !midiRecordingPending)
+        if (!midiRecordingActive && !midiRecordingPending && !midiControllerListenerEnabled)
         {
             if (midiInputPollTimer != nullptr)
                 midiInputPollTimer->stop();
@@ -2930,6 +3148,12 @@ void MainWindow::pollMidiInput()
 
     for (const MidiInputEvent& event : events)
     {
+        if (event.controlChange)
+        {
+            handleMidiControlChange(event.channel, event.controller, event.value);
+            continue;
+        }
+
         if (midiMonitorAction->isChecked())
         {
             if (event.noteOn)
@@ -3013,7 +3237,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
 
     midiRecordingActive = false;
     midiRecordingPending = false;
-    if (!midiMonitorAction->isChecked())
+    if (!midiMonitorAction->isChecked() && !midiControllerListenerEnabled)
     {
         if (midiInputPollTimer != nullptr)
             midiInputPollTimer->stop();
