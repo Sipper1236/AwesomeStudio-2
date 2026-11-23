@@ -138,6 +138,7 @@ AudioEngine::AudioEngine()
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_relaxed);
         liveTrackPans[index].store(2.0f, std::memory_order_relaxed);
+        liveSynthFilterCutoffOverrides[index].store(-1.0f, std::memory_order_relaxed);
         trackPeakValues[index].store(0.0f, std::memory_order_relaxed);
     }
     for (auto& peak : busPeakValues)
@@ -224,6 +225,7 @@ void AudioEngine::setProject(const ProjectData& project)
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_release);
         liveTrackPans[index].store(2.0f, std::memory_order_release);
+        liveSynthFilterCutoffOverrides[index].store(-1.0f, std::memory_order_release);
         trackPeakValues[index].store(0.0f, std::memory_order_release);
     }
     for (auto& peak : busPeakValues)
@@ -356,6 +358,43 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
         else
             liveTrackPans[index].store(2.0f, std::memory_order_release);
         return;
+    }
+}
+
+void AudioEngine::setLiveSynthFilterCutoffOverride(quint64 trackId, float value)
+{
+    if (!std::isfinite(value))
+        return;
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
+    if (!project)
+        return;
+    for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                            index < maximumTrackCount; ++index)
+    {
+        if (project->tracks[static_cast<qsizetype>(index)].id == trackId)
+        {
+            liveSynthFilterCutoffOverrides[index].store(
+                std::clamp(value, 20.0f, 20000.0f), std::memory_order_release);
+            return;
+        }
+    }
+}
+
+void AudioEngine::clearLiveSynthFilterCutoffOverride(quint64 trackId)
+{
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
+    if (!project)
+        return;
+    for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                            index < maximumTrackCount; ++index)
+    {
+        if (project->tracks[static_cast<qsizetype>(index)].id == trackId)
+        {
+            liveSynthFilterCutoffOverrides[index].store(-1.0f, std::memory_order_release);
+            return;
+        }
     }
 }
 
@@ -1324,6 +1363,8 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             liveTrackVolumes[index].load(std::memory_order_acquire));
         renderer.setLiveTrackMixOverride(index, 1,
             liveTrackPans[index].load(std::memory_order_acquire));
+        renderer.setLiveSynthFilterCutoffOverride(index,
+            liveSynthFilterCutoffOverrides[index].load(std::memory_order_acquire));
     }
     const quint64 livePluginTrackId = this->livePluginTrackId.load(std::memory_order_acquire);
     const qsizetype livePluginEffectIndex = this->livePluginEffectIndex.load(std::memory_order_relaxed);

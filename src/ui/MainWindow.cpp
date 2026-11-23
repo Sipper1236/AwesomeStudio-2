@@ -976,7 +976,8 @@ QString automationCurveName(AutomationPoint::Curve curve)
     }
 }
 
-constexpr int pluginAutomationTargetBase = 2;
+constexpr int synthFilterCutoffAutomationTarget = 2;
+constexpr int pluginAutomationTargetBase = 3;
 constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
 constexpr int clapInstrumentAutomationTargetBase =
@@ -1021,6 +1022,9 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    if (target == synthFilterCutoffAutomationTarget)
+        return track.instrumentType == InstrumentType::Synth
+            ? &track.synthFilterCutoffAutomation : nullptr;
     qsizetype instrumentParameterIndex = 0;
     if (decodeClapInstrumentAutomationTarget(target, instrumentParameterIndex))
     {
@@ -1053,6 +1057,9 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    if (target == synthFilterCutoffAutomationTarget)
+        return track.instrumentType == InstrumentType::Synth
+            ? &track.synthFilterCutoffAutomation : nullptr;
     qsizetype instrumentParameterIndex = 0;
     if (decodeClapInstrumentAutomationTarget(target, instrumentParameterIndex))
     {
@@ -1100,6 +1107,9 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
               track == nullptr ? 0.0f : track->pan, QString());
     if (track != nullptr)
     {
+        if (track->instrumentType == InstrumentType::Synth)
+            addTarget(QObject::tr("Synth filter cutoff"), synthFilterCutoffAutomationTarget,
+                      20.0f, 20000.0f, track->synthFilterCutoffHz, QString());
         for (qsizetype effectIndex = 0; effectIndex < track->effects.size(); ++effectIndex)
         {
             const MixerEffect& effect = track->effects[effectIndex];
@@ -2738,14 +2748,14 @@ void MainWindow::createToolBars()
     arrangementBar->addSeparator();
     automationViewAction = new QAction(tr("Automation lanes"), this);
     automationViewAction->setCheckable(true);
-    automationViewAction->setToolTip(tr("Show and edit volume, pan, or LV2/CLAP parameter automation in the Playlist"));
+    automationViewAction->setToolTip(tr("Show and edit track, built-in synth, or LV2/CLAP parameter automation in the Playlist"));
     arrangementBar->addAction(automationViewAction);
     automationLaneParameterControl = new QComboBox(arrangementBar);
     automationLaneParameterControl->addItem(tr("Volume"), 0);
     automationLaneParameterControl->addItem(tr("Pan"), 1);
     automationLaneParameterControl->setMinimumWidth(190);
     automationLaneParameterControl->setEnabled(false);
-    automationLaneParameterControl->setToolTip(tr("Volume, pan, or LV2/CLAP parameter shown in the Playlist lanes"));
+    automationLaneParameterControl->setToolTip(tr("Choose the parameter shown in the Playlist lanes"));
     arrangementBar->addWidget(automationLaneParameterControl);
     automationWriteModeControl = new QComboBox(arrangementBar);
     automationWriteModeControl->addItem(tr("Touch"), 0);
@@ -2756,7 +2766,7 @@ void MainWindow::createToolBars()
     arrangementBar->addWidget(automationWriteModeControl);
     automationWriteAction = new QAction(tr("Write automation"), this);
     automationWriteAction->setCheckable(true);
-    automationWriteAction->setToolTip(tr("Record the selected track volume, pan, or LV2/CLAP parameter while the transport plays"));
+    automationWriteAction->setToolTip(tr("Record the selected track, synth-filter, or LV2/CLAP parameter while the transport plays"));
     arrangementBar->addAction(automationWriteAction);
     automationWriteIdleTimer = new QTimer(this);
     automationWriteIdleTimer->setSingleShot(true);
@@ -6521,6 +6531,34 @@ void MainWindow::setSelectedSynthFilter(int parameter, double value)
         return;
     if (synthPresetControl != nullptr)
         synthPresetControl->setCurrentIndex(-1);
+    if (parameter == 1)
+    {
+        const int automationTarget = synthFilterCutoffAutomationTarget;
+        const float cutoffHz = static_cast<float>(std::clamp(value, 20.0, 20000.0));
+        if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+            automationWriteSession.parameter == automationTarget)
+        {
+            recordAutomationValue(track->id, automationTarget, cutoffHz);
+            if (automationWriteModeControl->currentData().toInt() != 1)
+                automationWriteIdleTimer->start(250);
+            return;
+        }
+        if (automationWriteAction != nullptr && automationWriteAction->isChecked() &&
+            audioEngine.isPlaying() && automationLaneParameterControl != nullptr &&
+            automationLaneParameterControl->currentData().toInt() == automationTarget)
+        {
+            beginAutomationWrite(track->id, automationTarget, track->synthFilterCutoffHz,
+                QString(), -1, -1, 20.0f, 20000.0f, tr("synth filter cutoff"));
+            if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+                automationWriteSession.parameter == automationTarget)
+            {
+                recordAutomationValue(track->id, automationTarget, cutoffHz);
+                if (automationWriteModeControl->currentData().toInt() != 1)
+                    automationWriteIdleTimer->start(250);
+                return;
+            }
+        }
+    }
     switch (parameter)
     {
         case 0: track->synthFilterEnabled = value >= 0.5; break;
@@ -6986,6 +7024,7 @@ void MainWindow::refreshAutomationEditor()
     const int target = automationParameterControl->currentData().toInt();
     const bool volume = target == 0;
     const bool pan = target == 1;
+    const bool synthFilterCutoff = target == synthFilterCutoffAutomationTarget;
     const QString pluginUri = automationParameterControl->currentData(Qt::UserRole + 4).toString();
     const QVector<AutomationPoint>* points = track == nullptr ? nullptr :
         automationCurve(static_cast<const InstrumentTrack&>(*track), target, pluginUri);
@@ -6994,13 +7033,15 @@ void MainWindow::refreshAutomationEditor()
     const double maximum = automationParameterControl->itemData(targetIndex, Qt::UserRole + 2).toDouble();
     automationEditorPanel->setEnabled(track != nullptr);
     automationValueLabel->setText(volume ? tr("Volume (%)") : pan ? tr("Pan (%)") :
+        synthFilterCutoff ? tr("Cutoff (Hz)") :
         tr("%1 value").arg(automationParameterControl->currentText()));
     automationValueControl->setRange(volume || pan ? minimum * 100.0 : minimum,
                                      volume || pan ? maximum * 100.0 : maximum);
     automationValueControl->setSingleStep(volume ? 5.0 : pan ? 10.0 :
         std::max(0.001, (maximum - minimum) / 100.0));
-    automationValueControl->setDecimals(volume || pan ? 0 : 4);
-    automationValueControl->setSuffix(volume || pan ? QStringLiteral("%") : QString());
+    automationValueControl->setDecimals(volume || pan || synthFilterCutoff ? 0 : 4);
+    automationValueControl->setSuffix(volume || pan ? QStringLiteral("%") :
+        synthFilterCutoff ? tr(" Hz") : QString());
 
     const double selectedBeat = automationPointsList->currentItem() == nullptr ? -1.0 :
         automationPointsList->currentItem()->data(Qt::UserRole).toDouble();
@@ -7051,7 +7092,8 @@ void MainWindow::refreshArrangementAutomationView()
     const float maximum = automationLaneParameterControl->itemData(index, Qt::UserRole + 2).toFloat();
     const float defaultValue = automationLaneParameterControl->itemData(index, Qt::UserRole + 3).toFloat();
     const QString pluginUri = automationLaneParameterControl->itemData(index, Qt::UserRole + 4).toString();
-    const bool writeAutomationTarget = target == 0 || target == 1 || !pluginUri.isEmpty();
+    const bool writeAutomationTarget = target == 0 || target == 1 ||
+        target == synthFilterCutoffAutomationTarget || !pluginUri.isEmpty();
     if (!writeAutomationTarget && automationWriteAction != nullptr && automationWriteAction->isChecked())
         automationWriteAction->setChecked(false);
     if (automationWriteAction != nullptr)
@@ -7220,7 +7262,9 @@ void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float valu
         statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
         return;
     }
-    if (pluginUri.isEmpty())
+    if (pluginUri.isEmpty() && parameter == synthFilterCutoffAutomationTarget)
+        audioEngine.setLiveSynthFilterCutoffOverride(trackId, initialWriteValue);
+    else if (pluginUri.isEmpty())
         audioEngine.setLiveTrackMixOverride(trackId, parameter, initialWriteValue);
     else
         audioEngine.setLivePluginParameterOverride(trackId, effectIndex, parameterIndex, initialWriteValue);
@@ -7271,7 +7315,10 @@ void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float val
                                      (trimMode ? std::abs(writeValue - underlyingValue)
                                       : std::abs(value - automationWriteSession.initialValue)) > 1.0e-6f;
     automationWriteSession.lastValue = value;
-    if (automationWriteSession.pluginUri.isEmpty())
+    if (automationWriteSession.pluginUri.isEmpty() &&
+        parameter == synthFilterCutoffAutomationTarget)
+        audioEngine.setLiveSynthFilterCutoffOverride(trackId, writeValue);
+    else if (automationWriteSession.pluginUri.isEmpty())
         audioEngine.setLiveTrackMixOverride(trackId, parameter, writeValue);
     else
         audioEngine.setLivePluginParameterOverride(trackId, automationWriteSession.effectIndex,
@@ -7285,7 +7332,10 @@ void MainWindow::finishAutomationWrite()
     automationWriteIdleTimer->stop();
     AutomationWriteSession session = automationWriteSession;
     automationWriteSession = {};
-    if (session.pluginUri.isEmpty())
+    if (session.pluginUri.isEmpty() &&
+        session.parameter == synthFilterCutoffAutomationTarget)
+        audioEngine.clearLiveSynthFilterCutoffOverride(session.trackId);
+    else if (session.pluginUri.isEmpty())
         audioEngine.clearLiveTrackMixOverride(session.trackId, session.parameter);
     else
         audioEngine.clearLivePluginParameterOverride(session.trackId, session.effectIndex,
@@ -7308,7 +7358,9 @@ void MainWindow::finishAutomationWrite()
     undoStack.push(new AutomationEditCommand(this, session.trackId, session.parameter,
                                              session.before, after, session.pluginUri));
     const QString parameterName = session.parameterName.isEmpty()
-        ? session.parameter == 0 ? tr("volume") : tr("pan") : session.parameterName;
+        ? session.parameter == 0 ? tr("volume")
+            : session.parameter == 1 ? tr("pan") : tr("synth filter cutoff")
+        : session.parameterName;
     statusBar()->showMessage(tr("Recorded %1 automation for %2")
                                  .arg(parameterName, track->name), 2500);
 }

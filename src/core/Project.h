@@ -407,6 +407,7 @@ struct InstrumentTrack
     QVector<MixerEffect> effects;
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
+    QVector<AutomationPoint> synthFilterCutoffAutomation;
     bool muted = false;
     bool solo = false;
     std::array<DrumPadSample, 4> drumSamples;

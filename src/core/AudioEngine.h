@@ -35,6 +35,8 @@ public:
     float masterPeakLevel() const;
     void setLiveTrackMixOverride(quint64 trackId, int parameter, float value);
     void clearLiveTrackMixOverride(quint64 trackId, int parameter);
+    void setLiveSynthFilterCutoffOverride(quint64 trackId, float value);
+    void clearLiveSynthFilterCutoffOverride(quint64 trackId);
     void setLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
                                         qsizetype parameterIndex, float value);
     void clearLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
@@ -211,6 +213,7 @@ private:
     std::atomic<float> masterGain{0.8f};
     std::array<std::atomic<float>, maximumTrackCount> liveTrackVolumes;
     std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
+    std::array<std::atomic<float>, maximumTrackCount> liveSynthFilterCutoffOverrides;
     std::atomic<quint64> livePluginTrackId{0};
     std::atomic<qsizetype> livePluginEffectIndex{-1};
     std::atomic<qsizetype> livePluginParameterIndex{-1};

@@ -239,6 +239,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixAutomations.reserve(static_cast<size_t>(project->tracks.size()));
     trackMixValues.resize(static_cast<size_t>(project->tracks.size()));
     liveTrackMixOverrides.resize(static_cast<size_t>(project->tracks.size()));
+    liveSynthFilterCutoffOverrides.assign(static_cast<size_t>(project->tracks.size()), -1.0f);
     trackPitchBends.assign(static_cast<size_t>(project->tracks.size()), {});
     trackEqualizerGains.reserve(static_cast<size_t>(project->tracks.size()));
     trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
@@ -923,8 +924,13 @@ StereoSample SynthRenderer::finishMixerFrame()
                 trackIndex < static_cast<size_t>(project->tracks.size()))
             {
                 const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+                const float liveCutoff = liveSynthFilterCutoffOverrides[trackIndex];
+                const float automatedCutoff = std::isfinite(liveCutoff) && liveCutoff >= 20.0f
+                    ? liveCutoff
+                    : automationValue(track.synthFilterCutoffAutomation, currentBeat,
+                                      track.synthFilterCutoffHz);
                 const double cutoff = std::clamp(
-                    static_cast<double>(track.synthFilterCutoffHz) * std::exp2(
+                    static_cast<double>(automatedCutoff) * std::exp2(
                         static_cast<double>(synthFilterEnvelopeSemitoneOffsets[trackIndex]) / 12.0),
                     20.0, std::max(20.0, sampleRate * 0.49));
                 EffectState& filter = trackInstrumentFilterStates[trackIndex].front();
@@ -1580,6 +1586,12 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
         liveTrackMixOverrides[trackIndex].volume = value;
     else if (parameter == 1)
         liveTrackMixOverrides[trackIndex].pan = value;
+}
+
+void SynthRenderer::setLiveSynthFilterCutoffOverride(size_t trackIndex, float value)
+{
+    if (trackIndex < liveSynthFilterCutoffOverrides.size())
+        liveSynthFilterCutoffOverrides[trackIndex] = value;
 }
 
 void SynthRenderer::setLivePluginParameterOverride(size_t trackIndex, qsizetype effectIndex,
