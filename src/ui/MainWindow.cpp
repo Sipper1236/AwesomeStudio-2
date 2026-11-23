@@ -2532,10 +2532,23 @@ void MainWindow::createDocks()
         rowLayout->setContentsMargins(0, 0, 0, 0);
         drumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(
             tr("Load %1 sample…").arg(drumPadNames[static_cast<size_t>(pad)]), row);
-        clearDrumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(tr("Clear"), row);
+        clearDrumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(tr("Clear base layer"), row);
         rowLayout->addWidget(drumSampleButtons[static_cast<size_t>(pad)], 1);
         rowLayout->addWidget(clearDrumSampleButtons[static_cast<size_t>(pad)]);
         drumSampleLayout->addWidget(row);
+        auto* veryLowVelocityRow = new QWidget(drumSampleControls);
+        auto* veryLowVelocityRowLayout = new QHBoxLayout(veryLowVelocityRow);
+        veryLowVelocityRowLayout->setContentsMargins(0, 0, 0, 0);
+        veryLowVelocityDrumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(
+            tr("Load %1 extra-low layer…").arg(drumPadNames[static_cast<size_t>(pad)]),
+            veryLowVelocityRow);
+        clearVeryLowVelocityDrumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(
+            tr("Clear layer"), veryLowVelocityRow);
+        veryLowVelocityRowLayout->addWidget(
+            veryLowVelocityDrumSampleButtons[static_cast<size_t>(pad)], 1);
+        veryLowVelocityRowLayout->addWidget(
+            clearVeryLowVelocityDrumSampleButtons[static_cast<size_t>(pad)]);
+        drumSampleLayout->addWidget(veryLowVelocityRow);
         auto* lowVelocityRow = new QWidget(drumSampleControls);
         auto* lowVelocityRowLayout = new QHBoxLayout(lowVelocityRow);
         lowVelocityRowLayout->setContentsMargins(0, 0, 0, 0);
@@ -2558,6 +2571,19 @@ void MainWindow::createDocks()
         highVelocityRowLayout->addWidget(highVelocityDrumSampleButtons[static_cast<size_t>(pad)], 1);
         highVelocityRowLayout->addWidget(clearHighVelocityDrumSampleButtons[static_cast<size_t>(pad)]);
         drumSampleLayout->addWidget(highVelocityRow);
+        auto* veryHighVelocityRow = new QWidget(drumSampleControls);
+        auto* veryHighVelocityRowLayout = new QHBoxLayout(veryHighVelocityRow);
+        veryHighVelocityRowLayout->setContentsMargins(0, 0, 0, 0);
+        veryHighVelocityDrumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(
+            tr("Load %1 extra-high layer…").arg(drumPadNames[static_cast<size_t>(pad)]),
+            veryHighVelocityRow);
+        clearVeryHighVelocityDrumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(
+            tr("Clear layer"), veryHighVelocityRow);
+        veryHighVelocityRowLayout->addWidget(
+            veryHighVelocityDrumSampleButtons[static_cast<size_t>(pad)], 1);
+        veryHighVelocityRowLayout->addWidget(
+            clearVeryHighVelocityDrumSampleButtons[static_cast<size_t>(pad)]);
+        drumSampleLayout->addWidget(veryHighVelocityRow);
         auto* parameterForm = new QFormLayout();
         parameterForm->setContentsMargins(0, 0, 0, 0);
         drumSampleTuneControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
@@ -2605,21 +2631,39 @@ void MainWindow::createDocks()
         parameterForm->addRow(tr("Pad decay"), drumPadDecayControls[static_cast<size_t>(pad)]);
         parameterForm->addRow(tr("Pad sustain"), drumPadSustainControls[static_cast<size_t>(pad)]);
         parameterForm->addRow(tr("Pad release"), drumPadReleaseControls[static_cast<size_t>(pad)]);
+        veryLowVelocityThresholdControls[static_cast<size_t>(pad)] =
+            new QSpinBox(drumSampleControls);
+        veryLowVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(1, 124);
+        veryLowVelocityThresholdControls[static_cast<size_t>(pad)]->setSuffix(tr(" velocity"));
+        parameterForm->addRow(tr("Extra-low layer below"),
+                              veryLowVelocityThresholdControls[static_cast<size_t>(pad)]);
         lowVelocityThresholdControls[static_cast<size_t>(pad)] = new QSpinBox(drumSampleControls);
-        lowVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(1, 126);
+        lowVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(2, 125);
         lowVelocityThresholdControls[static_cast<size_t>(pad)]->setSuffix(tr(" velocity"));
         parameterForm->addRow(tr("Use low-velocity layer below"),
                               lowVelocityThresholdControls[static_cast<size_t>(pad)]);
         highVelocityThresholdControls[static_cast<size_t>(pad)] = new QSpinBox(drumSampleControls);
-        highVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(1, 127);
+        highVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(3, 126);
         highVelocityThresholdControls[static_cast<size_t>(pad)]->setSuffix(tr(" velocity"));
         parameterForm->addRow(tr("Use high-velocity layer at"),
                               highVelocityThresholdControls[static_cast<size_t>(pad)]);
+        veryHighVelocityThresholdControls[static_cast<size_t>(pad)] =
+            new QSpinBox(drumSampleControls);
+        veryHighVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(4, 127);
+        veryHighVelocityThresholdControls[static_cast<size_t>(pad)]->setSuffix(tr(" velocity"));
+        parameterForm->addRow(tr("Extra-high layer at"),
+                              veryHighVelocityThresholdControls[static_cast<size_t>(pad)]);
         drumSampleLayout->addLayout(parameterForm);
         connect(drumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
                 [this, pad] { importDrumSample(pad); });
         connect(clearDrumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
                 [this, pad] { clearDrumSample(pad); });
+        connect(veryLowVelocityDrumSampleButtons[static_cast<size_t>(pad)],
+                &QPushButton::clicked, this,
+                [this, pad] { importVeryLowVelocityDrumSample(pad); });
+        connect(clearVeryLowVelocityDrumSampleButtons[static_cast<size_t>(pad)],
+                &QPushButton::clicked, this,
+                [this, pad] { clearVeryLowVelocityDrumSample(pad); });
         connect(lowVelocityDrumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
                 [this, pad] { importLowVelocityDrumSample(pad); });
         connect(clearLowVelocityDrumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
@@ -2628,6 +2672,12 @@ void MainWindow::createDocks()
                 [this, pad] { importHighVelocityDrumSample(pad); });
         connect(clearHighVelocityDrumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
                 [this, pad] { clearHighVelocityDrumSample(pad); });
+        connect(veryHighVelocityDrumSampleButtons[static_cast<size_t>(pad)],
+                &QPushButton::clicked, this,
+                [this, pad] { importVeryHighVelocityDrumSample(pad); });
+        connect(clearVeryHighVelocityDrumSampleButtons[static_cast<size_t>(pad)],
+                &QPushButton::clicked, this,
+                [this, pad] { clearVeryHighVelocityDrumSample(pad); });
         connect(drumSampleTuneControls[static_cast<size_t>(pad)],
                 qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, pad](double value) { setSelectedDrumSample(pad, 0, value); });
@@ -2652,6 +2702,12 @@ void MainWindow::createDocks()
                 this, [this, pad](int value) { setSelectedDrumSample(pad, 3, value); });
         connect(lowVelocityThresholdControls[static_cast<size_t>(pad)], qOverload<int>(&QSpinBox::valueChanged),
                 this, [this, pad](int value) { setSelectedDrumSample(pad, 8, value); });
+        connect(veryLowVelocityThresholdControls[static_cast<size_t>(pad)],
+                qOverload<int>(&QSpinBox::valueChanged), this,
+                [this, pad](int value) { setSelectedDrumSample(pad, 9, value); });
+        connect(veryHighVelocityThresholdControls[static_cast<size_t>(pad)],
+                qOverload<int>(&QSpinBox::valueChanged), this,
+                [this, pad](int value) { setSelectedDrumSample(pad, 10, value); });
     }
     browserLayout->addWidget(drumSampleControls);
     drumSampleControls->hide();
@@ -3100,22 +3156,38 @@ void MainWindow::refreshProjectUi()
         drumSampleButtons[pad]->setEnabled(drumRackSelected);
         clearDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
                                                 !sample->path.isEmpty());
+        veryLowVelocityDrumSampleButtons[pad]->setText(
+            sample == nullptr || sample->veryLowVelocityPath.isEmpty()
+                ? tr("Load %1 extra-low layer…").arg(padName)
+                : sample->veryLowVelocitySource != nullptr
+                    ? QFileInfo(sample->veryLowVelocityPath).fileName()
+                    : tr("%1 extra-low · OFFLINE").arg(padName));
+        veryLowVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
+        clearVeryLowVelocityDrumSampleButtons[pad]->setEnabled(
+            drumRackSelected && sample != nullptr && !sample->veryLowVelocityPath.isEmpty());
         lowVelocityDrumSampleButtons[pad]->setText(sample == nullptr || sample->lowVelocityPath.isEmpty()
             ? tr("Load %1 low-velocity layer…").arg(padName)
             : sample->lowVelocitySource != nullptr ? QFileInfo(sample->lowVelocityPath).fileName()
                                                    : tr("%1 low layer · OFFLINE").arg(padName));
-        lowVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
-                                                      !sample->path.isEmpty());
+        lowVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
         clearLowVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
                                                            !sample->lowVelocityPath.isEmpty());
         highVelocityDrumSampleButtons[pad]->setText(sample == nullptr || sample->highVelocityPath.isEmpty()
             ? tr("Load %1 high-velocity layer…").arg(padName)
             : sample->highVelocitySource != nullptr ? QFileInfo(sample->highVelocityPath).fileName()
                                                     : tr("%1 layer · OFFLINE").arg(padName));
-        highVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
-                                                       !sample->path.isEmpty());
+        highVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
         clearHighVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
                                                             !sample->highVelocityPath.isEmpty());
+        veryHighVelocityDrumSampleButtons[pad]->setText(
+            sample == nullptr || sample->veryHighVelocityPath.isEmpty()
+                ? tr("Load %1 extra-high layer…").arg(padName)
+                : sample->veryHighVelocitySource != nullptr
+                    ? QFileInfo(sample->veryHighVelocityPath).fileName()
+                    : tr("%1 extra-high · OFFLINE").arg(padName));
+        veryHighVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
+        clearVeryHighVelocityDrumSampleButtons[pad]->setEnabled(
+            drumRackSelected && sample != nullptr && !sample->veryHighVelocityPath.isEmpty());
         const QSignalBlocker tuneBlocker(drumSampleTuneControls[pad]);
         const QSignalBlocker startBlocker(drumSampleStartControls[pad]);
         const QSignalBlocker loopBlocker(drumSampleLoopControls[pad]);
@@ -3123,8 +3195,10 @@ void MainWindow::refreshProjectUi()
         const QSignalBlocker decayBlocker(drumPadDecayControls[pad]);
         const QSignalBlocker sustainBlocker(drumPadSustainControls[pad]);
         const QSignalBlocker releaseBlocker(drumPadReleaseControls[pad]);
+        const QSignalBlocker veryLowThresholdBlocker(veryLowVelocityThresholdControls[pad]);
         const QSignalBlocker lowThresholdBlocker(lowVelocityThresholdControls[pad]);
         const QSignalBlocker thresholdBlocker(highVelocityThresholdControls[pad]);
+        const QSignalBlocker veryHighThresholdBlocker(veryHighVelocityThresholdControls[pad]);
         drumSampleTuneControls[pad]->setValue(sample == nullptr ? 0.0 : sample->tuningSemitones);
         drumSampleStartControls[pad]->setValue(
             sample == nullptr ? 0.0 : sample->startPositionPercent);
@@ -3133,11 +3207,27 @@ void MainWindow::refreshProjectUi()
         drumPadDecayControls[pad]->setValue(sample == nullptr ? 0.0 : sample->decaySeconds);
         drumPadSustainControls[pad]->setValue(sample == nullptr ? 1.0 : sample->sustainLevel);
         drumPadReleaseControls[pad]->setValue(sample == nullptr ? 0.06 : sample->releaseSeconds);
-        const bool sampleAssigned = drumRackSelected && sample != nullptr && !sample->path.isEmpty();
-        const bool lowVelocityLayerAssigned = sampleAssigned && !sample->lowVelocityPath.isEmpty();
-        const bool velocityLayerAssigned = sampleAssigned && !sample->highVelocityPath.isEmpty();
+        const bool sampleAssigned = drumRackSelected && sample != nullptr &&
+            sample->hasSampleAssignment();
+        veryLowVelocityThresholdControls[pad]->setRange(1,
+            sample == nullptr ? 124 : sample->lowVelocityThreshold);
         lowVelocityThresholdControls[pad]->setValue(sample == nullptr ? 48 : sample->lowVelocityThreshold);
-        highVelocityThresholdControls[pad]->setValue(sample == nullptr ? 100 : sample->highVelocityThreshold);
+        lowVelocityThresholdControls[pad]->setRange(
+            sample == nullptr ? 2 : sample->veryLowVelocityThreshold,
+            sample == nullptr ? 125 : sample->highVelocityThreshold - 1);
+        highVelocityThresholdControls[pad]->setRange(
+            sample == nullptr ? 3 : sample->lowVelocityThreshold + 1,
+            sample == nullptr ? 126 : sample->veryHighVelocityThreshold);
+        veryHighVelocityThresholdControls[pad]->setRange(
+            sample == nullptr ? 4 : sample->highVelocityThreshold, 127);
+        veryLowVelocityThresholdControls[pad]->setValue(
+            sample == nullptr ? 24 : sample->veryLowVelocityThreshold);
+        lowVelocityThresholdControls[pad]->setValue(
+            sample == nullptr ? 48 : sample->lowVelocityThreshold);
+        highVelocityThresholdControls[pad]->setValue(
+            sample == nullptr ? 100 : sample->highVelocityThreshold);
+        veryHighVelocityThresholdControls[pad]->setValue(
+            sample == nullptr ? 120 : sample->veryHighVelocityThreshold);
         drumSampleTuneControls[pad]->setEnabled(sampleAssigned);
         drumSampleStartControls[pad]->setEnabled(sampleAssigned);
         drumSampleLoopControls[pad]->setEnabled(sampleAssigned);
@@ -3145,8 +3235,10 @@ void MainWindow::refreshProjectUi()
         drumPadDecayControls[pad]->setEnabled(drumRackSelected);
         drumPadSustainControls[pad]->setEnabled(drumRackSelected);
         drumPadReleaseControls[pad]->setEnabled(drumRackSelected);
-        lowVelocityThresholdControls[pad]->setEnabled(lowVelocityLayerAssigned);
-        highVelocityThresholdControls[pad]->setEnabled(velocityLayerAssigned);
+        veryLowVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
+        lowVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
+        highVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
+        veryHighVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
     }
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
@@ -5878,8 +5970,17 @@ void MainWindow::setProject(const ProjectData& incoming, const QString& path)
             if (clip.isAudioRegion() && clip.audioSource == nullptr)
                 ++offlineSources;
         for (const DrumPadSample& sample : track.drumSamples)
-            if (!sample.path.isEmpty() && sample.source == nullptr)
+        {
+            if (!sample.path.isEmpty() && sample.source == nullptr) ++offlineSources;
+            if (!sample.veryLowVelocityPath.isEmpty() && sample.veryLowVelocitySource == nullptr)
                 ++offlineSources;
+            if (!sample.lowVelocityPath.isEmpty() && sample.lowVelocitySource == nullptr)
+                ++offlineSources;
+            if (!sample.highVelocityPath.isEmpty() && sample.highVelocitySource == nullptr)
+                ++offlineSources;
+            if (!sample.veryHighVelocityPath.isEmpty() && sample.veryHighVelocitySource == nullptr)
+                ++offlineSources;
+        }
     }
     if (offlineSources > 0)
         statusBar()->showMessage(tr("Project opened with %1 offline audio source reference(s); restore media or reduce loaded audio.")
@@ -6052,8 +6153,9 @@ void MainWindow::savePortableProjectCopy()
             break;
         for (DrumPadSample& sample : track.drumSamples)
         {
-            if (!collectPath(sample.path) || !collectPath(sample.lowVelocityPath) ||
-                !collectPath(sample.highVelocityPath))
+            if (!collectPath(sample.path) || !collectPath(sample.veryLowVelocityPath) ||
+                !collectPath(sample.lowVelocityPath) || !collectPath(sample.highVelocityPath) ||
+                !collectPath(sample.veryHighVelocityPath))
             {
                 collected = false;
                 break;
@@ -6387,9 +6489,10 @@ void MainWindow::importDrumSample(int pad)
         return;
     }
     settingsDirty = true;
+    const QString loadedFileName = QFileInfo(drumSample.path).fileName();
     refreshProjectUi();
     statusBar()->showMessage(tr("Drum sample set: %1")
-                                 .arg(QFileInfo(drumSample.path).fileName()), 2500);
+                                 .arg(loadedFileName), 2500);
 }
 
 void MainWindow::clearDrumSample(int pad)
@@ -6399,78 +6502,57 @@ void MainWindow::clearDrumSample(int pad)
         pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
         return;
 
-    track->drumSamples[static_cast<size_t>(pad)] = DrumPadSample{};
+    DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+    sample.path.clear();
+    sample.source.reset();
+    const bool hasOtherLayers = sample.hasSampleAssignment();
     settingsDirty = true;
     refreshProjectUi();
-    statusBar()->showMessage(tr("Using synthesized sound for this drum pad"), 2000);
+    statusBar()->showMessage(hasOtherLayers
+        ? tr("Base drum layer cleared") : tr("Using synthesized sound for this drum pad"), 2000);
+}
+
+void MainWindow::importVeryLowVelocityDrumSample(int pad)
+{
+    importDrumVelocityLayer(pad, 0);
+}
+
+void MainWindow::clearVeryLowVelocityDrumSample(int pad)
+{
+    clearDrumVelocityLayer(pad, 0);
 }
 
 void MainWindow::importLowVelocityDrumSample(int pad)
 {
-    if (audioRecorder || recordingPending)
-    {
-        statusBar()->showMessage(tr("Finish the active recording before loading more audio."), 3000);
-        return;
-    }
-    InstrumentTrack* track = selectedTrack();
-    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
-        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
-        return;
-
-    DrumPadSample& drumSample = track->drumSamples[static_cast<size_t>(pad)];
-    if (drumSample.path.isEmpty())
-        return;
-    const QString path = QFileDialog::getOpenFileName(this, tr("Load low-velocity drum layer"), QString(),
-                                                       tr("WAV audio (*.wav)"));
-    if (path.isEmpty())
-        return;
-
-    std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
-    QString error;
-    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
-    {
-        QMessageBox::critical(this, tr("Could not load drum sample layer"), error);
-        return;
-    }
-    const QString previousPath = drumSample.lowVelocityPath;
-    const std::shared_ptr<const AudioAsset> previousSource = drumSample.lowVelocitySource;
-    const int previousHighThreshold = drumSample.highVelocityThreshold;
-    drumSample.lowVelocityPath = asset->path;
-    drumSample.lowVelocitySource = asset;
-    if (!drumSample.highVelocityPath.isEmpty())
-        drumSample.highVelocityThreshold = std::max(drumSample.highVelocityThreshold,
-                                                      drumSample.lowVelocityThreshold + 1);
-    if (projectAudioBytes() > AudioFile::maximumProjectDecodedBytes)
-    {
-        drumSample.lowVelocityPath = previousPath;
-        drumSample.lowVelocitySource = previousSource;
-        drumSample.highVelocityThreshold = previousHighThreshold;
-        QMessageBox::warning(this, tr("Audio memory limit"),
-                             tr("This project can load up to 512 MiB of decoded audio. Remove another audio source first."));
-        return;
-    }
-    settingsDirty = true;
-    refreshProjectUi();
-    statusBar()->showMessage(tr("Low-velocity layer set: %1")
-                                 .arg(QFileInfo(drumSample.lowVelocityPath).fileName()), 2500);
+    importDrumVelocityLayer(pad, 1);
 }
 
 void MainWindow::clearLowVelocityDrumSample(int pad)
 {
-    InstrumentTrack* track = selectedTrack();
-    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
-        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
-        return;
-    DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
-    sample.lowVelocityPath.clear();
-    sample.lowVelocitySource.reset();
-    sample.lowVelocityThreshold = 48;
-    settingsDirty = true;
-    refreshProjectUi();
-    statusBar()->showMessage(tr("Low-velocity sample layer cleared"), 2000);
+    clearDrumVelocityLayer(pad, 1);
 }
 
 void MainWindow::importHighVelocityDrumSample(int pad)
+{
+    importDrumVelocityLayer(pad, 2);
+}
+
+void MainWindow::clearHighVelocityDrumSample(int pad)
+{
+    clearDrumVelocityLayer(pad, 2);
+}
+
+void MainWindow::importVeryHighVelocityDrumSample(int pad)
+{
+    importDrumVelocityLayer(pad, 3);
+}
+
+void MainWindow::clearVeryHighVelocityDrumSample(int pad)
+{
+    clearDrumVelocityLayer(pad, 3);
+}
+
+void MainWindow::importDrumVelocityLayer(int pad, int layer)
 {
     if (audioRecorder || recordingPending)
     {
@@ -6479,14 +6561,39 @@ void MainWindow::importHighVelocityDrumSample(int pad)
     }
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
-        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
+        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()) || layer < 0 || layer > 3)
         return;
 
-    DrumPadSample& drumSample = track->drumSamples[static_cast<size_t>(pad)];
-    if (drumSample.path.isEmpty())
-        return;
-    const QString path = QFileDialog::getOpenFileName(this, tr("Load high-velocity drum layer"), QString(),
-                                                       tr("WAV audio (*.wav)"));
+    DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+    QString* targetPath = nullptr;
+    std::shared_ptr<const AudioAsset>* targetSource = nullptr;
+    QString layerName;
+    switch (layer)
+    {
+        case 0:
+            targetPath = &sample.veryLowVelocityPath;
+            targetSource = &sample.veryLowVelocitySource;
+            layerName = tr("extra-low");
+            break;
+        case 1:
+            targetPath = &sample.lowVelocityPath;
+            targetSource = &sample.lowVelocitySource;
+            layerName = tr("low");
+            break;
+        case 2:
+            targetPath = &sample.highVelocityPath;
+            targetSource = &sample.highVelocitySource;
+            layerName = tr("high");
+            break;
+        case 3:
+            targetPath = &sample.veryHighVelocityPath;
+            targetSource = &sample.veryHighVelocitySource;
+            layerName = tr("extra-high");
+            break;
+        default: return;
+    }
+    const QString path = QFileDialog::getOpenFileName(this,
+        tr("Load %1-velocity drum layer").arg(layerName), QString(), tr("WAV audio (*.wav)"));
     if (path.isEmpty())
         return;
 
@@ -6497,42 +6604,56 @@ void MainWindow::importHighVelocityDrumSample(int pad)
         QMessageBox::critical(this, tr("Could not load drum sample layer"), error);
         return;
     }
-    const QString previousPath = drumSample.highVelocityPath;
-    const std::shared_ptr<const AudioAsset> previousSource = drumSample.highVelocitySource;
-    const int previousThreshold = drumSample.highVelocityThreshold;
-    drumSample.highVelocityPath = asset->path;
-    drumSample.highVelocitySource = asset;
-    if (!drumSample.lowVelocityPath.isEmpty())
-        drumSample.highVelocityThreshold = std::max(drumSample.highVelocityThreshold,
-                                                     drumSample.lowVelocityThreshold + 1);
+    const QString previousPath = *targetPath;
+    const std::shared_ptr<const AudioAsset> previousSource = *targetSource;
+    *targetPath = asset->path;
+    *targetSource = asset;
     if (projectAudioBytes() > AudioFile::maximumProjectDecodedBytes)
     {
-        drumSample.highVelocityPath = previousPath;
-        drumSample.highVelocitySource = previousSource;
-        drumSample.highVelocityThreshold = previousThreshold;
+        *targetPath = previousPath;
+        *targetSource = previousSource;
         QMessageBox::warning(this, tr("Audio memory limit"),
-                             tr("This project can load up to 512 MiB of decoded audio. Remove another audio source first."));
+            tr("This project can load up to 512 MiB of decoded audio. Remove another audio source first."));
         return;
     }
     settingsDirty = true;
+    const QString loadedFileName = QFileInfo(*targetPath).fileName();
     refreshProjectUi();
-    statusBar()->showMessage(tr("High-velocity layer set: %1")
-                                 .arg(QFileInfo(drumSample.highVelocityPath).fileName()), 2500);
+    statusBar()->showMessage(tr("%1-velocity layer set: %2").arg(layerName,
+        loadedFileName), 2500);
 }
 
-void MainWindow::clearHighVelocityDrumSample(int pad)
+void MainWindow::clearDrumVelocityLayer(int pad, int layer)
 {
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
-        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
+        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()) || layer < 0 || layer > 3)
         return;
+
     DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
-    sample.highVelocityPath.clear();
-    sample.highVelocitySource.reset();
-    sample.highVelocityThreshold = 100;
+    switch (layer)
+    {
+        case 0:
+            sample.veryLowVelocityPath.clear();
+            sample.veryLowVelocitySource.reset();
+            break;
+        case 1:
+            sample.lowVelocityPath.clear();
+            sample.lowVelocitySource.reset();
+            break;
+        case 2:
+            sample.highVelocityPath.clear();
+            sample.highVelocitySource.reset();
+            break;
+        case 3:
+            sample.veryHighVelocityPath.clear();
+            sample.veryHighVelocitySource.reset();
+            break;
+        default: return;
+    }
     settingsDirty = true;
     refreshProjectUi();
-    statusBar()->showMessage(tr("High-velocity sample layer cleared"), 2000);
+    statusBar()->showMessage(tr("Velocity layer cleared"), 2000);
 }
 
 void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
@@ -6542,9 +6663,7 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
         pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
         return;
     DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
-    if ((parameter <= 2 && sample.path.isEmpty()) ||
-        (parameter == 3 && (sample.path.isEmpty() || sample.highVelocityPath.isEmpty())) ||
-        (parameter == 8 && (sample.path.isEmpty() || sample.lowVelocityPath.isEmpty())))
+    if (parameter <= 2 && !sample.hasSampleAssignment())
         return;
     switch (parameter)
     {
@@ -6553,33 +6672,44 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
         case 2: sample.loopEnabled = value >= 0.5; break;
         case 3:
             sample.highVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)),
-                sample.lowVelocityPath.isEmpty() ? 1 : sample.lowVelocityThreshold + 1, 127);
-            {
-                const QSignalBlocker blocker(highVelocityThresholdControls[static_cast<size_t>(pad)]);
-                highVelocityThresholdControls[static_cast<size_t>(pad)]->setValue(
-                    sample.highVelocityThreshold);
-            }
+                sample.lowVelocityThreshold + 1, sample.veryHighVelocityThreshold);
             break;
         case 4: sample.attackSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
         case 5: sample.decaySeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
         case 6: sample.sustainLevel = static_cast<float>(std::clamp(value, 0.0, 1.0)); break;
         case 7: sample.releaseSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
         case 8:
-            sample.lowVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)), 1, 126);
-            if (!sample.highVelocityPath.isEmpty())
-                sample.highVelocityThreshold = std::max(sample.highVelocityThreshold,
-                                                          sample.lowVelocityThreshold + 1);
-            {
-                const QSignalBlocker lowBlocker(lowVelocityThresholdControls[static_cast<size_t>(pad)]);
-                const QSignalBlocker highBlocker(highVelocityThresholdControls[static_cast<size_t>(pad)]);
-                lowVelocityThresholdControls[static_cast<size_t>(pad)]->setValue(
-                    sample.lowVelocityThreshold);
-                highVelocityThresholdControls[static_cast<size_t>(pad)]->setValue(
-                    sample.highVelocityThreshold);
-            }
+            sample.lowVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)),
+                sample.veryLowVelocityThreshold, sample.highVelocityThreshold - 1);
+            break;
+        case 9:
+            sample.veryLowVelocityThreshold = std::clamp(
+                static_cast<int>(std::lround(value)), 1, sample.lowVelocityThreshold);
+            break;
+        case 10:
+            sample.veryHighVelocityThreshold = std::clamp(
+                static_cast<int>(std::lround(value)), sample.highVelocityThreshold, 127);
             break;
         default: return;
     }
+    const QSignalBlocker veryLowBlocker(veryLowVelocityThresholdControls[static_cast<size_t>(pad)]);
+    const QSignalBlocker lowBlocker(lowVelocityThresholdControls[static_cast<size_t>(pad)]);
+    const QSignalBlocker highBlocker(highVelocityThresholdControls[static_cast<size_t>(pad)]);
+    const QSignalBlocker veryHighBlocker(veryHighVelocityThresholdControls[static_cast<size_t>(pad)]);
+    veryLowVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(
+        1, sample.lowVelocityThreshold);
+    lowVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(
+        sample.veryLowVelocityThreshold, sample.highVelocityThreshold - 1);
+    highVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(
+        sample.lowVelocityThreshold + 1, sample.veryHighVelocityThreshold);
+    veryHighVelocityThresholdControls[static_cast<size_t>(pad)]->setRange(
+        sample.highVelocityThreshold, 127);
+    veryLowVelocityThresholdControls[static_cast<size_t>(pad)]->setValue(
+        sample.veryLowVelocityThreshold);
+    lowVelocityThresholdControls[static_cast<size_t>(pad)]->setValue(sample.lowVelocityThreshold);
+    highVelocityThresholdControls[static_cast<size_t>(pad)]->setValue(sample.highVelocityThreshold);
+    veryHighVelocityThresholdControls[static_cast<size_t>(pad)]->setValue(
+        sample.veryHighVelocityThreshold);
     audioEngine.setProject(project);
     settingsDirty = true;
     refreshDirtyState();
@@ -6609,8 +6739,10 @@ quint64 MainWindow::projectAudioBytes() const
         for (const DrumPadSample& sample : track.drumSamples)
         {
             addAsset(sample.source);
+            addAsset(sample.veryLowVelocitySource);
             addAsset(sample.lowVelocitySource);
             addAsset(sample.highVelocitySource);
+            addAsset(sample.veryHighVelocitySource);
         }
     }
     return totalBytes;
@@ -6638,8 +6770,10 @@ std::shared_ptr<const AudioAsset> MainWindow::findProjectAudioAsset(const QStrin
         for (const DrumPadSample& sample : track.drumSamples)
         {
             if (matchesPath(sample.source)) return sample.source;
+            if (matchesPath(sample.veryLowVelocitySource)) return sample.veryLowVelocitySource;
             if (matchesPath(sample.lowVelocitySource)) return sample.lowVelocitySource;
             if (matchesPath(sample.highVelocitySource)) return sample.highVelocitySource;
+            if (matchesPath(sample.veryHighVelocitySource)) return sample.veryHighVelocitySource;
         }
     }
     return {};

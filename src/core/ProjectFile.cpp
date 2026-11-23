@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 43;
+constexpr int currentProjectVersion = 44;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -548,10 +548,14 @@ QJsonObject saveTrack(const InstrumentTrack& track)
              for (const DrumPadSample& sample : track.drumSamples)
                  samples.push_back(QJsonObject{
                      {QStringLiteral("path"), sample.path},
+                     {QStringLiteral("veryLowVelocityPath"), sample.veryLowVelocityPath},
+                     {QStringLiteral("veryLowVelocityThreshold"), sample.veryLowVelocityThreshold},
                      {QStringLiteral("lowVelocityPath"), sample.lowVelocityPath},
                      {QStringLiteral("lowVelocityThreshold"), sample.lowVelocityThreshold},
                      {QStringLiteral("highVelocityPath"), sample.highVelocityPath},
                      {QStringLiteral("highVelocityThreshold"), sample.highVelocityThreshold},
+                     {QStringLiteral("veryHighVelocityPath"), sample.veryHighVelocityPath},
+                     {QStringLiteral("veryHighVelocityThreshold"), sample.veryHighVelocityThreshold},
                      {QStringLiteral("tuningSemitones"), sample.tuningSemitones},
                      {QStringLiteral("startPositionPercent"), sample.startPositionPercent},
                      {QStringLiteral("loopEnabled"), sample.loopEnabled},
@@ -910,6 +914,30 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                     }
                     sample.lowVelocityPath = lowVelocityPath.toString();
                 }
+                if (version >= 44)
+                {
+                    const QJsonValue veryLowVelocityPath = sampleObject.value(
+                        QStringLiteral("veryLowVelocityPath"));
+                    const QJsonValue veryHighVelocityPath = sampleObject.value(
+                        QStringLiteral("veryHighVelocityPath"));
+                    sample.veryLowVelocityThreshold = sampleObject.value(
+                        QStringLiteral("veryLowVelocityThreshold")).toInt(-1);
+                    sample.veryHighVelocityThreshold = sampleObject.value(
+                        QStringLiteral("veryHighVelocityThreshold")).toInt(-1);
+                    if ((!veryLowVelocityPath.isString() && !veryLowVelocityPath.isNull()) ||
+                        (!veryHighVelocityPath.isString() && !veryHighVelocityPath.isNull()) ||
+                        sample.veryLowVelocityThreshold < 1 ||
+                        sample.veryHighVelocityThreshold > 127 ||
+                        sample.veryLowVelocityThreshold > sample.lowVelocityThreshold ||
+                        sample.lowVelocityThreshold >= sample.highVelocityThreshold ||
+                        sample.highVelocityThreshold > sample.veryHighVelocityThreshold)
+                    {
+                        setError(error, QStringLiteral("The drum rack contains invalid outer velocity layers."));
+                        return false;
+                    }
+                    sample.veryLowVelocityPath = veryLowVelocityPath.toString();
+                    sample.veryHighVelocityPath = veryHighVelocityPath.toString();
+                }
             }
             else
             {
@@ -921,8 +949,12 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                 sample.path = drumSamples[index].toString();
             }
             loadAudioReference(sample.path, mediaBaseDir, media, sample.source);
+            loadAudioReference(sample.veryLowVelocityPath, mediaBaseDir, media,
+                               sample.veryLowVelocitySource);
             loadAudioReference(sample.lowVelocityPath, mediaBaseDir, media, sample.lowVelocitySource);
             loadAudioReference(sample.highVelocityPath, mediaBaseDir, media, sample.highVelocitySource);
+            loadAudioReference(sample.veryHighVelocityPath, mediaBaseDir, media,
+                               sample.veryHighVelocitySource);
         }
     }
     else if (!drumSampleValue.isUndefined() && !drumSampleValue.isNull())

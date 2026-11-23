@@ -106,12 +106,18 @@ struct DrumPadSample
 {
     QString path;
     std::shared_ptr<const AudioAsset> source;
+    QString veryLowVelocityPath;
+    std::shared_ptr<const AudioAsset> veryLowVelocitySource;
+    int veryLowVelocityThreshold = 24;
     QString lowVelocityPath;
     std::shared_ptr<const AudioAsset> lowVelocitySource;
     int lowVelocityThreshold = 48;
     QString highVelocityPath;
     std::shared_ptr<const AudioAsset> highVelocitySource;
     int highVelocityThreshold = 100;
+    QString veryHighVelocityPath;
+    std::shared_ptr<const AudioAsset> veryHighVelocitySource;
+    int veryHighVelocityThreshold = 120;
     float tuningSemitones = 0.0f;
     float startPositionPercent = 0.0f;
     bool loopEnabled = false;
@@ -122,22 +128,26 @@ struct DrumPadSample
 
     bool hasSampleAssignment() const
     {
-        return !path.isEmpty() || !lowVelocityPath.isEmpty() || !highVelocityPath.isEmpty();
+        return !path.isEmpty() || !veryLowVelocityPath.isEmpty() || !lowVelocityPath.isEmpty() ||
+               !highVelocityPath.isEmpty() || !veryHighVelocityPath.isEmpty();
     }
     const std::shared_ptr<const AudioAsset>& sourceForVelocity(int velocity) const
     {
-        if (lowVelocitySource != nullptr && velocity < lowVelocityThreshold)
-            return lowVelocitySource;
-        if (highVelocitySource != nullptr &&
-            velocity >= highVelocityThreshold)
-            return highVelocitySource;
-        if (source != nullptr)
-            return source;
-        if (lowVelocitySource != nullptr && (highVelocitySource == nullptr ||
-                                              velocity < highVelocityThreshold))
-            return lowVelocitySource;
-        if (highVelocitySource != nullptr)
-            return highVelocitySource;
+        const std::array<const std::shared_ptr<const AudioAsset>*, 5> layers = {
+            &veryLowVelocitySource, &lowVelocitySource, &source,
+            &highVelocitySource, &veryHighVelocitySource
+        };
+        int selected = 0;
+        if (velocity >= veryLowVelocityThreshold) ++selected;
+        if (velocity >= lowVelocityThreshold) ++selected;
+        if (velocity >= highVelocityThreshold) ++selected;
+        if (velocity >= veryHighVelocityThreshold) ++selected;
+        for (int index = selected; index >= 0; --index)
+            if (*layers[static_cast<size_t>(index)] != nullptr)
+                return *layers[static_cast<size_t>(index)];
+        for (size_t index = static_cast<size_t>(selected + 1); index < layers.size(); ++index)
+            if (*layers[index] != nullptr)
+                return *layers[index];
         return source;
     }
 };

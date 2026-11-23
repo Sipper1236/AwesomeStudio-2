@@ -611,15 +611,21 @@ void ProjectData::normalize()
         {
             if (drumSample.source != nullptr && drumSample.path.isEmpty())
                 drumSample.path = drumSample.source->path;
+            if (drumSample.veryLowVelocitySource != nullptr && drumSample.veryLowVelocityPath.isEmpty())
+                drumSample.veryLowVelocityPath = drumSample.veryLowVelocitySource->path;
             if (drumSample.lowVelocitySource != nullptr && drumSample.lowVelocityPath.isEmpty())
                 drumSample.lowVelocityPath = drumSample.lowVelocitySource->path;
             if (drumSample.highVelocitySource != nullptr && drumSample.highVelocityPath.isEmpty())
                 drumSample.highVelocityPath = drumSample.highVelocitySource->path;
+            if (drumSample.veryHighVelocitySource != nullptr && drumSample.veryHighVelocityPath.isEmpty())
+                drumSample.veryHighVelocityPath = drumSample.veryHighVelocitySource->path;
             drumSample.lowVelocityThreshold = std::clamp(drumSample.lowVelocityThreshold, 1, 126);
-            drumSample.highVelocityThreshold = std::clamp(drumSample.highVelocityThreshold, 1, 127);
-            if (!drumSample.lowVelocityPath.isEmpty() && !drumSample.highVelocityPath.isEmpty())
-                drumSample.highVelocityThreshold = std::max(drumSample.highVelocityThreshold,
-                                                            drumSample.lowVelocityThreshold + 1);
+            drumSample.highVelocityThreshold = std::clamp(
+                drumSample.highVelocityThreshold, drumSample.lowVelocityThreshold + 1, 127);
+            drumSample.veryLowVelocityThreshold = std::clamp(
+                drumSample.veryLowVelocityThreshold, 1, drumSample.lowVelocityThreshold);
+            drumSample.veryHighVelocityThreshold = std::clamp(
+                drumSample.veryHighVelocityThreshold, drumSample.highVelocityThreshold, 127);
             if (!std::isfinite(drumSample.tuningSemitones))
                 drumSample.tuningSemitones = 0.0f;
             if (!std::isfinite(drumSample.startPositionPercent))

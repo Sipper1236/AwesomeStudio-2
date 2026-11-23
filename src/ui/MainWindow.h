@@ -133,10 +133,16 @@ private:
     void finishAutomationWrite();
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
+    void importVeryLowVelocityDrumSample(int pad);
+    void clearVeryLowVelocityDrumSample(int pad);
     void importLowVelocityDrumSample(int pad);
     void clearLowVelocityDrumSample(int pad);
     void importHighVelocityDrumSample(int pad);
     void clearHighVelocityDrumSample(int pad);
+    void importVeryHighVelocityDrumSample(int pad);
+    void clearVeryHighVelocityDrumSample(int pad);
+    void importDrumVelocityLayer(int pad, int layer);
+    void clearDrumVelocityLayer(int pad, int layer);
     void setSelectedDrumSample(int pad, int parameter, double value);
     quint64 projectAudioBytes() const;
     std::shared_ptr<const AudioAsset> findProjectAudioAsset(const QString& path) const;
@@ -263,6 +269,9 @@ private:
     QProgressBar* masterPeakMeter = nullptr;
     std::array<QPushButton*, 4> drumSampleButtons{};
     std::array<QPushButton*, 4> clearDrumSampleButtons{};
+    std::array<QPushButton*, 4> veryLowVelocityDrumSampleButtons{};
+    std::array<QPushButton*, 4> clearVeryLowVelocityDrumSampleButtons{};
+    std::array<QSpinBox*, 4> veryLowVelocityThresholdControls{};
     std::array<QPushButton*, 4> lowVelocityDrumSampleButtons{};
     std::array<QPushButton*, 4> clearLowVelocityDrumSampleButtons{};
     std::array<QSpinBox*, 4> lowVelocityThresholdControls{};
@@ -276,6 +285,9 @@ private:
     std::array<QPushButton*, 4> highVelocityDrumSampleButtons{};
     std::array<QPushButton*, 4> clearHighVelocityDrumSampleButtons{};
     std::array<QSpinBox*, 4> highVelocityThresholdControls{};
+    std::array<QPushButton*, 4> veryHighVelocityDrumSampleButtons{};
+    std::array<QPushButton*, 4> clearVeryHighVelocityDrumSampleButtons{};
+    std::array<QSpinBox*, 4> veryHighVelocityThresholdControls{};
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
     QPushButton* clapInstrumentControlsButton = nullptr;
