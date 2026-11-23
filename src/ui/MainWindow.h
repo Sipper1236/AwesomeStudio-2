@@ -223,7 +223,13 @@ private:
         SelectedTrackFilterEnvelopeDecay = 15,
         SelectedTrackFilterEnvelopeSustain = 16,
         SelectedTrackFilterEnvelopeRelease = 17,
-        SelectedTrackFilterEnvelopeEnabled = 18
+        SelectedTrackFilterEnvelopeEnabled = 18,
+        SelectedTrackOscillatorWaveform = 19,
+        SelectedTrackSecondOscillatorEnabled = 20,
+        SelectedTrackSecondOscillatorWaveform = 21,
+        SelectedTrackSecondOscillatorDetune = 22,
+        SelectedTrackFilterEnabled = 23,
+        SelectedTrackFilterType = 24
     };
     struct MidiControllerMapping
     {
