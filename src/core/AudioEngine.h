@@ -79,6 +79,7 @@ public:
                               float releaseSeconds = 0.06f);
     void setMasterGain(float gain);
     bool setAudioInputMonitoring(bool enabled);
+    void setAudioInputMonitorTrack(quint64 trackId);
     void pushAudioInputMonitorFrames(const float* interleavedSamples, qsizetype frameCount,
                                      int channelCount, int sampleRate);
 
@@ -227,6 +228,7 @@ private:
     std::atomic<quint64> audioMonitorWriteIndex{0};
     std::atomic<quint64> audioMonitorReadIndex{0};
     std::atomic<quint64> audioMonitorGeneration{0};
+    std::atomic<quint64> audioMonitorTrackId{0};
     std::atomic<bool> audioInputMonitoring{false};
     double audioMonitorNextSourceFrame = 0.0;
     quint64 audioMonitorSourceFrameIndex = 0;

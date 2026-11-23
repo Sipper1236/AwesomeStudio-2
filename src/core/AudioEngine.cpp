@@ -1201,6 +1201,12 @@ bool AudioEngine::setAudioInputMonitoring(bool enabled)
     return true;
 }
 
+void AudioEngine::setAudioInputMonitorTrack(quint64 trackId)
+{
+    if (audioMonitorTrackId.exchange(trackId, std::memory_order_acq_rel) != trackId)
+        audioMonitorGeneration.fetch_add(1, std::memory_order_acq_rel);
+}
+
 void AudioEngine::pushAudioInputMonitorFrames(const float* interleavedSamples, qsizetype frameCount,
                                              int channelCount, int sampleRate)
 {
@@ -1289,6 +1295,20 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         return 0;
     const auto& project = renderState->project;
     SynthRenderer& renderer = *renderState->renderer;
+    size_t audioMonitorTrackIndex = maximumTrackCount;
+    const quint64 monitorTrackId = audioMonitorTrackId.load(std::memory_order_acquire);
+    if (monitorTrackId != 0)
+    {
+        for (size_t trackIndex = 0; trackIndex < static_cast<size_t>(project->tracks.size()); ++trackIndex)
+        {
+            const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+            if (track.id == monitorTrackId && track.instrumentType == InstrumentType::Audio)
+            {
+                audioMonitorTrackIndex = trackIndex;
+                break;
+            }
+        }
+    }
     struct ClapProcessingExit
     {
         SynthRenderer& renderer;
@@ -1414,9 +1434,45 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             applyLiveMidiEvent(noteOff, clockFrame, renderer);
         }
         renderLiveMidiVoices(clockFrame, renderer);
+        StereoSample monitorSample;
+        bool hasMonitorSample = false;
+        if (audioInputMonitoring.load(std::memory_order_acquire))
+        {
+            quint64 readIndex = audioMonitorReadIndex.load(std::memory_order_relaxed);
+            const quint64 writeIndex = audioMonitorWriteIndex.load(std::memory_order_acquire);
+            const quint64 generation = audioMonitorGeneration.load(std::memory_order_acquire);
+            while (readIndex < writeIndex)
+            {
+                const AudioMonitorBufferEntry entry =
+                    audioMonitorBuffer[readIndex % audioMonitorBufferCapacity];
+                ++readIndex;
+                audioMonitorReadIndex.store(readIndex, std::memory_order_release);
+                if (entry.generation != generation)
+                    continue;
+                monitorSample = entry.sample;
+                hasMonitorSample = true;
+                break;
+            }
+            if (hasMonitorSample && audioMonitorTrackIndex < static_cast<size_t>(project->tracks.size()))
+            {
+                monitorSample.left *= 0.7f;
+                monitorSample.right *= 0.7f;
+                renderer.addLiveTrackSample(audioMonitorTrackIndex, monitorSample);
+            }
+        }
+        else
+        {
+            audioMonitorReadIndex.store(audioMonitorWriteIndex.load(std::memory_order_acquire),
+                                        std::memory_order_release);
+        }
         const StereoSample mixerOutput = renderer.finishMixerFrame();
         mixed.left += mixerOutput.left;
         mixed.right += mixerOutput.right;
+        if (hasMonitorSample && audioMonitorTrackIndex >= static_cast<size_t>(project->tracks.size()))
+        {
+            mixed.left += monitorSample.left * 0.7f;
+            mixed.right += monitorSample.right * 0.7f;
+        }
         const int preview = previewPitch.load(std::memory_order_acquire);
         const qint64 previewStart = previewStartFrame.load(std::memory_order_acquire);
         const qint64 previewEnd = previewEndFrame.load(std::memory_order_acquire);
@@ -1617,30 +1673,6 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                 mixed.left += preview * previewLeftGain.load(std::memory_order_relaxed);
                 mixed.right += preview * previewRightGain.load(std::memory_order_relaxed);
             }
-        }
-
-        if (audioInputMonitoring.load(std::memory_order_acquire))
-        {
-            quint64 readIndex = audioMonitorReadIndex.load(std::memory_order_relaxed);
-            const quint64 writeIndex = audioMonitorWriteIndex.load(std::memory_order_acquire);
-            const quint64 generation = audioMonitorGeneration.load(std::memory_order_acquire);
-            while (readIndex < writeIndex)
-            {
-                const AudioMonitorBufferEntry entry =
-                    audioMonitorBuffer[readIndex % audioMonitorBufferCapacity];
-                ++readIndex;
-                audioMonitorReadIndex.store(readIndex, std::memory_order_release);
-                if (entry.generation != generation)
-                    continue;
-                mixed.left += entry.sample.left * 0.7f;
-                mixed.right += entry.sample.right * 0.7f;
-                break;
-            }
-        }
-        else
-        {
-            audioMonitorReadIndex.store(audioMonitorWriteIndex.load(std::memory_order_acquire),
-                                        std::memory_order_release);
         }
 
         mixed = renderer.processMasterEffects(mixed);

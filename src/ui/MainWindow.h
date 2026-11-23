@@ -350,6 +350,7 @@ private:
     QAction* recordAction = nullptr;
     QAction* punchRecordAction = nullptr;
     QAction* audioMonitorAction = nullptr;
+    QAction* audioMonitorArmAction = nullptr;
     QAction* midiRecordAction = nullptr;
     QAction* midiMonitorAction = nullptr;
     QAction* automationViewAction = nullptr;

@@ -2323,8 +2323,27 @@ void MainWindow::createActions()
     audioMonitorAction = new QAction(tr("Monitor audio"), this);
     audioMonitorAction->setCheckable(true);
     audioMonitorAction->setEnabled(false);
-    audioMonitorAction->setToolTip(tr("Hear the selected audio input through the master output"));
+    audioMonitorAction->setToolTip(tr("Hear the selected audio input through the armed audio track or Master"));
     connect(audioMonitorAction, &QAction::toggled, this, &MainWindow::setAudioMonitoring);
+    audioMonitorArmAction = new QAction(tr("Arm monitor"), this);
+    audioMonitorArmAction->setCheckable(true);
+    audioMonitorArmAction->setEnabled(false);
+    audioMonitorArmAction->setToolTip(tr("Route monitored input through the selected Audio track's mixer path. Recording still creates a new track."));
+    connect(audioMonitorArmAction, &QAction::toggled, this, [this](bool armed)
+    {
+        const InstrumentTrack* track = selectedTrack();
+        if (armed && (track == nullptr || track->instrumentType != InstrumentType::Audio))
+        {
+            const QSignalBlocker blocker(audioMonitorArmAction);
+            audioMonitorArmAction->setChecked(false);
+            audioEngine.setAudioInputMonitorTrack(0);
+            return;
+        }
+        audioEngine.setAudioInputMonitorTrack(armed ? track->id : 0);
+        statusBar()->showMessage(armed
+            ? tr("Armed %1 for input monitoring").arg(track->name)
+            : tr("Input monitoring routed to Master"), 2500);
+    });
 
     midiRecordAction = new QAction(tr("Record MIDI"), this);
     midiRecordAction->setCheckable(true);
@@ -2584,6 +2603,7 @@ void MainWindow::createToolBars()
     recordingBar->setMovable(false);
     recordingBar->addAction(recordAction);
     recordingBar->addAction(audioMonitorAction);
+    recordingBar->addAction(audioMonitorArmAction);
     recordingBar->addSeparator();
     recordingBar->addWidget(new QLabel(tr("INPUT"), recordingBar));
     audioInputControl = new QComboBox(recordingBar);
@@ -3667,6 +3687,7 @@ void MainWindow::createMenus()
     transportMenu->addAction(stopAction);
     transportMenu->addAction(recordAction);
     transportMenu->addAction(audioMonitorAction);
+    transportMenu->addAction(audioMonitorArmAction);
     transportMenu->addAction(midiRecordAction);
     transportMenu->addAction(midiMonitorAction);
     transportMenu->addAction(loopAction);
@@ -3772,6 +3793,18 @@ void MainWindow::refreshProjectUi()
     else if (project.findClip(selectedTrackId, selectedClipId) == nullptr)
     {
         selectedClipId = track->clips.isEmpty() ? 0 : track->clips.first().id;
+    }
+    if (audioMonitorArmAction != nullptr)
+    {
+        const bool audioTrackSelected = track != nullptr && track->instrumentType == InstrumentType::Audio;
+        if (!audioTrackSelected && audioMonitorArmAction->isChecked())
+        {
+            const QSignalBlocker monitorArmBlocker(audioMonitorArmAction);
+            audioMonitorArmAction->setChecked(false);
+        }
+        audioMonitorArmAction->setEnabled(audioTrackSelected);
+        audioEngine.setAudioInputMonitorTrack(audioTrackSelected && audioMonitorArmAction->isChecked()
+                                                  ? track->id : 0);
     }
 
     const QSignalBlocker trackListBlocker(trackList);
@@ -8356,9 +8389,16 @@ void MainWindow::setAudioMonitoring(bool enabled)
         return;
     }
     refreshAudioInputs();
-    statusBar()->showMessage(audioRecorder
-        ? tr("Monitoring live audio input through the master output")
-        : tr("Monitoring audio input through the master output"), 3500);
+    const InstrumentTrack* monitorTrack = audioMonitorArmAction != nullptr &&
+        audioMonitorArmAction->isChecked() ? selectedTrack() : nullptr;
+    if (monitorTrack != nullptr && monitorTrack->instrumentType == InstrumentType::Audio)
+        statusBar()->showMessage(audioRecorder
+            ? tr("Monitoring live audio input through %1").arg(monitorTrack->name)
+            : tr("Monitoring audio input through %1").arg(monitorTrack->name), 3500);
+    else
+        statusBar()->showMessage(audioRecorder
+            ? tr("Monitoring live audio input through Master")
+            : tr("Monitoring audio input through Master"), 3500);
 }
 
 void MainWindow::finishAudioMonitoring()
