@@ -1143,6 +1143,14 @@ void MainWindow::createMenus()
         else
             statusBar()->showMessage(tr("Select chord notes with the same start and length"), 2400);
     });
+    QAction* strumAction = editMenu->addAction(tr("Strum selected chord upward"));
+    connect(strumAction, &QAction::triggered, this, [this]
+    {
+        if (midiEditor->strumSelectedChord())
+            statusBar()->showMessage(tr("Strummed selected chord notes on the piano roll"), 1800);
+        else
+            statusBar()->showMessage(tr("Select chord notes with a shared start time"), 2400);
+    });
 
     QMenu* patternMenu = menuBar()->addMenu(tr("&Track"));
     patternMenu->addAction(addTrackAction);

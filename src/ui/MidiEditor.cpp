@@ -279,6 +279,48 @@ public:
         return notes != before;
     }
 
+    bool strumSelectedChord()
+    {
+        QVector<int> selectedIndices;
+        for (int index = 0; index < notes.size(); ++index)
+        {
+            if (selected.contains(notes[index].id))
+                selectedIndices.push_back(index);
+        }
+        if (selectedIndices.size() < 2)
+            return false;
+
+        const double startBeat = notes[selectedIndices.first()].startBeat;
+        for (const int index : selectedIndices)
+        {
+            if (std::abs(notes[index].startBeat - startBeat) > 1e-6)
+                return false;
+        }
+        std::sort(selectedIndices.begin(), selectedIndices.end(), [this](int left, int right)
+        {
+            if (notes[left].pitch != notes[right].pitch)
+                return notes[left].pitch < notes[right].pitch;
+            return notes[left].channel < notes[right].channel;
+        });
+
+        const QVector<MidiNote> before = notes;
+        const double stagger = std::max(1.0 / 64.0, snap * 0.25);
+        for (int rank = 0; rank < selectedIndices.size(); ++rank)
+        {
+            MidiNote& note = notes[selectedIndices[rank]];
+            note.startBeat = std::clamp(startBeat + rank * stagger, 0.0,
+                                        std::max(0.0, patternLength - note.lengthBeats));
+        }
+        std::sort(notes.begin(), notes.end(), [](const MidiNote& left, const MidiNote& right)
+        {
+            if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
+            return left.pitch < right.pitch;
+        });
+        commitIfChanged(before);
+        update();
+        return notes != before;
+    }
+
     void editSelectedNoteProperties()
     {
         if (selected.size() != 1)
@@ -888,6 +930,11 @@ bool MidiEditor::addChordToSelection(const QVector<int>& semitoneIntervals)
 bool MidiEditor::arpeggiateSelectedChord()
 {
     return canvas->arpeggiateSelectedChord();
+}
+
+bool MidiEditor::strumSelectedChord()
+{
+    return canvas->strumSelectedChord();
 }
 
 void MidiEditor::editSelectedNoteProperties()
