@@ -2783,6 +2783,7 @@ void MainWindow::pollMidiInput()
             OpenMidiNote note;
             note.pitch = event.pitch;
             note.velocity = std::clamp(event.velocity, 1, 127);
+            note.channel = event.channel;
             note.startBeat = currentMidiRecordingBeat();
             openMidiNotes[key].push_back(note);
             ++midiOpenNoteCount;
@@ -2798,7 +2799,7 @@ void MainWindow::pollMidiInput()
             --midiOpenNoteCount;
             const double endBeat = currentMidiRecordingBeat();
             recordedMidiNotes.push_back({0, note.pitch, note.velocity, note.startBeat,
-                                         std::max(1.0 / 64.0, endBeat - note.startBeat)});
+                                         std::max(1.0 / 64.0, endBeat - note.startBeat), note.channel});
         }
     }
 }
@@ -2830,7 +2831,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
                 if (static_cast<quint64>(recordedMidiNotes.size()) >= midiAvailableNoteSlots)
                     break;
                 recordedMidiNotes.push_back({0, open.pitch, open.velocity, open.startBeat,
-                                             std::max(1.0 / 64.0, endBeat - open.startBeat)});
+                                             std::max(1.0 / 64.0, endBeat - open.startBeat), open.channel});
             }
         }
     }

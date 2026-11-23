@@ -45,6 +45,7 @@ struct MidiNote
     int velocity = 100;
     double startBeat = 0.0;
     double lengthBeats = 1.0;
+    int channel = -1;
 
     bool operator==(const MidiNote& other) const;
 };

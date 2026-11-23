@@ -184,6 +184,7 @@ private:
     {
         int pitch = 0;
         int velocity = 0;
+        int channel = 0;
         double startBeat = 0.0;
     };
     QHash<int, QVector<OpenMidiNote>> openMidiNotes;

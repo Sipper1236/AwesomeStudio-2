@@ -121,12 +121,14 @@ struct RawNote
     qint64 endTick = 0;
     int pitch = 60;
     int velocity = 100;
+    int channel = 0;
 };
 
 struct NoteOn
 {
     qint64 tick = 0;
     int velocity = 100;
+    int channel = 0;
 };
 
 struct ParsedTrack
@@ -286,7 +288,7 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
         if (eventType == 0x90 && dataCount == 2 && data2 > 0)
         {
             track.percussion = track.percussion || channel == 9;
-            activeNotes[{channel, data1}].push_back({absoluteTick, data2});
+            activeNotes[{channel, data1}].push_back({absoluteTick, data2, channel});
         }
         else if (eventType == 0x80 || (eventType == 0x90 && dataCount == 2 && data2 == 0))
         {
@@ -296,7 +298,7 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                 const NoteOn noteOn = found->second.front();
                 found->second.pop_front();
                 track.notes.push_back({noteOn.tick, std::max(noteOn.tick + 1, absoluteTick),
-                                       data1, noteOn.velocity});
+                                       data1, noteOn.velocity, noteOn.channel});
             }
         }
         track.lastTick = absoluteTick;
@@ -308,7 +310,7 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
         {
             const qint64 defaultEnd = noteOn.tick + std::max(1, ppqn / 4);
             track.notes.push_back({noteOn.tick, std::max(defaultEnd, track.lastTick),
-                                   entry.first.second, noteOn.velocity});
+                                   entry.first.second, noteOn.velocity, noteOn.channel});
         }
     }
     return true;
@@ -321,6 +323,7 @@ struct ExportEvent
     int pitch = 60;
     int velocity = 0;
     bool noteOn = false;
+    int channel = 0;
 };
 
 QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
@@ -374,15 +377,17 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
             const qint64 start = std::max<qint64>(0, std::llround((clip.startBeat + note.startBeat) * exportPpqn));
             const qint64 end = std::max(start + 1, std::llround(
                 (clip.startBeat + note.startBeat + note.lengthBeats) * exportPpqn));
+            const int noteChannel = note.channel >= 0 ? note.channel : channel;
             events.push_back({start, 1, std::clamp(note.pitch, 0, 127),
-                              std::clamp(note.velocity, 1, 127), true});
-            events.push_back({end, 0, std::clamp(note.pitch, 0, 127), 0, false});
+                              std::clamp(note.velocity, 1, 127), true, noteChannel});
+            events.push_back({end, 0, std::clamp(note.pitch, 0, 127), 0, false, noteChannel});
         }
     }
     std::stable_sort(events.begin(), events.end(), [](const ExportEvent& left, const ExportEvent& right)
     {
         if (left.tick != right.tick) return left.tick < right.tick;
         if (left.priority != right.priority) return left.priority < right.priority;
+        if (left.channel != right.channel) return left.channel < right.channel;
         return left.pitch < right.pitch;
     });
 
@@ -391,7 +396,7 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
     {
         const qint64 tick = std::max(previousTick, event.tick);
         appendVariableLength(track, static_cast<quint32>(tick - previousTick));
-        appendByte(track, static_cast<quint8>((event.noteOn ? 0x90 : 0x80) | (channel & 0x0f)));
+        appendByte(track, static_cast<quint8>((event.noteOn ? 0x90 : 0x80) | (event.channel & 0x0f)));
         appendByte(track, static_cast<quint8>(event.pitch));
         appendByte(track, static_cast<quint8>(event.velocity));
         previousTick = tick;
@@ -505,6 +510,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             note.id = loaded.nextNoteId();
             note.pitch = sourceNote.pitch;
             note.velocity = sourceNote.velocity;
+            note.channel = sourceNote.channel;
             note.startBeat = startBeat;
             note.lengthBeats = std::max(1.0 / 64.0, endBeat - startBeat);
             clip.notes.push_back(note);

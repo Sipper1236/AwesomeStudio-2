@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 10;
+constexpr int currentProjectVersion = 11;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -85,7 +85,8 @@ QJsonArray saveNotes(const QVector<MidiNote>& notes)
             {QStringLiteral("pitch"), note.pitch},
             {QStringLiteral("velocity"), note.velocity},
             {QStringLiteral("startBeat"), note.startBeat},
-            {QStringLiteral("lengthBeats"), note.lengthBeats}
+            {QStringLiteral("lengthBeats"), note.lengthBeats},
+            {QStringLiteral("channel"), note.channel}
         });
     }
     return result;
@@ -174,8 +175,9 @@ bool loadNotes(const QJsonValue& value, QVector<MidiNote>& notes, QString* error
         note.velocity = object.value(QStringLiteral("velocity")).toInt(-1);
         note.startBeat = object.value(QStringLiteral("startBeat")).toDouble(-1.0);
         note.lengthBeats = object.value(QStringLiteral("lengthBeats")).toDouble(-1.0);
+        note.channel = object.value(QStringLiteral("channel")).toInt(-1);
         if (note.pitch < 0 || note.pitch > 127 || note.velocity < 1 || note.velocity > 127 ||
-            note.startBeat < 0.0 || note.lengthBeats <= 0.0)
+            note.startBeat < 0.0 || note.lengthBeats <= 0.0 || note.channel < -1 || note.channel > 15)
         {
             setError(error, QStringLiteral("The project contains an out-of-range MIDI note."));
             return false;
