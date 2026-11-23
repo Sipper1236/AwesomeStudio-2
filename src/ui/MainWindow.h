@@ -58,6 +58,8 @@ private:
         double fadeOutBeats = 0.0;
         AudioFadeCurve fadeInCurve = AudioFadeCurve::Linear;
         AudioFadeCurve fadeOutCurve = AudioFadeCurve::Linear;
+        double fadeInShape = 1.0;
+        double fadeOutShape = 1.0;
     };
 
     void createActions();
@@ -94,6 +96,7 @@ private:
                          double lengthBeats, qint64 audioStartFrame);
     void setSelectedAudioFade(bool fadeIn, double beats);
     void setSelectedAudioFadeCurve(bool fadeIn, int curve);
+    void setSelectedAudioFadeShape(bool fadeIn, double shape);
     void createSelectedAudioCrossfade();
     void applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades);
     void setSelectedSynthEnvelope(int parameter, double value);
@@ -212,6 +215,8 @@ private:
     QDoubleSpinBox* audioFadeOutControl = nullptr;
     QComboBox* audioFadeInCurveControl = nullptr;
     QComboBox* audioFadeOutCurveControl = nullptr;
+    QDoubleSpinBox* audioFadeInShapeControl = nullptr;
+    QDoubleSpinBox* audioFadeOutShapeControl = nullptr;
     QPushButton* audioCrossfadeButton = nullptr;
     QComboBox* automationParameterControl = nullptr;
     QListWidget* automationPointsList = nullptr;

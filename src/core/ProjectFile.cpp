@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 32;
+constexpr int currentProjectVersion = 33;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -357,7 +357,9 @@ QJsonObject saveClip(const MidiClip& clip)
         {QStringLiteral("audioFadeInBeats"), clip.audioFadeInBeats},
         {QStringLiteral("audioFadeOutBeats"), clip.audioFadeOutBeats},
         {QStringLiteral("audioFadeInCurve"), static_cast<int>(clip.audioFadeInCurve)},
-        {QStringLiteral("audioFadeOutCurve"), static_cast<int>(clip.audioFadeOutCurve)}
+        {QStringLiteral("audioFadeOutCurve"), static_cast<int>(clip.audioFadeOutCurve)},
+        {QStringLiteral("audioFadeInShape"), clip.audioFadeInShape},
+        {QStringLiteral("audioFadeOutShape"), clip.audioFadeOutShape}
     };
 }
 
@@ -475,13 +477,27 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
     {
         const int fadeInCurve = object.value(QStringLiteral("audioFadeInCurve")).toInt(-1);
         const int fadeOutCurve = object.value(QStringLiteral("audioFadeOutCurve")).toInt(-1);
-        if (fadeInCurve < 0 || fadeInCurve > 2 || fadeOutCurve < 0 || fadeOutCurve > 2)
+        const int maximumFadeCurve = version >= 33 ? 3 : 2;
+        if (fadeInCurve < 0 || fadeInCurve > maximumFadeCurve ||
+            fadeOutCurve < 0 || fadeOutCurve > maximumFadeCurve)
         {
             setError(error, QStringLiteral("The audio region contains an invalid fade curve."));
             return false;
         }
         clip.audioFadeInCurve = static_cast<AudioFadeCurve>(fadeInCurve);
         clip.audioFadeOutCurve = static_cast<AudioFadeCurve>(fadeOutCurve);
+    }
+    if (version >= 33)
+    {
+        clip.audioFadeInShape = object.value(QStringLiteral("audioFadeInShape")).toDouble(-1.0);
+        clip.audioFadeOutShape = object.value(QStringLiteral("audioFadeOutShape")).toDouble(-1.0);
+        if (!std::isfinite(clip.audioFadeInShape) || clip.audioFadeInShape < 0.25 ||
+            clip.audioFadeInShape > 4.0 || !std::isfinite(clip.audioFadeOutShape) ||
+            clip.audioFadeOutShape < 0.25 || clip.audioFadeOutShape > 4.0)
+        {
+            setError(error, QStringLiteral("The audio region contains an invalid custom fade shape."));
+            return false;
+        }
     }
     loadAudioReference(clip.audioSourcePath, mediaBaseDir, media, clip.audioSource);
     if (!loadNotes(object.value(QStringLiteral("notes")), clip.notes, version, error))

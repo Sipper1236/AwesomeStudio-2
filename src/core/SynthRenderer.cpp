@@ -433,6 +433,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     clip.audioFadeOutBeats * sampleRate * 60.0 / project->tempoBpm));
                 region.fadeInCurve = clip.audioFadeInCurve;
                 region.fadeOutCurve = clip.audioFadeOutCurve;
+                region.fadeInShape = clip.audioFadeInShape;
+                region.fadeOutShape = clip.audioFadeOutShape;
                 region.source = clip.audioSource;
                 region.trackIndex = trackIndex;
                 const qint64 clipDuration = static_cast<qint64>(std::llround(
@@ -1353,14 +1355,15 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         float fadeEnvelope = 1.0f;
         if (region.fadeInFrames > 1)
             fadeEnvelope *= audioFadeEnvelope(region.fadeInCurve, true,
-                static_cast<double>(age) / (region.fadeInFrames - 1));
+                static_cast<double>(age) / (region.fadeInFrames - 1), region.fadeInShape);
         if (region.fadeOutFrames > 0)
         {
             const qint64 remainingFadeFrames = std::max<qint64>(0, region.endFrame - projectFrame - 1);
             const qint64 fadeOutLength = std::max<qint64>(1, region.fadeOutFrames - 1);
             const double fadeOutProgress = 1.0 - std::clamp(
                 static_cast<double>(remainingFadeFrames) / fadeOutLength, 0.0, 1.0);
-            fadeEnvelope *= audioFadeEnvelope(region.fadeOutCurve, false, fadeOutProgress);
+            fadeEnvelope *= audioFadeEnvelope(region.fadeOutCurve, false, fadeOutProgress,
+                                              region.fadeOutShape);
         }
         if (region.drumSamplePlayback)
         {

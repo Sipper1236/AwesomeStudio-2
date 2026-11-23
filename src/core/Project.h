@@ -26,7 +26,8 @@ enum class AudioFadeCurve
 {
     Linear,
     Smooth,
-    EqualPower
+    EqualPower,
+    Custom
 };
 
 struct AudioAsset
@@ -84,11 +85,13 @@ struct MidiClip
     double audioFadeOutBeats = 0.0;
     AudioFadeCurve audioFadeInCurve = AudioFadeCurve::Linear;
     AudioFadeCurve audioFadeOutCurve = AudioFadeCurve::Linear;
+    double audioFadeInShape = 1.0;
+    double audioFadeOutShape = 1.0;
 
     bool isAudioRegion() const { return !audioSourcePath.isEmpty(); }
 };
 
-float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress);
+float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape = 1.0);
 
 struct DrumPadSample
 {
