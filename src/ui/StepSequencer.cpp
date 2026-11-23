@@ -71,7 +71,7 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
     for (const int division : supportedStepCounts)
         divisionControl->addItem(QString::number(division), division);
     controls->addWidget(divisionControl);
-    auto* hint = new QLabel(tr("Right-click a step to set probability or ratchets · scroll for finer divisions"), this);
+    auto* hint = new QLabel(tr("Right-click a step to set velocity, probability, or ratchets · scroll for finer divisions"), this);
     hint->setStyleSheet(QStringLiteral("color: #a8b5c1;"));
     controls->addWidget(hint, 1);
     root->addLayout(controls);
@@ -132,6 +132,7 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
                 const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
                 const double barEnd = barStart + quarterNotesPerBar;
                 const int pitch = drumPitches[static_cast<size_t>(row)];
+                int currentVelocity = 100;
                 int currentProbability = 100;
                 int currentRatchets = 1;
                 for (const MidiNote& note : notes)
@@ -139,16 +140,28 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
                     if (matchesGridStep(note, pitch, barStart, barEnd, stepLength,
                                         stepsPerBar, column))
                     {
+                        currentVelocity = note.velocity;
                         currentProbability = note.probabilityPercent;
                         currentRatchets = note.ratchetCount;
                         break;
                     }
                 }
                 QMenu menu(this);
+                QAction* velocityAction = menu.addAction(tr("Set velocity…"));
                 QAction* probabilityAction = menu.addAction(tr("Set probability…"));
                 QAction* ratchetAction = menu.addAction(tr("Set ratchets…"));
                 QAction* selectedAction = menu.exec(pad->mapToGlobal(localPosition));
-                if (selectedAction == probabilityAction)
+                if (selectedAction == velocityAction)
+                {
+                    bool accepted = false;
+                    const int velocity = QInputDialog::getInt(this, tr("Step velocity"),
+                        tr("Velocity for %1, step %2 (1–127)")
+                            .arg(tr(drumNames[row])).arg(column + 1),
+                        currentVelocity, 1, 127, 1, &accepted);
+                    if (accepted)
+                        setStepVelocity(row, column, velocity);
+                }
+                else if (selectedAction == probabilityAction)
                 {
                     bool accepted = false;
                     const int probability = QInputDialog::getInt(this, tr("Step probability"),
@@ -233,6 +246,7 @@ void StepSequencer::refreshPads()
         {
             const double stepStart = barStart + column * stepLength;
             bool active = false;
+            int velocity = 100;
             int probability = 100;
             int ratchets = 1;
             for (const MidiNote& note : notes)
@@ -241,6 +255,7 @@ void StepSequencer::refreshPads()
                                     stepLength, stepsPerBar, column))
                 {
                     active = true;
+                    velocity = note.velocity;
                     probability = note.probabilityPercent;
                     ratchets = note.ratchetCount;
                     break;
@@ -255,8 +270,11 @@ void StepSequencer::refreshPads()
             pad->setText(active && ratchets > 1
                              ? QStringLiteral("%1x").arg(ratchets)
                              : active && probability < 100 ? QStringLiteral("%1%").arg(probability)
-                                                           : QString());
+                             : active && velocity != 100 ? QStringLiteral("v%1").arg(velocity)
+                                                         : QString());
             QStringList details;
+            if (active)
+                details.push_back(tr("Velocity %1 / 127").arg(velocity));
             if (active && probability < 100)
                 details.push_back(tr("%1% trigger chance").arg(probability));
             if (active && ratchets > 1)
@@ -339,6 +357,44 @@ void StepSequencer::setStepProbability(int row, int column, int probabilityPerce
         note.pitch = pitch;
         note.velocity = 100;
         note.probabilityPercent = std::clamp(probabilityPercent, 0, 100);
+        note.startBeat = stepStart;
+        note.lengthBeats = std::max(1.0 / 64.0, stepLength);
+        notes.push_back(note);
+        emit previewRequested(pitch);
+    }
+    refreshPads();
+    if (notes != before)
+        emit notesEdited(before, notes);
+}
+
+void StepSequencer::setStepVelocity(int row, int column, int velocity)
+{
+    if (!patternAvailable || row < 0 || row >= static_cast<int>(drumPitches.size()) ||
+        column < 0 || column >= stepsPerBar)
+        return;
+    const double stepLength = quarterNotesPerBar / stepsPerBar;
+    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
+    const double barEnd = barStart + quarterNotesPerBar;
+    const double stepStart = barStart + column * stepLength;
+    if (stepStart >= clipLengthBeats)
+        return;
+
+    const QVector<MidiNote> before = notes;
+    const int pitch = drumPitches[static_cast<size_t>(row)];
+    bool found = false;
+    for (MidiNote& note : notes)
+    {
+        if (!matchesGridStep(note, pitch, barStart, barEnd, stepLength, stepsPerBar, column))
+            continue;
+        note.velocity = std::clamp(velocity, 1, 127);
+        found = true;
+    }
+    if (!found)
+    {
+        MidiNote note;
+        note.id = nextNoteId++;
+        note.pitch = pitch;
+        note.velocity = std::clamp(velocity, 1, 127);
         note.startBeat = stepStart;
         note.lengthBeats = std::max(1.0 / 64.0, stepLength);
         notes.push_back(note);

@@ -29,6 +29,7 @@ private:
     void configureDivision(int steps);
     void refreshPads();
     void toggleStep(int row, int column, bool enabled);
+    void setStepVelocity(int row, int column, int velocity);
     void setStepProbability(int row, int column, int probabilityPercent);
     void setStepRatchetCount(int row, int column, int ratchetCount);
 
