@@ -42,6 +42,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <QPolygonF>
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
@@ -346,6 +347,155 @@ private:
     ChangeHandler changeHandler;
     SelectionHandler selectionHandler;
     int selectedBand = 0;
+    bool dragging = false;
+};
+
+class DrumSampleWaveformWidget final : public QWidget
+{
+public:
+    using StartHandler = std::function<void(double)>;
+
+    explicit DrumSampleWaveformWidget(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setMinimumHeight(82);
+        setMaximumHeight(96);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setAccessibleName(tr("Drum sample waveform and start position"));
+        setToolTip(tr("Drag across the waveform to set the sample start position"));
+    }
+
+    void setSample(const std::shared_ptr<const AudioAsset>& asset, const QString& sourcePath,
+                   float startPercent)
+    {
+        peaks = asset == nullptr ? QVector<float>{} : asset->waveformPeaks;
+        label = asset != nullptr ? QFileInfo(asset->path).fileName()
+                                 : sourcePath.isEmpty() ? tr("No sample assigned")
+                                                        : tr("Offline: %1").arg(QFileInfo(sourcePath).fileName());
+        startPositionPercent = std::clamp(static_cast<double>(startPercent), 0.0, 99.0);
+        update();
+    }
+
+    void setStartHandler(StartHandler handler) { startHandler = std::move(handler); }
+    void setStartPosition(double percent)
+    {
+        startPositionPercent = std::clamp(percent, 0.0, 99.0);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QColor background = palette().color(QPalette::Base);
+        const QColor foreground = palette().color(QPalette::Text);
+        const QColor gridColor = palette().color(QPalette::Mid);
+        const QColor accent = palette().color(QPalette::Highlight);
+        painter.fillRect(rect(), background);
+        const QRectF plot = plotRect();
+        painter.setPen(QPen(gridColor, 1.0));
+        painter.drawRect(plot);
+        painter.setPen(foreground);
+        painter.drawText(QRectF(plot.left(), 0.0, plot.width(), 15.0),
+                         Qt::AlignLeft | Qt::AlignVCenter, label);
+
+        const double centerY = plot.center().y();
+        painter.setPen(QPen(gridColor, 0.8, Qt::DotLine));
+        painter.drawLine(QPointF(plot.left(), centerY), QPointF(plot.right(), centerY));
+        if (peaks.isEmpty())
+        {
+            painter.setPen(gridColor);
+            painter.drawText(plot, Qt::AlignCenter, tr("Load a WAV sample to edit its start"));
+            return;
+        }
+
+        painter.setPen(QPen(accent, 1.0));
+        const int pixelColumns = std::max(1, static_cast<int>(plot.width()));
+        for (int column = 0; column < pixelColumns; ++column)
+        {
+            const qsizetype firstPeak = static_cast<qsizetype>(
+                static_cast<double>(column) * peaks.size() / pixelColumns);
+            const qsizetype endPeak = std::max(firstPeak + 1, static_cast<qsizetype>(
+                static_cast<double>(column + 1) * peaks.size() / pixelColumns));
+            float peak = 0.0f;
+            for (qsizetype index = firstPeak; index < std::min(endPeak, peaks.size()); ++index)
+                peak = std::max(peak, std::abs(peaks[index]));
+            const double amplitude = std::clamp(static_cast<double>(peak), 0.0, 1.0) *
+                                     (plot.height() * 0.42);
+            const double x = plot.left() + column;
+            painter.drawLine(QPointF(x, centerY - amplitude), QPointF(x, centerY + amplitude));
+        }
+
+        const double startX = plot.left() + plot.width() * startPositionPercent / 100.0;
+        painter.setPen(QPen(foreground, 1.0, Qt::DashLine));
+        painter.drawLine(QPointF(startX, plot.top()), QPointF(startX, plot.bottom()));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(foreground);
+        QPolygonF marker;
+        marker << QPointF(startX - 4.0, plot.top() - 1.0)
+               << QPointF(startX + 4.0, plot.top() - 1.0)
+               << QPointF(startX, plot.top() + 5.0);
+        painter.drawPolygon(marker);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() != Qt::LeftButton || peaks.isEmpty() || !plotRect().contains(event->position()))
+        {
+            QWidget::mousePressEvent(event);
+            return;
+        }
+        dragging = true;
+        setCursor(Qt::ClosedHandCursor);
+        updateFromPosition(event->position());
+        event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override
+    {
+        if (!dragging)
+        {
+            QWidget::mouseMoveEvent(event);
+            return;
+        }
+        updateFromPosition(event->position());
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton && dragging)
+        {
+            dragging = false;
+            unsetCursor();
+            event->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
+    }
+
+private:
+    QRectF plotRect() const
+    {
+        return QRectF(8.0, 17.0, std::max(1, width() - 16), std::max(1, height() - 24));
+    }
+
+    void updateFromPosition(const QPointF& position)
+    {
+        const QRectF plot = plotRect();
+        const double percent = std::clamp((position.x() - plot.left()) / plot.width() * 100.0,
+                                          0.0, 99.0);
+        startPositionPercent = percent;
+        update();
+        if (startHandler)
+            startHandler(percent);
+    }
+
+    QVector<float> peaks;
+    QString label;
+    StartHandler startHandler;
+    double startPositionPercent = 0.0;
     bool dragging = false;
 };
 
@@ -2976,6 +3126,9 @@ void MainWindow::createDocks()
         drumLayerSettingsControls[static_cast<size_t>(pad)]->addItem(tr("Very-high sample layer"), 4);
         parameterForm->addRow(tr("Edit settings for"),
                               drumLayerSettingsControls[static_cast<size_t>(pad)]);
+        auto* sampleWaveform = new DrumSampleWaveformWidget(drumSampleControls);
+        drumSampleWaveformWidgets[static_cast<size_t>(pad)] = sampleWaveform;
+        parameterForm->addRow(sampleWaveform);
         resetDrumLayerSettingsButtons[static_cast<size_t>(pad)] =
             new QPushButton(tr("Reset layer to shared settings"), drumSampleControls);
         parameterForm->addRow(resetDrumLayerSettingsButtons[static_cast<size_t>(pad)]);
@@ -3083,6 +3236,13 @@ void MainWindow::createDocks()
         connect(drumSampleStartControls[static_cast<size_t>(pad)],
                 qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, pad](double value) { setSelectedDrumSample(pad, 1, value); });
+        sampleWaveform->setStartHandler([this, pad](double percent)
+        {
+            drumSampleStartControls[static_cast<size_t>(pad)]->setValue(percent);
+        });
+        connect(drumSampleStartControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), sampleWaveform,
+                [sampleWaveform](double value) { sampleWaveform->setStartPosition(value); });
         connect(drumSampleLoopControls[static_cast<size_t>(pad)], &QCheckBox::toggled, this,
                 [this, pad](bool enabled) { setSelectedDrumSample(pad, 2, enabled ? 1.0 : 0.0); });
         connect(drumPadAttackControls[static_cast<size_t>(pad)],
@@ -3650,6 +3810,42 @@ void MainWindow::refreshProjectUi()
             sample->velocityLayerSettingsCustom[static_cast<size_t>(selectedLayer)]);
         const bool playbackSettingsEnabled = layerSpecific
             ? selectedLayerAssigned : sampleAssigned;
+        int waveformLayer = layerSpecific ? selectedLayer
+            : sample == nullptr ? -1 : sample->sourceLayerIndexForVelocity(80);
+        std::shared_ptr<const AudioAsset> waveformSource;
+        QString waveformPath;
+        if (sample != nullptr)
+        {
+            switch (waveformLayer)
+            {
+                case 0:
+                    waveformSource = sample->veryLowVelocitySource;
+                    waveformPath = sample->veryLowVelocityPath;
+                    break;
+                case 1:
+                    waveformSource = sample->lowVelocitySource;
+                    waveformPath = sample->lowVelocityPath;
+                    break;
+                case 2:
+                    waveformSource = sample->source;
+                    waveformPath = sample->path;
+                    break;
+                case 3:
+                    waveformSource = sample->highVelocitySource;
+                    waveformPath = sample->highVelocityPath;
+                    break;
+                case 4:
+                    waveformSource = sample->veryHighVelocitySource;
+                    waveformPath = sample->veryHighVelocityPath;
+                    break;
+                default:
+                    waveformPath = sample->path;
+                    break;
+            }
+        }
+        auto* waveform = static_cast<DrumSampleWaveformWidget*>(drumSampleWaveformWidgets[pad]);
+        waveform->setSample(waveformSource, waveformPath, displayedSettings.startPositionPercent);
+        waveform->setEnabled(playbackSettingsEnabled && waveformSource != nullptr);
         drumSampleTuneControls[pad]->setEnabled(playbackSettingsEnabled);
         drumSampleStartControls[pad]->setEnabled(playbackSettingsEnabled);
         drumSampleLoopControls[pad]->setEnabled(playbackSettingsEnabled);

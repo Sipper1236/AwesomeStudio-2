@@ -286,6 +286,7 @@ private:
     std::array<QSpinBox*, 4> lowVelocityThresholdControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleTuneControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleStartControls{};
+    std::array<QWidget*, 4> drumSampleWaveformWidgets{};
     std::array<QCheckBox*, 4> drumSampleLoopControls{};
     std::array<QComboBox*, 4> drumLayerSettingsControls{};
     std::array<QPushButton*, 4> resetDrumLayerSettingsButtons{};
