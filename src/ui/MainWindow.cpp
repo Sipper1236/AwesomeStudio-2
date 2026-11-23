@@ -50,6 +50,8 @@
 
 namespace
 {
+constexpr double automationWritePointSpacingBeats = 0.04;
+
 int drumSamplePadForPitch(int pitch)
 {
     if (pitch == 35 || pitch == 36) return 0;
@@ -57,6 +59,39 @@ int drumSamplePadForPitch(int pitch)
     if (pitch == 42 || pitch == 44) return 2;
     if (pitch == 46) return 3;
     return -1;
+}
+
+bool sameAutomationPoints(const QVector<AutomationPoint>& left, const QVector<AutomationPoint>& right)
+{
+    if (left.size() != right.size())
+        return false;
+    for (qsizetype index = 0; index < left.size(); ++index)
+    {
+        if (std::abs(left[index].beat - right[index].beat) > 1.0e-9 ||
+            std::abs(left[index].value - right[index].value) > 1.0e-6f)
+            return false;
+    }
+    return true;
+}
+
+bool upsertAutomationPoint(QVector<AutomationPoint>& points, double beat, float value)
+{
+    auto position = std::lower_bound(points.begin(), points.end(), beat,
+        [](const AutomationPoint& point, double targetBeat) { return point.beat < targetBeat; });
+    if (position != points.end() && std::abs(position->beat - beat) < 0.001)
+    {
+        position->value = value;
+        return true;
+    }
+    if (position != points.begin() && std::abs((position - 1)->beat - beat) < 0.001)
+    {
+        (position - 1)->value = value;
+        return true;
+    }
+    if (points.size() >= 10000)
+        return false;
+    points.insert(position, {beat, value});
+    return true;
 }
 }
 
@@ -298,6 +333,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(uiTimer, &QTimer::timeout, this, [this]
     {
         const double beat = audioEngine.positionBeats();
+        if (automationWriteSession.active && !audioEngine.isPlaying())
+            finishAutomationWrite();
         if (recordingPending)
         {
             if (!audioEngine.isPlaying())
@@ -445,6 +482,7 @@ void MainWindow::createActions()
         }
         else
         {
+            finishAutomationWrite();
             if (audioRecorder || recordingPending)
                 finishAudioRecording(true);
             if (midiRecordingActive || midiRecordingPending)
@@ -460,6 +498,7 @@ void MainWindow::createActions()
     stopAction->setShortcut(Qt::Key_Escape);
     connect(stopAction, &QAction::triggered, this, [this]
     {
+        finishAutomationWrite();
         if (audioRecorder || recordingPending)
             finishAudioRecording(true);
         if (midiRecordingActive || midiRecordingPending)
@@ -583,17 +622,35 @@ void MainWindow::createToolBars()
     automationLaneParameterControl->setEnabled(false);
     automationLaneParameterControl->setToolTip(tr("Automation parameter shown in the Playlist lanes"));
     arrangementBar->addWidget(automationLaneParameterControl);
+    automationWriteAction = new QAction(tr("Write automation"), this);
+    automationWriteAction->setCheckable(true);
+    automationWriteAction->setToolTip(tr("Record the selected volume or pan control while the transport plays"));
+    arrangementBar->addAction(automationWriteAction);
+    automationWriteIdleTimer = new QTimer(this);
+    automationWriteIdleTimer->setSingleShot(true);
+    connect(automationWriteIdleTimer, &QTimer::timeout, this, &MainWindow::finishAutomationWrite);
     connect(automationViewAction, &QAction::toggled, this, [this](bool enabled)
     {
-        automationLaneParameterControl->setEnabled(enabled);
+        automationLaneParameterControl->setEnabled(enabled || automationWriteAction->isChecked());
         arrangementEditor->setAutomationView(enabled,
                                               automationLaneParameterControl->currentData().toInt());
         if (enabled)
             statusBar()->showMessage(tr("Click a lane to add a point, drag points to edit, and right-click or press Delete to remove one."), 6000);
     });
+    connect(automationWriteAction, &QAction::toggled, this, [this](bool enabled)
+    {
+        automationLaneParameterControl->setEnabled(enabled || automationViewAction->isChecked());
+        if (enabled)
+            statusBar()->showMessage(tr("Write is armed. Start playback and move the selected track control in the Mixer."), 6000);
+        else
+            finishAutomationWrite();
+    });
     connect(automationLaneParameterControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int index)
     {
+        if (automationWriteSession.active &&
+            automationWriteSession.parameter != automationLaneParameterControl->itemData(index).toInt())
+            finishAutomationWrite();
         arrangementEditor->setAutomationView(automationViewAction->isChecked(),
                                               automationLaneParameterControl->itemData(index).toInt());
     });
@@ -1011,6 +1068,8 @@ MidiClip* MainWindow::selectedClip()
 
 void MainWindow::refreshProjectUi()
 {
+    if (automationWriteSession.active)
+        finishAutomationWrite();
     if (project.findTrack(selectedTrackId) == nullptr)
         selectedTrackId = project.tracks.isEmpty() ? 0 : project.tracks.first().id;
     InstrumentTrack* track = selectedTrack();
@@ -1196,6 +1255,27 @@ void MainWindow::refreshMixer()
         form->addRow(tr("Pan"), panRow);
         layout->addWidget(group);
 
+        connect(volume, &QSlider::sliderPressed, this, [this, trackId, volume]
+        {
+            beginAutomationWrite(trackId, 0, volume->value() / 100.0f);
+        });
+        connect(volume, &QSlider::sliderReleased, this, [this, trackId]
+        {
+            if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
+                automationWriteSession.parameter == 0)
+                finishAutomationWrite();
+        });
+        connect(pan, &QSlider::sliderPressed, this, [this, trackId, pan]
+        {
+            beginAutomationWrite(trackId, 1, pan->value() / 100.0f);
+        });
+        connect(pan, &QSlider::sliderReleased, this, [this, trackId]
+        {
+            if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
+                automationWriteSession.parameter == 1)
+                finishAutomationWrite();
+        });
+
         connect(mute, &QCheckBox::toggled, this, [this, trackId](bool enabled)
         {
             InstrumentTrack* track = project.findTrack(trackId);
@@ -1214,22 +1294,66 @@ void MainWindow::refreshMixer()
             settingsDirty = true;
             refreshDirtyState();
         });
-        connect(volume, &QSlider::valueChanged, this, [this, trackId, volumeLabel](int value)
+        connect(volume, &QSlider::valueChanged, this, [this, trackId, volume, volumeLabel](int value)
         {
             InstrumentTrack* track = project.findTrack(trackId);
             if (track == nullptr) return;
-            track->gain = value / 100.0f;
+            const float level = value / 100.0f;
             volumeLabel->setText(tr("%1%").arg(value));
+            if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
+                automationWriteSession.parameter == 0)
+            {
+                recordAutomationValue(trackId, 0, level);
+                if (!volume->isSliderDown())
+                    automationWriteIdleTimer->start(250);
+                return;
+            }
+            if (automationWriteAction->isChecked() && automationLaneParameterControl->currentData().toInt() == 0 &&
+                audioEngine.isPlaying())
+            {
+                beginAutomationWrite(trackId, 0, track->gain);
+                if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
+                    automationWriteSession.parameter == 0)
+                {
+                    recordAutomationValue(trackId, 0, level);
+                    if (!volume->isSliderDown())
+                        automationWriteIdleTimer->start(250);
+                    return;
+                }
+            }
+            track->gain = value / 100.0f;
             audioEngine.setProject(project);
             settingsDirty = true;
             refreshDirtyState();
         });
-        connect(pan, &QSlider::valueChanged, this, [this, trackId, panLabel](int value)
+        connect(pan, &QSlider::valueChanged, this, [this, trackId, pan, panLabel](int value)
         {
             InstrumentTrack* track = project.findTrack(trackId);
             if (track == nullptr) return;
-            track->pan = value / 100.0f;
+            const float balance = value / 100.0f;
             panLabel->setText(value < -2 ? tr("L %1").arg(-value) : value > 2 ? tr("R %1").arg(value) : tr("Center"));
+            if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
+                automationWriteSession.parameter == 1)
+            {
+                recordAutomationValue(trackId, 1, balance);
+                if (!pan->isSliderDown())
+                    automationWriteIdleTimer->start(250);
+                return;
+            }
+            if (automationWriteAction->isChecked() && automationLaneParameterControl->currentData().toInt() == 1 &&
+                audioEngine.isPlaying())
+            {
+                beginAutomationWrite(trackId, 1, track->pan);
+                if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
+                    automationWriteSession.parameter == 1)
+                {
+                    recordAutomationValue(trackId, 1, balance);
+                    if (!pan->isSliderDown())
+                        automationWriteIdleTimer->start(250);
+                    return;
+                }
+            }
+            track->pan = value / 100.0f;
             audioEngine.setProject(project);
             settingsDirty = true;
             refreshDirtyState();
@@ -1561,6 +1685,102 @@ void MainWindow::removeAutomationPoint()
     undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after));
 }
 
+void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float value)
+{
+    if (automationWriteSession.active || automationWriteAction == nullptr ||
+        !automationWriteAction->isChecked() || !audioEngine.isPlaying() ||
+        automationLaneParameterControl->currentData().toInt() != parameter)
+        return;
+    InstrumentTrack* track = project.findTrack(trackId);
+    const double beat = audioEngine.positionBeats();
+    if (track == nullptr || beat < 0.0)
+        return;
+
+    QVector<AutomationPoint>& points = parameter == 0 ? track->volumeAutomation : track->panAutomation;
+    automationWriteSession.active = true;
+    automationWriteSession.changed = false;
+    automationWriteSession.trackId = trackId;
+    automationWriteSession.parameter = parameter;
+    automationWriteSession.initialValue = value;
+    automationWriteSession.lastSampleBeat = beat;
+    automationWriteSession.lastPointBeat = beat;
+    automationWriteSession.before = points;
+    if (!upsertAutomationPoint(points, beat, value))
+    {
+        automationWriteSession = {};
+        statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
+        return;
+    }
+    audioEngine.setLiveTrackMixOverride(trackId, parameter, value);
+}
+
+void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float value)
+{
+    if (!automationWriteSession.active || automationWriteSession.trackId != trackId ||
+        automationWriteSession.parameter != parameter)
+        return;
+    const double beat = audioEngine.positionBeats();
+    if (beat < 0.0)
+        return;
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+
+    if (beat + 1.0e-6 < automationWriteSession.lastSampleBeat)
+    {
+        automationWriteSession.lastPointBeat = -1.0;
+        automationWriteSession.lastSampleBeat = -1.0;
+    }
+    double writeBeat = beat;
+    const bool coalesce = automationWriteSession.lastPointBeat >= 0.0 &&
+                          beat >= automationWriteSession.lastPointBeat &&
+                          beat - automationWriteSession.lastPointBeat < automationWritePointSpacingBeats;
+    if (coalesce)
+        writeBeat = automationWriteSession.lastPointBeat;
+
+    QVector<AutomationPoint>& points = parameter == 0 ? track->volumeAutomation : track->panAutomation;
+    if (!upsertAutomationPoint(points, writeBeat, value))
+        statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
+    else if (!coalesce)
+        automationWriteSession.lastPointBeat = writeBeat;
+    automationWriteSession.lastSampleBeat = beat;
+    automationWriteSession.changed = automationWriteSession.changed ||
+                                     std::abs(value - automationWriteSession.initialValue) > 1.0e-6f;
+    audioEngine.setLiveTrackMixOverride(trackId, parameter, value);
+}
+
+void MainWindow::finishAutomationWrite()
+{
+    if (!automationWriteSession.active)
+        return;
+    automationWriteIdleTimer->stop();
+    AutomationWriteSession session = automationWriteSession;
+    automationWriteSession = {};
+    audioEngine.clearLiveTrackMixOverride(session.trackId, session.parameter);
+
+    InstrumentTrack* track = project.findTrack(session.trackId);
+    if (track == nullptr)
+        return;
+    const QVector<AutomationPoint>& current = session.parameter == 0
+        ? track->volumeAutomation : track->panAutomation;
+    if (!session.changed || sameAutomationPoints(session.before, current))
+    {
+        if (session.parameter == 0)
+            track->volumeAutomation = session.before;
+        else
+            track->panAutomation = session.before;
+        audioEngine.setProject(project);
+        return;
+    }
+
+    const QVector<AutomationPoint> after = current;
+    undoStack.push(new AutomationEditCommand(this, session.trackId, session.parameter,
+                                             session.before, after));
+    statusBar()->showMessage(tr("Recorded %1 automation for %2")
+                                 .arg(session.parameter == 0 ? tr("volume") : tr("pan"))
+                                 .arg(track->name), 2500);
+}
+
 void MainWindow::applyAutomationHistory(quint64 trackId, int parameter,
                                         const QVector<AutomationPoint>& points)
 {
@@ -1582,6 +1802,7 @@ void MainWindow::applyAutomationHistory(quint64 trackId, int parameter,
 
 bool MainWindow::maybeSave()
 {
+    finishAutomationWrite();
     if (audioRecorder || recordingPending)
         finishAudioRecording(true);
     if (midiRecordingActive || midiRecordingPending)
@@ -1609,6 +1830,7 @@ bool MainWindow::maybeSave()
 
 void MainWindow::setProject(const ProjectData& incoming, const QString& path)
 {
+    finishAutomationWrite();
     audioEngine.stopPlayback();
     project = incoming;
     project.normalize();
@@ -1641,6 +1863,7 @@ void MainWindow::setProject(const ProjectData& incoming, const QString& path)
 
 bool MainWindow::saveToPath(const QString& path)
 {
+    finishAutomationWrite();
     if (audioRecorder || recordingPending)
         finishAudioRecording(true);
     if (midiRecordingActive || midiRecordingPending)

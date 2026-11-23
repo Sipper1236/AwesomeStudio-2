@@ -59,6 +59,11 @@ private:
 
 AudioEngine::AudioEngine()
 {
+    for (size_t index = 0; index < maximumTrackCount; ++index)
+    {
+        liveTrackVolumes[index].store(-1.0f, std::memory_order_relaxed);
+        liveTrackPans[index].store(2.0f, std::memory_order_relaxed);
+    }
     setProject(ProjectData{});
 }
 
@@ -131,6 +136,11 @@ void AudioEngine::setProject(const ProjectData& project)
 {
     ProjectData safeProject = project;
     safeProject.normalize();
+    for (size_t index = 0; index < maximumTrackCount; ++index)
+    {
+        liveTrackVolumes[index].store(-1.0f, std::memory_order_release);
+        liveTrackPans[index].store(2.0f, std::memory_order_release);
+    }
     std::atomic_store_explicit(&projectSnapshot,
                                std::make_shared<const ProjectData>(std::move(safeProject)),
                                std::memory_order_release);
@@ -165,6 +175,46 @@ double AudioEngine::positionBeats() const
     return framesPerBeat > 0.0
         ? static_cast<double>(publishedPositionFrames.load(std::memory_order_acquire)) / framesPerBeat
         : 0.0;
+}
+
+void AudioEngine::setLiveTrackMixOverride(quint64 trackId, int parameter, float value)
+{
+    if (parameter != 0 && parameter != 1)
+        return;
+    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    if (!project)
+        return;
+    for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                            index < maximumTrackCount; ++index)
+    {
+        if (project->tracks[static_cast<qsizetype>(index)].id != trackId)
+            continue;
+        if (parameter == 0)
+            liveTrackVolumes[index].store(std::clamp(value, 0.0f, 1.0f), std::memory_order_release);
+        else
+            liveTrackPans[index].store(std::clamp(value, -1.0f, 1.0f), std::memory_order_release);
+        return;
+    }
+}
+
+void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
+{
+    if (parameter != 0 && parameter != 1)
+        return;
+    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    if (!project)
+        return;
+    for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                            index < maximumTrackCount; ++index)
+    {
+        if (project->tracks[static_cast<qsizetype>(index)].id != trackId)
+            continue;
+        if (parameter == 0)
+            liveTrackVolumes[index].store(-1.0f, std::memory_order_release);
+        else
+            liveTrackPans[index].store(2.0f, std::memory_order_release);
+        return;
+    }
 }
 
 void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform waveform, float pan,
@@ -237,6 +287,14 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     if (!project)
         return 0;
     prepareNotes(project);
+    for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                            index < maximumTrackCount; ++index)
+    {
+        renderer.setLiveTrackMixOverride(index, 0,
+            liveTrackVolumes[index].load(std::memory_order_acquire));
+        renderer.setLiveTrackMixOverride(index, 1,
+            liveTrackPans[index].load(std::memory_order_acquire));
+    }
     const std::shared_ptr<const AudioAsset> previewSample =
         std::atomic_load_explicit(&previewSampleAsset, std::memory_order_acquire);
 

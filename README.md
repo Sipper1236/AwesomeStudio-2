@@ -24,6 +24,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Set linear fade-in and fade-out durations in beats for the selected audio region.
 - Adjust track level, pan, mute, solo, and master level.
 - Enable Automation lanes in the Playlist toolbar to show track volume or pan. Click a lane to add a point, drag points to reshape it, and right-click or press Delete to remove a point. Edits share undo/redo with the keyframe list; playback and WAV export interpolate linearly.
+- Arm Write automation, choose Volume or Pan, start playback, then move the matching Mixer control to record a touch pass. Releasing the control or stopping playback commits one undoable edit; the change is audible while recording.
 - Import Standard MIDI Files (formats 0 and 1 with PPQN timing), and export arrangements as multitrack MIDI or stereo 16-bit WAV.
 - Save and reopen `.aws` projects.
 - Use the editor without an audio device; connect an output device to audition notes.
@@ -49,6 +50,6 @@ On Windows, launch `build/AwesomeStudio.exe`. Qt's Multimedia backend uses the a
 
 ## Known gaps
 
-Audio recording currently writes a separate WAV file per take, stores its path in the project, and loads the take into memory after recording. Live MIDI recording uses ALSA sequencer input on Linux builds; other platforms need native MIDI backends. There is no live MIDI monitoring, controller mapping, input monitoring, latency compensation, punch recording, fade curves/crossfades, streaming playback, mixer buses/sends/effects, or third-party plugin hosting. Track volume and pan automation has graphical linear lanes and undoable keyframe editing; automation recording and plugin parameter automation remain future work. Drum pads support one sample each without velocity layers, tuning, or per-pad envelopes. MIDI format 2 and SMPTE-timed files are not supported. Older JUCE-oriented source files remain in `src/core`, but the build does not include them and they are not shipped capabilities.
+Audio recording currently writes a separate WAV file per take, stores its path in the project, and loads the take into memory after recording. Live MIDI recording uses ALSA sequencer input on Linux builds; other platforms need native MIDI backends. There is no live MIDI monitoring, controller mapping, input monitoring, latency compensation, punch recording, fade curves/crossfades, streaming playback, mixer buses/sends/effects, or third-party plugin hosting. Track volume and pan automation has graphical linear lanes, undoable keyframe editing, and basic touch recording from Mixer controls; latch/trim modes and plugin parameter automation remain future work. Drum pads support one sample each without velocity layers, tuning, or per-pad envelopes. MIDI format 2 and SMPTE-timed files are not supported. Older JUCE-oriented source files remain in `src/core`, but the build does not include them and they are not shipped capabilities.
 
 The project plan names GPL-3.0, but the repository currently has no `LICENSE` file. Add the official license text before distributing releases.

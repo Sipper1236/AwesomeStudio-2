@@ -106,9 +106,13 @@ const SynthRenderer::TrackMixValue& SynthRenderer::trackMixAt(size_t trackIndex,
                                         0.0f, 1.0f);
         const float pan = std::clamp(automationValue(automation.pan, beat, automation.basePan),
                                      -1.0f, 1.0f);
-        const double panAngle = (static_cast<double>(pan) + 1.0) * 0.7853981633974483;
-        rendered.leftGain = volume * static_cast<float>(std::cos(panAngle));
-        rendered.rightGain = volume * static_cast<float>(std::sin(panAngle));
+        const LiveTrackMixOverride& live = liveTrackMixOverrides[trackIndex];
+        const float effectiveVolume = live.volume >= 0.0f ? std::clamp(live.volume, 0.0f, 1.0f) : volume;
+        const float effectivePan = live.pan >= -1.0f && live.pan <= 1.0f
+            ? std::clamp(live.pan, -1.0f, 1.0f) : pan;
+        const double panAngle = (static_cast<double>(effectivePan) + 1.0) * 0.7853981633974483;
+        rendered.leftGain = effectiveVolume * static_cast<float>(std::cos(panAngle));
+        rendered.rightGain = effectiveVolume * static_cast<float>(std::sin(panAngle));
         rendered.frame = frame;
     }
     return rendered;
@@ -124,6 +128,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     activeAudioRegions.clear();
     trackMixAutomations.clear();
     trackMixValues.clear();
+    liveTrackMixOverrides.clear();
     nextStartIndex = 0;
     nextAudioStartIndex = 0;
     lastFrame = -1;
@@ -132,6 +137,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
 
     trackMixAutomations.reserve(static_cast<size_t>(project->tracks.size()));
     trackMixValues.resize(static_cast<size_t>(project->tracks.size()));
+    liveTrackMixOverrides.resize(static_cast<size_t>(project->tracks.size()));
     for (const InstrumentTrack& track : project->tracks)
     {
         trackMixAutomations.push_back({track.gain, track.pan,
@@ -244,6 +250,16 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     {
         return left.startFrame < right.startFrame;
     });
+}
+
+void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, float value)
+{
+    if (trackIndex >= liveTrackMixOverrides.size())
+        return;
+    if (parameter == 0)
+        liveTrackMixOverrides[trackIndex].volume = value;
+    else if (parameter == 1)
+        liveTrackMixOverrides[trackIndex].pan = value;
 }
 
 StereoSample SynthRenderer::renderSample(qint64 projectFrame)

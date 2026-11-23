@@ -4,6 +4,7 @@
 #include "SynthRenderer.h"
 
 #include <QString>
+#include <array>
 #include <atomic>
 #include <memory>
 
@@ -26,6 +27,8 @@ public:
     void stopPlayback();
     bool isPlaying() const;
     double positionBeats() const;
+    void setLiveTrackMixOverride(quint64 trackId, int parameter, float value);
+    void clearLiveTrackMixOverride(quint64 trackId, int parameter);
     void triggerPreview(int midiPitch, int velocity = 96,
                         SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
                         bool percussion = false);
@@ -34,6 +37,7 @@ public:
     void setMasterGain(float gain);
 
 private:
+    static constexpr size_t maximumTrackCount = 256;
     class AudioStream;
 
     qint64 renderAudio(char* destination, qint64 maxBytes);
@@ -56,6 +60,8 @@ private:
     std::atomic<qint64> publishedPositionFrames{0};
     std::atomic<qint64> audioClockFrames{0};
     std::atomic<float> masterGain{0.8f};
+    std::array<std::atomic<float>, maximumTrackCount> liveTrackVolumes;
+    std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
     std::atomic<int> previewPitch{-1};
     std::atomic<int> previewVelocity{96};
     std::atomic<double> previewFrequency{440.0};

@@ -68,6 +68,9 @@ private:
     void removeAutomationPoint();
     void applyAutomationHistory(quint64 trackId, int parameter,
                                 const QVector<AutomationPoint>& points);
+    void beginAutomationWrite(quint64 trackId, int parameter, float value);
+    void recordAutomationValue(quint64 trackId, int parameter, float value);
+    void finishAutomationWrite();
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
     quint64 projectAudioBytes() const;
@@ -146,11 +149,13 @@ private:
     QAction* redoAction = nullptr;
     QUndoStack undoStack;
     QTimer* uiTimer = nullptr;
+    QTimer* automationWriteIdleTimer = nullptr;
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;
     QAction* recordAction = nullptr;
     QAction* midiRecordAction = nullptr;
     QAction* automationViewAction = nullptr;
+    QAction* automationWriteAction = nullptr;
     QComboBox* automationLaneParameterControl = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
     std::unique_ptr<MidiInput> midiInput;
@@ -178,6 +183,17 @@ private:
     quint64 midiOpenNoteCount = 0;
     double midiLastBeat = 0.0;
     double midiRecordStartBeat = 0.0;
+    struct AutomationWriteSession
+    {
+        bool active = false;
+        bool changed = false;
+        quint64 trackId = 0;
+        int parameter = 0;
+        float initialValue = 0.0f;
+        double lastSampleBeat = -1.0;
+        double lastPointBeat = -1.0;
+        QVector<AutomationPoint> before;
+    } automationWriteSession;
     bool midiRecordingPending = false;
     bool midiRecordingActive = false;
     bool midiTransportActive = false;
