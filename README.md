@@ -22,7 +22,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Turn on **Monitor audio** in the Recording toolbar to hear the selected input through the master output, either on its own or during recording. Monitoring does not feed back into the recorded WAV; starting a take stops standalone monitoring.
 - On Linux builds with ALSA development files, select a MIDI input and record note on/off events into a bar 1 instrument pattern; count-in and looping follow the transport, and note edits can be undone.
 - Under **MIDI → Enable controller mappings**, listen for CC controls without recording notes. Use **MIDI → Learn controller for** to map a hardware control to master level, selected-track level or pan, or tempo. Mappings are channel-specific and saved in user settings.
-- Turn on **Monitor MIDI** to play incoming notes on the selected synth or drum rack without recording. Monitoring supports overlapping notes and sample-loaded drum pads, and can stay on while MIDI recording is armed.
+- Turn on **Monitor MIDI** to play incoming notes on the selected synth or drum rack without recording. Monitoring supports overlapping notes, sample-loaded drum pads, and channel pitch bend over a two-semitone range in either direction for synth voices; bend data is not recorded into clips or included in MIDI import/export. Monitoring can stay on while MIDI recording is armed.
 - Set a common time signature and edit MIDI clip lengths in quarter-note beats.
 - Choose sine, triangle, saw, or square per instrument track.
 - Shape each built-in Synth track with adjustable attack, decay, sustain, and release; the envelope is saved in the project and used for playback and WAV export.

@@ -322,6 +322,15 @@ void AudioEngine::triggerLiveMidiNoteOff(int channel, int midiPitch)
     enqueueLiveMidiEvent(event);
 }
 
+void AudioEngine::triggerLiveMidiPitchBend(int channel, int value)
+{
+    LiveMidiEvent event;
+    event.pitchBend = true;
+    event.channel = std::clamp(channel, 0, 15);
+    event.pitchBendValue = std::clamp(value, 0, 16383);
+    enqueueLiveMidiEvent(event);
+}
+
 void AudioEngine::stopLiveMidiNotes()
 {
     liveMidiPanic.store(true, std::memory_order_release);
@@ -348,10 +357,25 @@ void AudioEngine::clearLiveMidiVoices()
 {
     for (LiveMidiVoice& voice : liveMidiVoices)
         voice = LiveMidiVoice{};
+    liveMidiChannelPitchBends.fill(0.0f);
 }
 
 void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
 {
+    if (event.pitchBend)
+    {
+        const float bendSemitones = (static_cast<float>(event.pitchBendValue) - 8192.0f) /
+                                    8192.0f * 2.0f;
+        liveMidiChannelPitchBends[static_cast<size_t>(event.channel)] = bendSemitones;
+        const double bendRatio = std::pow(2.0, static_cast<double>(bendSemitones) / 12.0);
+        for (LiveMidiVoice& voice : liveMidiVoices)
+        {
+            if (voice.active && !voice.percussion && voice.channel == event.channel)
+                voice.frequency = voice.baseFrequency * bendRatio;
+        }
+        return;
+    }
+
     if (!event.noteOn)
     {
         LiveMidiVoice* matchedVoice = nullptr;
@@ -417,7 +441,9 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     target->releaseFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
         event.releaseSeconds * outputSampleRate)));
     target->serial = nextLiveMidiSerial++;
-    target->frequency = 440.0 * std::pow(2.0, (event.pitch - 69) / 12.0);
+    target->baseFrequency = 440.0 * std::pow(2.0, (event.pitch - 69) / 12.0);
+    target->frequency = target->baseFrequency * std::pow(2.0,
+        static_cast<double>(liveMidiChannelPitchBends[static_cast<size_t>(event.channel)]) / 12.0);
     target->amplitude = (event.percussion ? 0.48f : 0.22f) *
                         static_cast<float>(event.velocity) / 127.0f * event.gain;
     target->sustainLevel = event.sustainLevel;

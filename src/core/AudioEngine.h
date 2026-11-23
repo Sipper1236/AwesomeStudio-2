@@ -35,6 +35,7 @@ public:
     void clearLiveTrackMixOverride(quint64 trackId, int parameter);
     void triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity, const InstrumentTrack& track);
     void triggerLiveMidiNoteOff(int channel, int midiPitch);
+    void triggerLiveMidiPitchBend(int channel, int value);
     void stopLiveMidiNotes();
     void triggerPreview(int midiPitch, int velocity = 96,
                         SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
@@ -60,8 +61,10 @@ private:
         int channel = 0;
         int pitch = 0;
         int velocity = 0;
+        int pitchBendValue = 8192;
         size_t trackIndex = maximumTrackCount;
         bool percussion = false;
+        bool pitchBend = false;
         SynthWaveform waveform = SynthWaveform::Sine;
         float gain = 1.0f;
         float pan = 0.0f;
@@ -87,6 +90,7 @@ private:
         qint64 releaseFrames = 1;
         quint64 serial = 0;
         double frequency = 440.0;
+        double baseFrequency = 440.0;
         float amplitude = 0.0f;
         float sustainLevel = 1.0f;
         float releaseStartLevel = 1.0f;
@@ -132,6 +136,7 @@ private:
     std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
     std::array<LiveMidiEvent, liveMidiQueueCapacity> liveMidiEvents;
     std::array<LiveMidiVoice, maximumLiveMidiVoices> liveMidiVoices;
+    std::array<float, 16> liveMidiChannelPitchBends{};
     std::array<StereoSample, maximumTrackCount> liveMidiTrackFrameSamples{};
     std::array<bool, maximumTrackCount> liveMidiTrackFrameTouched{};
     std::array<size_t, maximumLiveMidiVoices> liveMidiTouchedTracks{};

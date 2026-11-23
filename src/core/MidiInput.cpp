@@ -2,6 +2,8 @@
 
 #include <QStringList>
 
+#include <algorithm>
+
 #ifdef AWESOME_STUDIO_HAS_ALSA
 #include <alsa/asoundlib.h>
 
@@ -189,6 +191,14 @@ QVector<MidiInputEvent> MidiInput::readAvailable()
             control.controller = event->data.control.param;
             control.value = event->data.control.value;
             events.push_back(control);
+        }
+        else if (event->type == SND_SEQ_EVENT_PITCHBEND)
+        {
+            MidiInputEvent bend;
+            bend.channel = event->data.control.channel;
+            bend.pitchBend = true;
+            bend.value = std::clamp(event->data.control.value + 8192, 0, 16383);
+            events.push_back(bend);
         }
         snd_seq_free_event(event);
     }

@@ -4639,6 +4639,13 @@ void MainWindow::pollMidiInput()
             continue;
         }
 
+        if (event.pitchBend)
+        {
+            if (midiMonitorAction->isChecked())
+                audioEngine.triggerLiveMidiPitchBend(event.channel, event.value);
+            continue;
+        }
+
         if (midiMonitorAction->isChecked())
         {
             if (event.noteOn)
