@@ -27,11 +27,10 @@ private:
         qint64 attackFrames = 1;
         qint64 decayFrames = 0;
         qint64 releaseFrames = 1;
+        size_t trackIndex = 0;
         double frequency = 440.0;
         float amplitude = 0.0f;
         float sustainLevel = 1.0f;
-        float leftGain = 0.70710678f;
-        float rightGain = 0.70710678f;
         SynthWaveform waveform = SynthWaveform::Sine;
         int midiPitch = 60;
         bool percussion = false;
@@ -44,12 +43,31 @@ private:
         qint64 sourceStartFrame = 0;
         qint64 fadeInFrames = 0;
         qint64 fadeOutFrames = 0;
+        size_t trackIndex = 0;
+        float sourceGain = 1.0f;
         std::shared_ptr<const AudioAsset> source;
+    };
+
+    struct TrackMixAutomation
+    {
+        float baseVolume = 1.0f;
+        float basePan = 0.0f;
+        QVector<AutomationPoint> volume;
+        QVector<AutomationPoint> pan;
+    };
+
+    struct TrackMixValue
+    {
+        qint64 frame = -1;
         float leftGain = 0.70710678f;
         float rightGain = 0.70710678f;
     };
 
+    const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
+
     std::shared_ptr<const ProjectData> project;
+    std::vector<TrackMixAutomation> trackMixAutomations;
+    std::vector<TrackMixValue> trackMixValues;
     std::vector<VoiceNote> notes;
     std::vector<size_t> activeNotes;
     std::vector<AudioRegion> audioRegions;

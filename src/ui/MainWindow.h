@@ -34,6 +34,7 @@ class MainWindow final : public QMainWindow
 {
     Q_OBJECT
     friend class NoteEditCommand;
+    friend class AutomationEditCommand;
 
 public:
     explicit MainWindow(AudioEngine& audioEngine, QWidget* parent = nullptr);
@@ -62,6 +63,11 @@ private:
                          double lengthBeats, qint64 audioStartFrame);
     void setSelectedAudioFade(bool fadeIn, double beats);
     void setSelectedSynthEnvelope(int parameter, double value);
+    void refreshAutomationEditor();
+    void addAutomationPoint();
+    void removeAutomationPoint();
+    void applyAutomationHistory(quint64 trackId, int parameter,
+                                const QVector<AutomationPoint>& points);
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
     quint64 projectAudioBytes() const;
@@ -112,10 +118,17 @@ private:
     QSlider* masterControl = nullptr;
     QWidget* audioRegionControls = nullptr;
     QWidget* synthEnvelopePanel = nullptr;
+    QWidget* automationEditorPanel = nullptr;
     QWidget* drumSampleControls = nullptr;
     std::array<QDoubleSpinBox*, 4> envelopeControls{};
     QDoubleSpinBox* audioFadeInControl = nullptr;
     QDoubleSpinBox* audioFadeOutControl = nullptr;
+    QComboBox* automationParameterControl = nullptr;
+    QListWidget* automationPointsList = nullptr;
+    QDoubleSpinBox* automationBeatControl = nullptr;
+    QDoubleSpinBox* automationValueControl = nullptr;
+    QLabel* automationValueLabel = nullptr;
+    QPushButton* removeAutomationPointButton = nullptr;
     std::array<QPushButton*, 4> drumSampleButtons{};
     std::array<QPushButton*, 4> clearDrumSampleButtons{};
     QLabel* masterGainReadout = nullptr;

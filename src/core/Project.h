@@ -71,6 +71,12 @@ struct DrumPadSample
     std::shared_ptr<const AudioAsset> source;
 };
 
+struct AutomationPoint
+{
+    double beat = 0.0;
+    float value = 0.0f;
+};
+
 struct InstrumentTrack
 {
     quint64 id = 0;
@@ -83,6 +89,8 @@ struct InstrumentTrack
     float releaseSeconds = 0.06f;
     float gain = 0.8f;
     float pan = 0.0f;
+    QVector<AutomationPoint> volumeAutomation;
+    QVector<AutomationPoint> panAutomation;
     bool muted = false;
     bool solo = false;
     std::array<DrumPadSample, 4> drumSamples;

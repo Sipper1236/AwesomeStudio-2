@@ -4,6 +4,42 @@
 #include <cmath>
 #include <unordered_set>
 
+namespace
+{
+void normalizeAutomation(QVector<AutomationPoint>& points, float minimum, float maximum)
+{
+    if (points.size() > 10000)
+        points.resize(10000);
+
+    QVector<AutomationPoint> validPoints;
+    validPoints.reserve(points.size());
+    for (AutomationPoint point : points)
+    {
+        if (!std::isfinite(point.beat) || !std::isfinite(point.value))
+            continue;
+        point.beat = std::clamp(point.beat, 0.0, 16384.0);
+        point.value = std::clamp(point.value, minimum, maximum);
+        validPoints.push_back(point);
+    }
+    std::stable_sort(validPoints.begin(), validPoints.end(), [](const AutomationPoint& left,
+                                                                 const AutomationPoint& right)
+    {
+        return left.beat < right.beat;
+    });
+
+    QVector<AutomationPoint> uniquePoints;
+    uniquePoints.reserve(validPoints.size());
+    for (const AutomationPoint& point : validPoints)
+    {
+        if (!uniquePoints.isEmpty() && std::abs(uniquePoints.last().beat - point.beat) < 1.0e-9)
+            uniquePoints.last() = point;
+        else
+            uniquePoints.push_back(point);
+    }
+    points = std::move(uniquePoints);
+}
+}
+
 bool MidiNote::operator==(const MidiNote& other) const
 {
     return id == other.id && pitch == other.pitch && velocity == other.velocity &&
@@ -134,6 +170,8 @@ void ProjectData::normalize()
             std::clamp(static_cast<int>(track.instrumentType), 0, 2));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
+        normalizeAutomation(track.volumeAutomation, 0.0f, 1.0f);
+        normalizeAutomation(track.panAutomation, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));
         if (!std::isfinite(track.attackSeconds)) track.attackSeconds = 0.008f;
         if (!std::isfinite(track.decaySeconds)) track.decaySeconds = 0.0f;

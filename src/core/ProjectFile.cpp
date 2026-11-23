@@ -12,9 +12,12 @@
 #include <QSaveFile>
 #include <QSet>
 
+#include <cmath>
+#include <limits>
+
 namespace
 {
-constexpr int currentProjectVersion = 9;
+constexpr int currentProjectVersion = 10;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -86,6 +89,54 @@ QJsonArray saveNotes(const QVector<MidiNote>& notes)
         });
     }
     return result;
+}
+
+QJsonArray saveAutomation(const QVector<AutomationPoint>& points)
+{
+    QJsonArray result;
+    for (const AutomationPoint& point : points)
+    {
+        result.push_back(QJsonObject{
+            {QStringLiteral("beat"), point.beat},
+            {QStringLiteral("value"), point.value}
+        });
+    }
+    return result;
+}
+
+bool loadAutomation(const QJsonValue& value, QVector<AutomationPoint>& points,
+                    const QString& parameterName, QString* error)
+{
+    if (value.isUndefined())
+        return true;
+    if (!value.isArray() || value.toArray().size() > 10000)
+    {
+        setError(error, QStringLiteral("The track has invalid or excessive %1 automation data.")
+                           .arg(parameterName));
+        return false;
+    }
+    for (const QJsonValue& item : value.toArray())
+    {
+        if (!item.isObject())
+        {
+            setError(error, QStringLiteral("The track contains an invalid %1 automation point.")
+                               .arg(parameterName));
+            return false;
+        }
+        const QJsonObject object = item.toObject();
+        AutomationPoint point;
+        point.beat = object.value(QStringLiteral("beat")).toDouble(-1.0);
+        point.value = static_cast<float>(object.value(QStringLiteral("value")).toDouble(
+            std::numeric_limits<double>::quiet_NaN()));
+        if (!std::isfinite(point.beat) || !std::isfinite(point.value) || point.beat < 0.0)
+        {
+            setError(error, QStringLiteral("The track contains an out-of-range %1 automation point.")
+                               .arg(parameterName));
+            return false;
+        }
+        points.push_back(point);
+    }
+    return true;
 }
 
 bool loadNotes(const QJsonValue& value, QVector<MidiNote>& notes, QString* error)
@@ -166,6 +217,8 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("releaseSeconds"), track.releaseSeconds},
         {QStringLiteral("gain"), track.gain},
         {QStringLiteral("pan"), track.pan},
+        {QStringLiteral("volumeAutomation"), saveAutomation(track.volumeAutomation)},
+        {QStringLiteral("panAutomation"), saveAutomation(track.panAutomation)},
         {QStringLiteral("muted"), track.muted},
         {QStringLiteral("solo"), track.solo},
         {QStringLiteral("drumSamples"), [&track]
@@ -248,6 +301,11 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         object.value(QStringLiteral("releaseSeconds")).toDouble(track.releaseSeconds));
     track.gain = static_cast<float>(object.value(QStringLiteral("gain")).toDouble(0.8));
     track.pan = static_cast<float>(object.value(QStringLiteral("pan")).toDouble(0.0));
+    if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
+                        QStringLiteral("volume"), error) ||
+        !loadAutomation(object.value(QStringLiteral("panAutomation")), track.panAutomation,
+                        QStringLiteral("pan"), error))
+        return false;
     track.muted = object.value(QStringLiteral("muted")).toBool(false);
     track.solo = object.value(QStringLiteral("solo")).toBool(false);
     const QJsonValue drumSampleValue = object.value(QStringLiteral("drumSamples"));

@@ -45,6 +45,26 @@ float noiseSample(qint64 ageFrames, qint64 startFrame, int midiPitch)
     value ^= value >> 15;
     return static_cast<float>(value & 0x00ffffffu) / 8388607.5f - 1.0f;
 }
+
+float automationValue(const QVector<AutomationPoint>& points, double beat, float defaultValue)
+{
+    if (points.isEmpty())
+        return defaultValue;
+    const auto next = std::upper_bound(points.cbegin(), points.cend(), beat,
+        [](double value, const AutomationPoint& point) { return value < point.beat; });
+    if (next == points.cbegin())
+        return defaultValue;
+
+    const auto previous = std::prev(next);
+    if (next == points.cend())
+        return previous->value;
+
+    const double span = next->beat - previous->beat;
+    if (span <= 0.0)
+        return next->value;
+    const float amount = static_cast<float>((beat - previous->beat) / span);
+    return previous->value + (next->value - previous->value) * amount;
+}
 }
 
 float renderPercussionSample(int midiPitch, qint64 ageFrames, qint64 startFrame, double sampleRate)
@@ -76,6 +96,24 @@ float renderPercussionSample(int midiPitch, qint64 ageFrames, qint64 startFrame,
     return static_cast<float>(std::sin(time * twoPi * frequency) * std::exp(-time * 12.0));
 }
 
+const SynthRenderer::TrackMixValue& SynthRenderer::trackMixAt(size_t trackIndex, qint64 frame, double beat)
+{
+    TrackMixValue& rendered = trackMixValues[trackIndex];
+    if (rendered.frame != frame)
+    {
+        const TrackMixAutomation& automation = trackMixAutomations[trackIndex];
+        const float volume = std::clamp(automationValue(automation.volume, beat, automation.baseVolume),
+                                        0.0f, 1.0f);
+        const float pan = std::clamp(automationValue(automation.pan, beat, automation.basePan),
+                                     -1.0f, 1.0f);
+        const double panAngle = (static_cast<double>(pan) + 1.0) * 0.7853981633974483;
+        rendered.leftGain = volume * static_cast<float>(std::cos(panAngle));
+        rendered.rightGain = volume * static_cast<float>(std::sin(panAngle));
+        rendered.frame = frame;
+    }
+    return rendered;
+}
+
 void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, double newSampleRate)
 {
     project = std::move(newProject);
@@ -84,25 +122,32 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     activeNotes.clear();
     audioRegions.clear();
     activeAudioRegions.clear();
+    trackMixAutomations.clear();
+    trackMixValues.clear();
     nextStartIndex = 0;
     nextAudioStartIndex = 0;
     lastFrame = -1;
     if (!project)
         return;
 
+    trackMixAutomations.reserve(static_cast<size_t>(project->tracks.size()));
+    trackMixValues.resize(static_cast<size_t>(project->tracks.size()));
+    for (const InstrumentTrack& track : project->tracks)
+    {
+        trackMixAutomations.push_back({track.gain, track.pan,
+                                       track.volumeAutomation, track.panAutomation});
+    }
+
     bool hasSolo = false;
     for (const InstrumentTrack& track : project->tracks)
         hasSolo = hasSolo || track.solo;
 
-    for (const InstrumentTrack& track : project->tracks)
+    for (size_t trackIndex = 0; trackIndex < static_cast<size_t>(project->tracks.size()); ++trackIndex)
     {
+        const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
         if (track.muted || (hasSolo && !track.solo))
             continue;
 
-        const double panAngle = (std::clamp(static_cast<double>(track.pan), -1.0, 1.0) + 1.0) *
-                                0.7853981633974483;
-        const float leftGain = static_cast<float>(std::cos(panAngle));
-        const float rightGain = static_cast<float>(std::sin(panAngle));
         for (const MidiClip& clip : track.clips)
         {
             if (clip.audioSource != nullptr && clip.audioSource->sampleRate > 0 &&
@@ -117,6 +162,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 region.fadeOutFrames = static_cast<qint64>(std::llround(
                     clip.audioFadeOutBeats * sampleRate * 60.0 / project->tempoBpm));
                 region.source = clip.audioSource;
+                region.trackIndex = trackIndex;
                 const qint64 clipDuration = static_cast<qint64>(std::llround(
                     clip.lengthBeats * sampleRate * 60.0 / project->tempoBpm));
                 const qint64 sourceFrames = clip.audioSource->frameCount() - clip.audioStartFrame;
@@ -127,8 +173,6 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 const qint64 regionFrames = region.endFrame - region.startFrame;
                 region.fadeInFrames = std::min(region.fadeInFrames, regionFrames);
                 region.fadeOutFrames = std::min(region.fadeOutFrames, regionFrames);
-                region.leftGain = leftGain * track.gain;
-                region.rightGain = rightGain * track.gain;
                 audioRegions.push_back(std::move(region));
                 continue;
             }
@@ -148,12 +192,12 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             region.startFrame = static_cast<qint64>(std::llround(
                                 (clip.startBeat + note.startBeat) * sampleRate * 60.0 / project->tempoBpm));
                             region.source = source;
+                            region.trackIndex = trackIndex;
                             const qint64 duration = static_cast<qint64>(std::ceil(
                                 static_cast<double>(source->frameCount()) * sampleRate / source->sampleRate));
                             region.endFrame = region.startFrame + std::max<qint64>(1, duration);
                             const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
-                            region.leftGain = leftGain * track.gain * velocityGain;
-                            region.rightGain = rightGain * track.gain * velocityGain;
+                            region.sourceGain = velocityGain;
                             audioRegions.push_back(std::move(region));
                         }
                         continue;
@@ -173,12 +217,11 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     track.decaySeconds * sampleRate)));
                 voice.releaseFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
                     track.releaseSeconds * sampleRate)));
+                voice.trackIndex = trackIndex;
                 voice.sustainLevel = track.sustainLevel;
                 voice.frequency = 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0);
                 voice.amplitude = (track.instrumentType == InstrumentType::DrumRack ? 0.48f : 0.22f) *
-                                  static_cast<float>(note.velocity) / 127.0f * track.gain;
-                voice.leftGain = leftGain;
-                voice.rightGain = rightGain;
+                                  static_cast<float>(note.velocity) / 127.0f;
                 voice.waveform = track.waveform;
                 voice.midiPitch = note.pitch;
                 voice.percussion = track.instrumentType == InstrumentType::DrumRack;
@@ -217,6 +260,8 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         nextAudioStartIndex = 0;
     }
     lastFrame = projectFrame;
+    const double projectBeat = static_cast<double>(projectFrame) * project->tempoBpm /
+                               (60.0 * sampleRate);
 
     StereoSample sample;
     while (nextStartIndex < notes.size() && notes[nextStartIndex].startFrame <= projectFrame)
@@ -242,12 +287,13 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         const qint64 age = projectFrame - note.startFrame;
         if (note.percussion)
         {
+            const TrackMixValue& mix = trackMixAt(note.trackIndex, projectFrame, projectBeat);
             const float envelope = age < note.attackFrames
                 ? static_cast<float>(age) / static_cast<float>(note.attackFrames) : 1.0f;
             const float voice = renderPercussionSample(note.midiPitch, age, note.startFrame, sampleRate) *
                                 note.amplitude * envelope;
-            sample.left += voice * note.leftGain;
-            sample.right += voice * note.rightGain;
+            sample.left += voice * mix.leftGain;
+            sample.right += voice * mix.rightGain;
             continue;
         }
 
@@ -276,8 +322,9 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
 
         const double phase = static_cast<double>(age) * note.frequency / sampleRate;
         const float voice = oscillatorSample(note.waveform, phase) * note.amplitude * envelope;
-        sample.left += voice * note.leftGain;
-        sample.right += voice * note.rightGain;
+        const TrackMixValue& mix = trackMixAt(note.trackIndex, projectFrame, projectBeat);
+        sample.left += voice * mix.leftGain;
+        sample.right += voice * mix.rightGain;
     }
 
     for (const size_t index : activeAudioRegions)
@@ -311,8 +358,9 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
             fadeEnvelope *= static_cast<float>(std::clamp(
                 static_cast<double>(remainingFadeFrames) / fadeOutLength, 0.0, 1.0));
         }
-        sample.left += left * region.leftGain * fadeEnvelope;
-        sample.right += right * region.rightGain * fadeEnvelope;
+        const TrackMixValue& mix = trackMixAt(region.trackIndex, projectFrame, projectBeat);
+        sample.left += left * region.sourceGain * mix.leftGain * fadeEnvelope;
+        sample.right += right * region.sourceGain * mix.rightGain * fadeEnvelope;
     }
 
     const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(

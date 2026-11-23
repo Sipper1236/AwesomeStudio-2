@@ -101,6 +101,37 @@ private:
     bool firstRedo = true;
 };
 
+class AutomationEditCommand final : public QUndoCommand
+{
+public:
+    AutomationEditCommand(MainWindow* window, quint64 trackId, int parameter,
+                          QVector<AutomationPoint> before, QVector<AutomationPoint> after)
+        : window(window), trackId(trackId), parameter(parameter),
+          before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Edit track automation"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyAutomationHistory(trackId, parameter, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyAutomationHistory(trackId, parameter, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    int parameter;
+    QVector<AutomationPoint> before;
+    QVector<AutomationPoint> after;
+};
+
 MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     : QMainWindow(parent), audioEngine(engine)
 {
@@ -743,6 +774,57 @@ void MainWindow::createDocks()
     }
     browserLayout->addWidget(synthEnvelopeGroup);
 
+    auto* automationGroup = new QGroupBox(tr("TRACK AUTOMATION"), browser);
+    automationEditorPanel = automationGroup;
+    auto* automationLayout = new QVBoxLayout(automationGroup);
+    automationParameterControl = new QComboBox(automationGroup);
+    automationParameterControl->addItem(tr("Volume"), 0);
+    automationParameterControl->addItem(tr("Pan"), 1);
+    automationLayout->addWidget(automationParameterControl);
+    automationPointsList = new QListWidget(automationGroup);
+    automationPointsList->setMaximumHeight(110);
+    automationLayout->addWidget(automationPointsList);
+    auto* automationForm = new QFormLayout;
+    automationBeatControl = new QDoubleSpinBox(automationGroup);
+    automationBeatControl->setRange(0.0, 16384.0);
+    automationBeatControl->setDecimals(2);
+    automationBeatControl->setSingleStep(1.0);
+    automationBeatControl->setSuffix(tr(" beats"));
+    automationValueControl = new QDoubleSpinBox(automationGroup);
+    automationValueControl->setRange(0.0, 100.0);
+    automationValueControl->setDecimals(0);
+    automationValueControl->setSingleStep(5.0);
+    automationValueControl->setSuffix(tr("%"));
+    automationValueLabel = new QLabel(tr("Volume (%)"), automationGroup);
+    automationForm->addRow(tr("Position"), automationBeatControl);
+    automationForm->addRow(automationValueLabel, automationValueControl);
+    automationLayout->addLayout(automationForm);
+    auto* automationButtons = new QHBoxLayout;
+    auto* addAutomationButton = new QPushButton(tr("Add / replace keyframe"), automationGroup);
+    removeAutomationPointButton = new QPushButton(tr("Remove"), automationGroup);
+    automationButtons->addWidget(addAutomationButton, 1);
+    automationButtons->addWidget(removeAutomationPointButton);
+    automationLayout->addLayout(automationButtons);
+    browserLayout->addWidget(automationGroup);
+    connect(automationParameterControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { refreshAutomationEditor(); });
+    connect(automationPointsList, &QListWidget::currentRowChanged, this, [this](int row)
+    {
+        const QListWidgetItem* item = automationPointsList->item(row);
+        if (item == nullptr)
+        {
+            removeAutomationPointButton->setEnabled(false);
+            return;
+        }
+        const QSignalBlocker beatBlocker(automationBeatControl);
+        const QSignalBlocker valueBlocker(automationValueControl);
+        automationBeatControl->setValue(item->data(Qt::UserRole).toDouble());
+        automationValueControl->setValue(item->data(Qt::UserRole + 1).toDouble());
+        removeAutomationPointButton->setEnabled(true);
+    });
+    connect(addAutomationButton, &QPushButton::clicked, this, &MainWindow::addAutomationPoint);
+    connect(removeAutomationPointButton, &QPushButton::clicked, this, &MainWindow::removeAutomationPoint);
+
     audioRegionControls = new QGroupBox(tr("AUDIO REGION"), browser);
     auto* audioFadeForm = new QFormLayout(audioRegionControls);
     audioFadeInControl = new QDoubleSpinBox(audioRegionControls);
@@ -792,7 +874,11 @@ void MainWindow::createDocks()
     hint->setWordWrap(true);
     hint->setStyleSheet(QStringLiteral("color: #8996a2; font-size: 11px;"));
     browserLayout->addWidget(hint);
-    browserDock->setWidget(browser);
+    auto* browserScrollArea = new QScrollArea(browserDock);
+    browserScrollArea->setWidgetResizable(true);
+    browserScrollArea->setFrameShape(QFrame::NoFrame);
+    browserScrollArea->setWidget(browser);
+    browserDock->setWidget(browserScrollArea);
     addDockWidget(Qt::LeftDockWidgetArea, browserDock);
 
     mixerDock = new QDockWidget(tr("Mixer"), this);
@@ -925,6 +1011,7 @@ void MainWindow::refreshProjectUi()
         envelopeControls[index]->setValue(envelopeValues[index]);
         envelopeControls[index]->setEnabled(synthTrackSelected);
     }
+    refreshAutomationEditor();
     instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
                                track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
                                track->instrumentType == InstrumentType::Audio ? tr("AUDIO SOURCE") :
@@ -1345,6 +1432,110 @@ void MainWindow::setSelectedSynthEnvelope(int parameter, double value)
     }
     audioEngine.setProject(project);
     settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::refreshAutomationEditor()
+{
+    if (automationPointsList == nullptr)
+        return;
+    InstrumentTrack* track = selectedTrack();
+    const bool volume = automationParameterControl->currentData().toInt() == 0;
+    QVector<AutomationPoint>* points = track == nullptr ? nullptr :
+        (volume ? &track->volumeAutomation : &track->panAutomation);
+    automationEditorPanel->setEnabled(track != nullptr);
+    automationValueLabel->setText(volume ? tr("Volume (%)") : tr("Pan (%)"));
+    automationValueControl->setRange(volume ? 0.0 : -100.0, 100.0);
+    automationValueControl->setSingleStep(volume ? 5.0 : 10.0);
+
+    const QSignalBlocker listBlocker(automationPointsList);
+    automationPointsList->clear();
+    if (points != nullptr)
+    {
+        for (const AutomationPoint& point : *points)
+        {
+            auto* item = new QListWidgetItem(automationPointsList);
+            const double displayedValue = point.value * 100.0;
+            const QString valueText = volume ? tr("%1%").arg(displayedValue, 0, 'f', 0) :
+                displayedValue < -1.0 ? tr("L %1").arg(std::abs(displayedValue), 0, 'f', 0) :
+                displayedValue > 1.0 ? tr("R %1").arg(displayedValue, 0, 'f', 0) : tr("Center");
+            item->setText(tr("Beat %1  ·  %2").arg(point.beat, 0, 'f', 2).arg(valueText));
+            item->setData(Qt::UserRole, point.beat);
+            item->setData(Qt::UserRole + 1, displayedValue);
+        }
+    }
+    automationBeatControl->setEnabled(track != nullptr);
+    automationValueControl->setEnabled(track != nullptr);
+    removeAutomationPointButton->setEnabled(false);
+}
+
+void MainWindow::addAutomationPoint()
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr)
+        return;
+    const bool volume = automationParameterControl->currentData().toInt() == 0;
+    const int parameter = volume ? 0 : 1;
+    const QVector<AutomationPoint>& currentPoints = volume ? track->volumeAutomation : track->panAutomation;
+    const QVector<AutomationPoint> before = currentPoints;
+    QVector<AutomationPoint> after = before;
+    const AutomationPoint point{automationBeatControl->value(),
+                                static_cast<float>(automationValueControl->value() / 100.0)};
+    auto position = std::lower_bound(after.begin(), after.end(), point.beat,
+        [](const AutomationPoint& current, double beat) { return current.beat < beat; });
+    if (position != after.end() && std::abs(position->beat - point.beat) < 1.0e-9)
+    {
+        if (std::abs(position->value - point.value) < 1.0e-6f)
+            return;
+        position->value = point.value;
+    }
+    else
+    {
+        if (after.size() >= 10000)
+        {
+            statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
+            return;
+        }
+        after.insert(position, point);
+    }
+    undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after));
+}
+
+void MainWindow::removeAutomationPoint()
+{
+    InstrumentTrack* track = selectedTrack();
+    const QListWidgetItem* item = automationPointsList->currentItem();
+    if (track == nullptr || item == nullptr)
+        return;
+    const bool volume = automationParameterControl->currentData().toInt() == 0;
+    const int parameter = volume ? 0 : 1;
+    const QVector<AutomationPoint>& currentPoints = volume ? track->volumeAutomation : track->panAutomation;
+    const QVector<AutomationPoint> before = currentPoints;
+    QVector<AutomationPoint> after = before;
+    const double beat = item->data(Qt::UserRole).toDouble();
+    after.erase(std::remove_if(after.begin(), after.end(), [beat](const AutomationPoint& point)
+    {
+        return std::abs(point.beat - beat) < 1.0e-9;
+    }), after.end());
+    if (after.size() == before.size())
+        return;
+    undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after));
+}
+
+void MainWindow::applyAutomationHistory(quint64 trackId, int parameter,
+                                        const QVector<AutomationPoint>& points)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+    if (parameter == 0)
+        track->volumeAutomation = points;
+    else if (parameter == 1)
+        track->panAutomation = points;
+    else
+        return;
+    audioEngine.setProject(project);
+    refreshAutomationEditor();
     refreshDirtyState();
 }
 
