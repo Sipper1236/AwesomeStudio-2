@@ -14,14 +14,14 @@ Status describes the executable built by the repository's CMake target. Source f
 | Step sequencing | 16-step per-bar editor with kick, snare, closed-hat, and open-hat lanes; note edits share the piano-roll undo history; each pad can load a WAV or use its synthesized voice | Variable step divisions, pattern chaining, per-step probability/ratchets, velocity layers, sample start/loop controls |
 | Mixer | Per-track level, pan, mute, solo, plus master level | Buses, sends, inserts, meters, routing graph, groups, effects |
 | Audio recording | Select an input device, record mono/stereo WAV takes, and add them as new Playlist audio tracks; uses count-in when output is available, works without output, and respects project and WAV size limits | Input monitoring, latency compensation, armed tracks, punch recording, take comping |
-| MIDI input | Piano-roll preview only | Device enumeration, live input, recording, controller mapping |
+| MIDI input | ALSA input device enumeration and note recording on Linux; note on/off, overlapping same-pitch notes, count-in, loop timing, pattern assignment, and undo/redo | Native MIDI backends on other platforms, live monitoring, channel preservation, controller mapping |
 | Plugins and effects | Not implemented in the executable | VST3/CLAP hosting, parameter automation, bundled effects |
 | Automation | Not implemented in the executable | Lanes, curves, read/write modes, undo integration |
 | Collaboration and notation | Not implemented | Score view, collaboration, session interchange |
 
 ## Next slices
 
-1. Add MIDI input, recording, and controller mapping; add audio monitoring, latency compensation, punch recording, and take comping.
+1. Add live MIDI monitoring, controller mapping, and native input backends for other platforms; add audio monitoring, latency compensation, punch recording, and take comping.
 2. Add audio fade curves, crossfades, markers, and portable media packaging or relinking.
 3. Add mixer buses, sends, meters, effects inserts, and a real-time routing graph.
 4. Add third-party plugin hosting, presets, and parameter automation.

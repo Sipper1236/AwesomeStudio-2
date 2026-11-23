@@ -4,6 +4,8 @@
 #include "core/Project.h"
 
 #include <QByteArray>
+#include <QElapsedTimer>
+#include <QHash>
 #include <QMainWindow>
 #include <QUndoStack>
 
@@ -26,6 +28,7 @@ class MidiEditor;
 class ArrangementEditor;
 class StepSequencer;
 class AudioRecorder;
+class MidiInput;
 
 class MainWindow final : public QMainWindow
 {
@@ -68,7 +71,8 @@ private:
     bool saveToPath(const QString& path);
     void updateProjectTitle();
     void refreshDirtyState();
-    void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes);
+    void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,
+                          double clipLengthBeats = -1.0);
     void exportAudio();
     void importAudio();
     void importMidi();
@@ -77,6 +81,12 @@ private:
     bool startPendingAudioRecording(double playheadBeat);
     void finishAudioRecording(bool keepTake = true);
     void refreshAudioInputs();
+    void startMidiRecording();
+    bool startPendingMidiRecording(double playheadBeat);
+    void finishMidiRecording(bool keepTake = true);
+    void refreshMidiInputs();
+    void pollMidiInput();
+    double currentMidiRecordingBeat();
 
     AudioEngine& audioEngine;
     ProjectData project;
@@ -123,7 +133,11 @@ private:
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;
     QAction* recordAction = nullptr;
+    QAction* midiRecordAction = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
+    std::unique_ptr<MidiInput> midiInput;
+    QComboBox* midiInputControl = nullptr;
+    QTimer* midiInputPollTimer = nullptr;
     QString pendingRecordingPath;
     QByteArray pendingRecordingDeviceId;
     QString pendingRecordingDeviceName;
@@ -131,6 +145,24 @@ private:
     quint64 recordingDecodedByteLimit = 0;
     bool recordingPending = false;
     bool recordingTransportActive = false;
+    struct OpenMidiNote
+    {
+        int pitch = 0;
+        int velocity = 0;
+        double startBeat = 0.0;
+    };
+    QHash<int, QVector<OpenMidiNote>> openMidiNotes;
+    QVector<MidiNote> recordedMidiNotes;
+    QElapsedTimer midiRecordClock;
+    quint64 midiRecordingTrackId = 0;
+    quint64 midiRecordingClipId = 0;
+    quint64 midiAvailableNoteSlots = 0;
+    quint64 midiOpenNoteCount = 0;
+    double midiLastBeat = 0.0;
+    double midiRecordStartBeat = 0.0;
+    bool midiRecordingPending = false;
+    bool midiRecordingActive = false;
+    bool midiTransportActive = false;
     quint64 selectedTrackId = 0;
     quint64 selectedClipId = 0;
 };

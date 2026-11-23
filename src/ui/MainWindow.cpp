@@ -4,6 +4,7 @@
 #include "core/AudioRecorder.h"
 #include "core/ProjectFile.h"
 #include "core/MidiFile.h"
+#include "core/MidiInput.h"
 #include "core/WavExporter.h"
 #include "ui/ArrangementEditor.h"
 #include "ui/MidiEditor.h"
@@ -63,9 +64,11 @@ class NoteEditCommand final : public QUndoCommand
 {
 public:
     NoteEditCommand(MainWindow* window, quint64 trackId, quint64 clipId,
-                    QVector<MidiNote> before, QVector<MidiNote> after)
+                    QVector<MidiNote> before, QVector<MidiNote> after,
+                    double beforeLengthBeats = -1.0, double afterLengthBeats = -1.0)
         : window(window), trackId(trackId), clipId(clipId),
-          before(std::move(before)), after(std::move(after))
+          before(std::move(before)), after(std::move(after)),
+          beforeLengthBeats(beforeLengthBeats), afterLengthBeats(afterLengthBeats)
     {
         setText(QObject::tr("Edit MIDI notes"));
     }
@@ -73,7 +76,7 @@ public:
     void undo() override
     {
         if (window != nullptr)
-            window->applyNoteHistory(trackId, clipId, before);
+            window->applyNoteHistory(trackId, clipId, before, beforeLengthBeats);
     }
 
     void redo() override
@@ -84,7 +87,7 @@ public:
             return;
         }
         if (window != nullptr)
-            window->applyNoteHistory(trackId, clipId, after);
+            window->applyNoteHistory(trackId, clipId, after, afterLengthBeats);
     }
 
 private:
@@ -93,6 +96,8 @@ private:
     quint64 clipId;
     QVector<MidiNote> before;
     QVector<MidiNote> after;
+    double beforeLengthBeats;
+    double afterLengthBeats;
     bool firstRedo = true;
 };
 
@@ -272,6 +277,20 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             else if (recordingTransportActive && !audioEngine.isPlaying())
                 finishAudioRecording(true);
         }
+        if (midiRecordingPending)
+        {
+            if (!midiTransportActive || !audioEngine.isPlaying())
+            {
+                finishMidiRecording(false);
+                statusBar()->showMessage(tr("Playback stopped before MIDI recording could start."), 4000);
+            }
+            else if (beat >= 0.0 && !startPendingMidiRecording(beat))
+            {
+                finishMidiRecording(false);
+            }
+        }
+        if (midiRecordingActive && midiTransportActive && !audioEngine.isPlaying())
+            finishMidiRecording(true);
         if (beat < 0.0)
         {
             playheadLabel->setText(tr("COUNT-IN"));
@@ -385,6 +404,8 @@ void MainWindow::createActions()
         {
             if (audioRecorder || recordingPending)
                 finishAudioRecording(true);
+            if (midiRecordingActive || midiRecordingPending)
+                finishMidiRecording(true);
             audioEngine.stopPlayback();
             midiEditor->setPlayheadBeat(0.0);
             arrangementEditor->setPlayheadBeat(0.0);
@@ -398,6 +419,8 @@ void MainWindow::createActions()
     {
         if (audioRecorder || recordingPending)
             finishAudioRecording(true);
+        if (midiRecordingActive || midiRecordingPending)
+            finishMidiRecording(true);
         audioEngine.stopPlayback();
         playAction->setChecked(false);
         midiEditor->setPlayheadBeat(0.0);
@@ -414,6 +437,18 @@ void MainWindow::createActions()
             startAudioRecording();
         else
             finishAudioRecording(true);
+    });
+
+    midiRecordAction = new QAction(tr("Record MIDI"), this);
+    midiRecordAction->setCheckable(true);
+    midiRecordAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    midiRecordAction->setToolTip(tr("Record MIDI notes from the selected input into an instrument pattern"));
+    connect(midiRecordAction, &QAction::triggered, this, [this](bool enabled)
+    {
+        if (enabled)
+            startMidiRecording();
+        else
+            finishMidiRecording(true);
     });
 
     loopAction = new QAction(tr("Loop"), this);
@@ -582,10 +617,22 @@ void MainWindow::createToolBars()
     audioInputControl->setMinimumWidth(190);
     audioInputControl->setToolTip(tr("Audio device used for new recordings"));
     recordingBar->addWidget(audioInputControl);
+    recordingBar->addSeparator();
+    recordingBar->addAction(midiRecordAction);
+    recordingBar->addWidget(new QLabel(tr("MIDI INPUT"), recordingBar));
+    midiInputControl = new QComboBox(recordingBar);
+    midiInputControl->setMinimumWidth(190);
+    midiInputControl->setToolTip(tr("MIDI device used for live note recording"));
+    recordingBar->addWidget(midiInputControl);
     mediaDevices = new QMediaDevices(this);
     connect(mediaDevices, &QMediaDevices::audioInputsChanged,
             this, &MainWindow::refreshAudioInputs);
     refreshAudioInputs();
+    midiInput = std::make_unique<MidiInput>();
+    refreshMidiInputs();
+    midiInputPollTimer = new QTimer(this);
+    midiInputPollTimer->setInterval(5);
+    connect(midiInputPollTimer, &QTimer::timeout, this, &MainWindow::pollMidiInput);
 
     auto* editorBar = addToolBar(tr("Piano roll"));
     editorBar->setObjectName(QStringLiteral("pianoRollToolbar"));
@@ -788,6 +835,7 @@ void MainWindow::createMenus()
     transportMenu->addAction(playAction);
     transportMenu->addAction(stopAction);
     transportMenu->addAction(recordAction);
+    transportMenu->addAction(midiRecordAction);
     transportMenu->addAction(loopAction);
     transportMenu->addAction(metronomeAction);
 
@@ -1247,6 +1295,8 @@ bool MainWindow::maybeSave()
 {
     if (audioRecorder || recordingPending)
         finishAudioRecording(true);
+    if (midiRecordingActive || midiRecordingPending)
+        finishMidiRecording(true);
     if (!isWindowModified())
         return true;
 
@@ -1302,6 +1352,10 @@ void MainWindow::setProject(const ProjectData& incoming, const QString& path)
 
 bool MainWindow::saveToPath(const QString& path)
 {
+    if (audioRecorder || recordingPending)
+        finishAudioRecording(true);
+    if (midiRecordingActive || midiRecordingPending)
+        finishMidiRecording(true);
     QString savePath = path;
     if (QFileInfo(savePath).suffix().isEmpty())
         savePath += QStringLiteral(".aws");
@@ -1336,14 +1390,28 @@ void MainWindow::refreshDirtyState()
     setWindowModified(settingsDirty || !undoStack.isClean());
 }
 
-void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes)
+void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,
+                                  double clipLengthBeats)
 {
     MidiClip* clip = project.findClip(trackId, clipId);
     if (clip == nullptr)
         return;
     clip->notes = notes;
     if (selectedTrackId == trackId && selectedClipId == clipId)
+    {
+        if (clipLengthBeats >= 0.0)
+        {
+            clip->lengthBeats = std::clamp(clipLengthBeats, 0.25, 16384.0);
+            midiEditor->setPatternLengthBeats(clip->lengthBeats);
+            const QSignalBlocker lengthBlocker(clipLengthControl);
+            clipLengthControl->setValue(clip->lengthBeats);
+        }
         midiEditor->setNotes(notes);
+    }
+    else if (clipLengthBeats >= 0.0)
+    {
+        clip->lengthBeats = std::clamp(clipLengthBeats, 0.25, 16384.0);
+    }
     const MidiClip* currentClip = selectedClip();
     stepSequencer->setPattern(currentClip == nullptr ? QVector<MidiNote>{} : currentClip->notes,
                               currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
@@ -1617,13 +1685,50 @@ void MainWindow::refreshAudioInputs()
     {
         audioInputControl->setCurrentIndex(defaultIndex >= 0 ? defaultIndex : 0);
     }
-    audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !recordingPending);
-    recordAction->setEnabled(audioRecorder || recordingPending || !devices.isEmpty());
+    audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !recordingPending &&
+                                  !midiRecordingActive && !midiRecordingPending);
+    recordAction->setEnabled(!midiRecordingActive && !midiRecordingPending &&
+                             (audioRecorder || recordingPending || !devices.isEmpty()));
+}
+
+void MainWindow::refreshMidiInputs()
+{
+    if (midiInputControl == nullptr)
+        return;
+
+    const QString previousId = midiInputControl->currentData().toString();
+    QString error;
+    const QList<MidiInputPort> ports = MidiInput::availablePorts(&error);
+    const QSignalBlocker blocker(midiInputControl);
+    midiInputControl->clear();
+    int selectedIndex = -1;
+    for (const MidiInputPort& port : ports)
+    {
+        midiInputControl->addItem(port.name, port.id);
+        if (port.id == previousId)
+            selectedIndex = midiInputControl->count() - 1;
+    }
+    if (ports.isEmpty())
+    {
+        midiInputControl->addItem(MidiInput::isSupported()
+                                      ? tr("No MIDI input devices")
+                                      : tr("MIDI input unavailable in this build"),
+                                  QString{});
+        midiInputControl->setCurrentIndex(0);
+    }
+    else
+    {
+        midiInputControl->setCurrentIndex(selectedIndex >= 0 ? selectedIndex : 0);
+    }
+    midiInputControl->setEnabled(!ports.isEmpty() && !audioRecorder && !recordingPending &&
+                                 !midiRecordingActive && !midiRecordingPending);
+    midiRecordAction->setEnabled(!audioRecorder && !recordingPending &&
+                                 (midiRecordingActive || midiRecordingPending || MidiInput::isSupported()));
 }
 
 void MainWindow::startAudioRecording()
 {
-    if (audioRecorder || recordingPending)
+    if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
         return;
     if (project.tracks.size() >= 256)
     {
@@ -1717,6 +1822,8 @@ void MainWindow::startAudioRecording()
     countInControl->setEnabled(false);
     loopAction->setEnabled(false);
     metronomeAction->setEnabled(false);
+    midiInputControl->setEnabled(false);
+    midiRecordAction->setEnabled(false);
     if (playbackAvailable)
     {
         audioEngine.setProject(project);
@@ -1804,6 +1911,7 @@ void MainWindow::finishAudioRecording(bool keepTake)
         recordAction->setChecked(false);
     }
     refreshAudioInputs();
+    refreshMidiInputs();
 
     if (!keepTake)
         return;
@@ -1856,6 +1964,335 @@ void MainWindow::finishAudioRecording(bool keepTake)
         statusBar()->showMessage(tr("A partial take was added after an input error: %1").arg(captureIssue), 6000);
     else
         statusBar()->showMessage(tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName()), 3500);
+}
+
+void MainWindow::startMidiRecording()
+{
+    if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
+        return;
+
+    refreshMidiInputs();
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType == InstrumentType::Audio)
+    {
+        QMessageBox::warning(this, tr("Select an instrument track"),
+                             tr("Select a synth or drum rack track before recording MIDI."));
+        QSignalBlocker blocker(midiRecordAction);
+        midiRecordAction->setChecked(false);
+        return;
+    }
+    const QString portId = midiInputControl->currentData().toString();
+    if (portId.isEmpty())
+    {
+        statusBar()->showMessage(MidiInput::isSupported()
+            ? tr("No MIDI input devices are available. Connect a device and try again.")
+            : tr("MIDI input requires an ALSA enabled Linux build."), 5000);
+        QSignalBlocker blocker(midiRecordAction);
+        midiRecordAction->setChecked(false);
+        return;
+    }
+
+    const MidiClip* selected = selectedClip();
+    quint64 targetClipId = selected != nullptr && !selected->isAudioRegion() &&
+                           std::abs(selected->startBeat) < 1.0e-9 ? selected->id : 0;
+    if (targetClipId == 0)
+    {
+        for (const MidiClip& clip : track->clips)
+        {
+            if (!clip.isAudioRegion() && std::abs(clip.startBeat) < 1.0e-9)
+            {
+                targetClipId = clip.id;
+                break;
+            }
+        }
+    }
+    quint64 usedNotes = 0;
+    if (targetClipId != 0)
+    {
+        const MidiClip* targetClip = project.findClip(track->id, targetClipId);
+        if (targetClip != nullptr)
+            usedNotes = static_cast<quint64>(targetClip->notes.size());
+    }
+    midiAvailableNoteSlots = usedNotes >= 100000 ? 0 : 100000 - usedNotes;
+    if (midiAvailableNoteSlots == 0)
+    {
+        statusBar()->showMessage(tr("The target pattern already has the 100,000 note limit."), 4000);
+        QSignalBlocker blocker(midiRecordAction);
+        midiRecordAction->setChecked(false);
+        return;
+    }
+
+    QString error;
+    if (!midiInput->connectTo(portId, &error))
+    {
+        statusBar()->showMessage(tr("Could not open MIDI input: %1").arg(error), 6000);
+        QSignalBlocker blocker(midiRecordAction);
+        midiRecordAction->setChecked(false);
+        refreshMidiInputs();
+        return;
+    }
+
+    midiRecordingTrackId = track->id;
+    midiRecordingClipId = targetClipId;
+    midiLastBeat = 0.0;
+    midiOpenNoteCount = 0;
+    openMidiNotes.clear();
+    recordedMidiNotes.clear();
+    const bool playbackAvailable = audioEngine.isAudioAvailable() || audioEngine.initialize();
+    midiTransportActive = playbackAvailable;
+    midiRecordingPending = playbackAvailable;
+    midiRecordingActive = false;
+    tempoControl->setEnabled(false);
+    timeSignatureControl->setEnabled(false);
+    countInControl->setEnabled(false);
+    loopAction->setEnabled(false);
+    metronomeAction->setEnabled(false);
+    audioInputControl->setEnabled(false);
+    midiInputControl->setEnabled(false);
+    recordAction->setEnabled(false);
+    midiInputPollTimer->start();
+
+    if (playbackAvailable)
+    {
+        audioEngine.setProject(project);
+        audioEngine.startPlayback();
+        playAction->setChecked(true);
+        statusBar()->showMessage(project.countInBars > 0
+            ? tr("Waiting for count-in before MIDI recording…")
+            : tr("Starting MIDI recording…"));
+    }
+    else
+    {
+        statusBar()->showMessage(tr("Audio output is unavailable; MIDI recording starts now without count-in or playback."), 5000);
+        if (!startPendingMidiRecording(0.0))
+            finishMidiRecording(false);
+    }
+}
+
+bool MainWindow::startPendingMidiRecording(double playheadBeat)
+{
+    if (midiInput == nullptr || !midiInput->isConnected())
+    {
+        statusBar()->showMessage(tr("The MIDI input disconnected before recording could start."), 5000);
+        return false;
+    }
+    midiRecordingPending = false;
+    midiRecordingActive = true;
+    midiRecordStartBeat = std::max(0.0, playheadBeat);
+    midiLastBeat = midiRecordStartBeat;
+    midiRecordClock.start();
+    statusBar()->showMessage(midiTransportActive
+        ? tr("Recording MIDI into the bar 1 pattern…")
+        : tr("Recording MIDI without playback…"));
+    return true;
+}
+
+void MainWindow::pollMidiInput()
+{
+    if (midiInput == nullptr || !midiInput->isConnected())
+        return;
+    const QVector<MidiInputEvent> events = midiInput->readAvailable();
+    if (!midiRecordingActive || events.isEmpty())
+        return;
+
+    for (const MidiInputEvent& event : events)
+    {
+        const int key = event.channel * 128 + event.pitch;
+        if (event.noteOn)
+        {
+            if (static_cast<quint64>(recordedMidiNotes.size()) + midiOpenNoteCount >= midiAvailableNoteSlots)
+            {
+                finishMidiRecording(true);
+                statusBar()->showMessage(tr("MIDI recording stopped at the pattern note limit."), 5000);
+                return;
+            }
+            OpenMidiNote note;
+            note.pitch = event.pitch;
+            note.velocity = std::clamp(event.velocity, 1, 127);
+            note.startBeat = currentMidiRecordingBeat();
+            openMidiNotes[key].push_back(note);
+            ++midiOpenNoteCount;
+        }
+        else
+        {
+            auto open = openMidiNotes.find(key);
+            if (open == openMidiNotes.end() || open->isEmpty())
+                continue;
+            const OpenMidiNote note = open->takeLast();
+            if (open->isEmpty())
+                openMidiNotes.erase(open);
+            --midiOpenNoteCount;
+            const double endBeat = currentMidiRecordingBeat();
+            recordedMidiNotes.push_back({0, note.pitch, note.velocity, note.startBeat,
+                                         std::max(1.0 / 64.0, endBeat - note.startBeat)});
+        }
+    }
+}
+
+double MainWindow::currentMidiRecordingBeat()
+{
+    if (midiRecordClock.isValid())
+    {
+        const double elapsedBeats = static_cast<double>(midiRecordClock.nsecsElapsed()) *
+                                    project.tempoBpm / 60000000000.0;
+        midiLastBeat = std::max(midiLastBeat, midiRecordStartBeat + elapsedBeats);
+    }
+    return midiLastBeat;
+}
+
+void MainWindow::finishMidiRecording(bool keepTake)
+{
+    if (!midiRecordingActive && !midiRecordingPending)
+        return;
+
+    const bool wasPending = midiRecordingPending;
+    if (midiRecordingActive)
+    {
+        const double endBeat = currentMidiRecordingBeat();
+        for (auto notes = openMidiNotes.begin(); notes != openMidiNotes.end(); ++notes)
+        {
+            for (const OpenMidiNote& open : notes.value())
+            {
+                if (static_cast<quint64>(recordedMidiNotes.size()) >= midiAvailableNoteSlots)
+                    break;
+                recordedMidiNotes.push_back({0, open.pitch, open.velocity, open.startBeat,
+                                             std::max(1.0 / 64.0, endBeat - open.startBeat)});
+            }
+        }
+    }
+
+    midiRecordingActive = false;
+    midiRecordingPending = false;
+    if (midiInputPollTimer != nullptr)
+        midiInputPollTimer->stop();
+    if (midiInput != nullptr)
+        midiInput->disconnect();
+    openMidiNotes.clear();
+    midiOpenNoteCount = 0;
+    if (midiTransportActive)
+    {
+        audioEngine.stopPlayback();
+        playAction->setChecked(false);
+    }
+    midiTransportActive = false;
+    tempoControl->setEnabled(true);
+    timeSignatureControl->setEnabled(true);
+    countInControl->setEnabled(true);
+    loopAction->setEnabled(true);
+    metronomeAction->setEnabled(true);
+    {
+        const QSignalBlocker blocker(midiRecordAction);
+        midiRecordAction->setChecked(false);
+    }
+    refreshAudioInputs();
+    refreshMidiInputs();
+
+    if (!keepTake)
+    {
+        recordedMidiNotes.clear();
+        return;
+    }
+    if (wasPending)
+    {
+        statusBar()->showMessage(tr("MIDI recording stopped before the count-in finished; no notes were added."), 3500);
+        recordedMidiNotes.clear();
+        return;
+    }
+    if (recordedMidiNotes.isEmpty())
+    {
+        statusBar()->showMessage(tr("No MIDI notes were captured."), 3500);
+        return;
+    }
+
+    InstrumentTrack* track = project.findTrack(midiRecordingTrackId);
+    if (track == nullptr || track->instrumentType == InstrumentType::Audio)
+    {
+        statusBar()->showMessage(tr("The target instrument track is no longer available."), 5000);
+        recordedMidiNotes.clear();
+        return;
+    }
+    MidiClip* clip = midiRecordingClipId == 0
+        ? nullptr : project.findClip(midiRecordingTrackId, midiRecordingClipId);
+    bool createdClip = false;
+    if (clip == nullptr)
+    {
+        if (track->clips.size() >= 10000)
+        {
+            statusBar()->showMessage(tr("The target track has reached the 10,000 pattern limit."), 5000);
+            recordedMidiNotes.clear();
+            return;
+        }
+        MidiClip newClip;
+        newClip.id = project.nextClipId();
+        newClip.name = tr("MIDI Take");
+        newClip.lengthBeats = project.patternLengthBeats();
+        track->clips.push_back(std::move(newClip));
+        clip = &track->clips.last();
+        createdClip = true;
+    }
+
+    const QVector<MidiNote> beforeNotes = clip->notes;
+    const double beforeLength = clip->lengthBeats;
+    quint64 nextNoteId = project.nextNoteId();
+    double maximumEndBeat = clip->lengthBeats;
+    std::sort(recordedMidiNotes.begin(), recordedMidiNotes.end(), [](const MidiNote& left, const MidiNote& right)
+    {
+        if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
+        return left.pitch < right.pitch;
+    });
+    for (MidiNote note : recordedMidiNotes)
+    {
+        if (static_cast<quint64>(clip->notes.size()) >= 100000)
+            break;
+        if (note.startBeat >= 16384.0)
+            continue;
+        note.id = nextNoteId++;
+        note.startBeat = std::clamp(note.startBeat, 0.0, 16384.0 - 1.0 / 64.0);
+        note.lengthBeats = std::clamp(note.lengthBeats, 1.0 / 64.0,
+                                      16384.0 - note.startBeat);
+        maximumEndBeat = std::max(maximumEndBeat, note.startBeat + note.lengthBeats);
+        clip->notes.push_back(note);
+    }
+    if (clip->notes.size() == beforeNotes.size())
+    {
+        if (createdClip)
+            track->clips.removeLast();
+        statusBar()->showMessage(tr("No MIDI notes fit in the target pattern."), 3500);
+        recordedMidiNotes.clear();
+        return;
+    }
+    std::sort(clip->notes.begin(), clip->notes.end(), [](const MidiNote& left, const MidiNote& right)
+    {
+        if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
+        return left.pitch < right.pitch;
+    });
+
+    const double barLength = project.quarterNotesPerBar();
+    const double afterLength = std::clamp(std::ceil(maximumEndBeat / barLength) * barLength,
+                                          std::max(0.25, beforeLength), 16384.0);
+    clip->lengthBeats = afterLength;
+    const quint64 targetClipId = clip->id;
+    const quint64 targetTrackId = track->id;
+    const InstrumentType targetInstrumentType = track->instrumentType;
+    const QString targetClipName = clip->name;
+    const QVector<MidiNote> afterNotes = clip->notes;
+    midiRecordingTrackId = 0;
+    midiRecordingClipId = 0;
+    selectedTrackId = targetTrackId;
+    selectedClipId = targetClipId;
+    if (createdClip)
+        settingsDirty = true;
+    refreshProjectUi();
+    undoStack.push(new NoteEditCommand(this, targetTrackId, targetClipId,
+                                       beforeNotes, afterNotes, beforeLength, afterLength));
+    editorTabs->setCurrentWidget(targetInstrumentType == InstrumentType::DrumRack
+                                     ? static_cast<QWidget*>(stepSequencer)
+                                     : static_cast<QWidget*>(midiEditor));
+    refreshDirtyState();
+    statusBar()->showMessage(tr("Recorded %1 MIDI note(s) into %2")
+                                 .arg(afterNotes.size() - beforeNotes.size())
+                                 .arg(targetClipName), 4500);
+    recordedMidiNotes.clear();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)

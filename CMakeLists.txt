@@ -8,6 +8,13 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Multimedia)
 
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ALSA QUIET IMPORTED_TARGET alsa)
+    endif()
+endif()
+
 add_executable(AwesomeStudio
     src/main.cpp
     src/core/AudioEngine.cpp
@@ -22,6 +29,8 @@ add_executable(AwesomeStudio
     src/core/AudioRecorder.h
     src/core/MidiFile.cpp
     src/core/MidiFile.h
+    src/core/MidiInput.cpp
+    src/core/MidiInput.h
     src/core/SynthRenderer.cpp
     src/core/SynthRenderer.h
     src/core/WavExporter.cpp
@@ -39,6 +48,11 @@ add_executable(AwesomeStudio
 target_include_directories(AwesomeStudio PRIVATE src)
 target_link_libraries(AwesomeStudio PRIVATE Qt6::Widgets Qt6::Multimedia)
 target_compile_features(AwesomeStudio PRIVATE cxx_std_17)
+
+if(TARGET PkgConfig::ALSA)
+    target_link_libraries(AwesomeStudio PRIVATE PkgConfig::ALSA)
+    target_compile_definitions(AwesomeStudio PRIVATE AWESOME_STUDIO_HAS_ALSA=1)
+endif()
 
 if(MSVC)
     target_compile_options(AwesomeStudio PRIVATE /W4 /permissive-)
