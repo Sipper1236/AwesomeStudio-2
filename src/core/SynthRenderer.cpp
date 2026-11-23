@@ -529,31 +529,34 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     if (pad >= 0 && track.drumSamples[static_cast<size_t>(pad)].hasSampleAssignment())
                     {
                         const DrumPadSample& padSample = track.drumSamples[static_cast<size_t>(pad)];
+                        const int layerIndex = padSample.sourceLayerIndexForVelocity(note.velocity);
                         const std::shared_ptr<const AudioAsset>& source =
                             padSample.sourceForVelocity(note.velocity);
                         if (source != nullptr && source->sampleRate > 0 &&
                             source->channelCount > 0 && source->frameCount() > 0)
                         {
+                            const DrumLayerSettings layerSettings =
+                                padSample.layerSettings(layerIndex);
                             AudioRegion region;
                             const double noteStartBeat = clip.startBeat + note.startBeat;
                             region.source = source;
                             region.trackIndex = trackIndex;
                             region.drumSamplePlayback = true;
-                            region.drumSampleLoop = padSample.loopEnabled;
+                            region.drumSampleLoop = layerSettings.loopEnabled;
                             region.drumAttackFrames = std::max<qint64>(0,
-                                static_cast<qint64>(std::llround(padSample.attackSeconds * sampleRate)));
+                                static_cast<qint64>(std::llround(layerSettings.attackSeconds * sampleRate)));
                             region.drumDecayFrames = std::max<qint64>(0,
-                                static_cast<qint64>(std::llround(padSample.decaySeconds * sampleRate)));
+                                static_cast<qint64>(std::llround(layerSettings.decaySeconds * sampleRate)));
                             region.drumReleaseFrames = std::max<qint64>(0,
-                                static_cast<qint64>(std::llround(padSample.releaseSeconds * sampleRate)));
-                            region.drumSustainLevel = padSample.sustainLevel;
+                                static_cast<qint64>(std::llround(layerSettings.releaseSeconds * sampleRate)));
+                            region.drumSustainLevel = layerSettings.sustainLevel;
                             region.probabilityPercent = note.probabilityPercent;
                             region.probabilitySeed = probabilitySeed;
                             region.sourceStartFrame = static_cast<qint64>(std::llround(
                                 static_cast<double>(source->frameCount() - 1) *
-                                padSample.startPositionPercent / 100.0));
+                                layerSettings.startPositionPercent / 100.0));
                             region.playbackRate = std::pow(2.0,
-                                static_cast<double>(padSample.tuningSemitones) / 12.0);
+                                static_cast<double>(layerSettings.tuningSemitones) / 12.0);
                             const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
                             region.sourceGain = velocityGain;
                             const int ratchetCount = std::clamp(note.ratchetCount, 1, 8);

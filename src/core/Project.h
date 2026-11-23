@@ -102,6 +102,17 @@ struct MidiClip
 
 float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape = 1.0);
 
+struct DrumLayerSettings
+{
+    float tuningSemitones = 0.0f;
+    float startPositionPercent = 0.0f;
+    bool loopEnabled = false;
+    float attackSeconds = 0.008f;
+    float decaySeconds = 0.0f;
+    float sustainLevel = 1.0f;
+    float releaseSeconds = 0.06f;
+};
+
 struct DrumPadSample
 {
     QString path;
@@ -125,13 +136,15 @@ struct DrumPadSample
     float decaySeconds = 0.0f;
     float sustainLevel = 1.0f;
     float releaseSeconds = 0.06f;
+    std::array<DrumLayerSettings, 5> velocityLayerSettings{};
+    std::array<bool, 5> velocityLayerSettingsCustom{};
 
     bool hasSampleAssignment() const
     {
         return !path.isEmpty() || !veryLowVelocityPath.isEmpty() || !lowVelocityPath.isEmpty() ||
                !highVelocityPath.isEmpty() || !veryHighVelocityPath.isEmpty();
     }
-    const std::shared_ptr<const AudioAsset>& sourceForVelocity(int velocity) const
+    int sourceLayerIndexForVelocity(int velocity) const
     {
         const std::array<const std::shared_ptr<const AudioAsset>*, 5> layers = {
             &veryLowVelocitySource, &lowVelocitySource, &source,
@@ -144,11 +157,65 @@ struct DrumPadSample
         if (velocity >= veryHighVelocityThreshold) ++selected;
         for (int index = selected; index >= 0; --index)
             if (*layers[static_cast<size_t>(index)] != nullptr)
-                return *layers[static_cast<size_t>(index)];
+                return index;
         for (size_t index = static_cast<size_t>(selected + 1); index < layers.size(); ++index)
             if (*layers[index] != nullptr)
-                return *layers[index];
-        return source;
+                return static_cast<int>(index);
+        return -1;
+    }
+    const std::shared_ptr<const AudioAsset>& sourceForVelocity(int velocity) const
+    {
+        const std::array<const std::shared_ptr<const AudioAsset>*, 5> layers = {
+            &veryLowVelocitySource, &lowVelocitySource, &source,
+            &highVelocitySource, &veryHighVelocitySource
+        };
+        const int layer = sourceLayerIndexForVelocity(velocity);
+        return layer < 0 ? source : *layers[static_cast<size_t>(layer)];
+    }
+    DrumLayerSettings sharedLayerSettings() const
+    {
+        return {tuningSemitones, startPositionPercent, loopEnabled,
+                attackSeconds, decaySeconds, sustainLevel, releaseSeconds};
+    }
+    void setSharedLayerSettings(const DrumLayerSettings& settings)
+    {
+        tuningSemitones = settings.tuningSemitones;
+        startPositionPercent = settings.startPositionPercent;
+        loopEnabled = settings.loopEnabled;
+        attackSeconds = settings.attackSeconds;
+        decaySeconds = settings.decaySeconds;
+        sustainLevel = settings.sustainLevel;
+        releaseSeconds = settings.releaseSeconds;
+    }
+    DrumLayerSettings layerSettings(int layer) const
+    {
+        if (layer < 0 || layer >= static_cast<int>(velocityLayerSettings.size()) ||
+            !velocityLayerSettingsCustom[static_cast<size_t>(layer)])
+            return sharedLayerSettings();
+        return velocityLayerSettings[static_cast<size_t>(layer)];
+    }
+    DrumLayerSettings settingsForVelocity(int velocity) const
+    {
+        return layerSettings(sourceLayerIndexForVelocity(velocity));
+    }
+    void setLayerSettings(int layer, const DrumLayerSettings& settings)
+    {
+        if (layer < 0 || layer >= static_cast<int>(velocityLayerSettings.size()))
+            return;
+        velocityLayerSettings[static_cast<size_t>(layer)] = settings;
+        velocityLayerSettingsCustom[static_cast<size_t>(layer)] = true;
+    }
+    bool hasLayerAssignment(int layer) const
+    {
+        switch (layer)
+        {
+            case 0: return !veryLowVelocityPath.isEmpty();
+            case 1: return !lowVelocityPath.isEmpty();
+            case 2: return !path.isEmpty();
+            case 3: return !highVelocityPath.isEmpty();
+            case 4: return !veryHighVelocityPath.isEmpty();
+            default: return false;
+        }
     }
 };
 

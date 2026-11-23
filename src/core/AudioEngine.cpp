@@ -495,15 +495,24 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
             event.decaySeconds = sample.decaySeconds;
             event.sustainLevel = sample.sustainLevel;
             event.releaseSeconds = sample.releaseSeconds;
+            const int layerIndex = sample.sourceLayerIndexForVelocity(velocity);
+            const DrumLayerSettings settings = sample.layerSettings(layerIndex);
             event.sample = sample.sourceForVelocity(velocity);
-            event.sampleLoopEnabled = sample.loopEnabled;
+            if (event.sample != nullptr)
+            {
+                event.attackSeconds = settings.attackSeconds;
+                event.decaySeconds = settings.decaySeconds;
+                event.sustainLevel = settings.sustainLevel;
+                event.releaseSeconds = settings.releaseSeconds;
+                event.sampleLoopEnabled = settings.loopEnabled;
+            }
             if (event.sample != nullptr && event.sample->frameCount() > 0)
             {
                 event.sampleStartFrame = static_cast<qint64>(std::llround(
                     static_cast<double>(event.sample->frameCount() - 1) *
-                    sample.startPositionPercent / 100.0));
+                    settings.startPositionPercent / 100.0));
                 event.samplePlaybackRate = std::pow(2.0,
-                    static_cast<double>(sample.tuningSemitones) / 12.0);
+                    static_cast<double>(settings.tuningSemitones) / 12.0);
             }
         }
     }

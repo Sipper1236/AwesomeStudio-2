@@ -1239,11 +1239,14 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             {
                 const auto& previewSample = padSample->sourceForVelocity(96);
                 if (previewSample != nullptr)
+                {
+                    const DrumLayerSettings settings = padSample->settingsForVelocity(96);
                     audioEngine.triggerSamplePreview(previewSample, 96, track->pan, track->gain,
-                                                     padSample->startPositionPercent,
-                                                     padSample->tuningSemitones, padSample->loopEnabled,
-                                                     padSample->attackSeconds, padSample->decaySeconds,
-                                                     padSample->sustainLevel, padSample->releaseSeconds);
+                                                     settings.startPositionPercent,
+                                                     settings.tuningSemitones, settings.loopEnabled,
+                                                     settings.attackSeconds, settings.decaySeconds,
+                                                     settings.sustainLevel, settings.releaseSeconds);
+                }
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -1307,11 +1310,14 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             {
                 const auto& previewSample = padSample->sourceForVelocity(100);
                 if (previewSample != nullptr)
+                {
+                    const DrumLayerSettings settings = padSample->settingsForVelocity(100);
                     audioEngine.triggerSamplePreview(previewSample, 100, track->pan, track->gain,
-                                                     padSample->startPositionPercent,
-                                                     padSample->tuningSemitones, padSample->loopEnabled,
-                                                     padSample->attackSeconds, padSample->decaySeconds,
-                                                     padSample->sustainLevel, padSample->releaseSeconds);
+                                                     settings.startPositionPercent,
+                                                     settings.tuningSemitones, settings.loopEnabled,
+                                                     settings.attackSeconds, settings.decaySeconds,
+                                                     settings.sustainLevel, settings.releaseSeconds);
+                }
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -2586,6 +2592,19 @@ void MainWindow::createDocks()
         drumSampleLayout->addWidget(veryHighVelocityRow);
         auto* parameterForm = new QFormLayout();
         parameterForm->setContentsMargins(0, 0, 0, 0);
+        drumLayerSettingsControls[static_cast<size_t>(pad)] =
+            new QComboBox(drumSampleControls);
+        drumLayerSettingsControls[static_cast<size_t>(pad)]->addItem(tr("Shared pad / synth voice"), -1);
+        drumLayerSettingsControls[static_cast<size_t>(pad)]->addItem(tr("Very-low sample layer"), 0);
+        drumLayerSettingsControls[static_cast<size_t>(pad)]->addItem(tr("Low sample layer"), 1);
+        drumLayerSettingsControls[static_cast<size_t>(pad)]->addItem(tr("Base sample layer"), 2);
+        drumLayerSettingsControls[static_cast<size_t>(pad)]->addItem(tr("High sample layer"), 3);
+        drumLayerSettingsControls[static_cast<size_t>(pad)]->addItem(tr("Very-high sample layer"), 4);
+        parameterForm->addRow(tr("Edit settings for"),
+                              drumLayerSettingsControls[static_cast<size_t>(pad)]);
+        resetDrumLayerSettingsButtons[static_cast<size_t>(pad)] =
+            new QPushButton(tr("Reset layer to shared settings"), drumSampleControls);
+        parameterForm->addRow(resetDrumLayerSettingsButtons[static_cast<size_t>(pad)]);
         drumSampleTuneControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
         drumSampleTuneControls[static_cast<size_t>(pad)]->setRange(-24.0, 24.0);
         drumSampleTuneControls[static_cast<size_t>(pad)]->setDecimals(1);
@@ -2678,6 +2697,12 @@ void MainWindow::createDocks()
         connect(clearVeryHighVelocityDrumSampleButtons[static_cast<size_t>(pad)],
                 &QPushButton::clicked, this,
                 [this, pad] { clearVeryHighVelocityDrumSample(pad); });
+        connect(drumLayerSettingsControls[static_cast<size_t>(pad)],
+                qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this](int) { refreshProjectUi(); });
+        connect(resetDrumLayerSettingsButtons[static_cast<size_t>(pad)],
+                &QPushButton::clicked, this,
+                [this, pad] { resetSelectedDrumLayerSettings(pad); });
         connect(drumSampleTuneControls[static_cast<size_t>(pad)],
                 qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, pad](double value) { setSelectedDrumSample(pad, 0, value); });
@@ -3199,16 +3224,22 @@ void MainWindow::refreshProjectUi()
         const QSignalBlocker lowThresholdBlocker(lowVelocityThresholdControls[pad]);
         const QSignalBlocker thresholdBlocker(highVelocityThresholdControls[pad]);
         const QSignalBlocker veryHighThresholdBlocker(veryHighVelocityThresholdControls[pad]);
-        drumSampleTuneControls[pad]->setValue(sample == nullptr ? 0.0 : sample->tuningSemitones);
-        drumSampleStartControls[pad]->setValue(
-            sample == nullptr ? 0.0 : sample->startPositionPercent);
-        drumSampleLoopControls[pad]->setChecked(sample != nullptr && sample->loopEnabled);
-        drumPadAttackControls[pad]->setValue(sample == nullptr ? 0.008 : sample->attackSeconds);
-        drumPadDecayControls[pad]->setValue(sample == nullptr ? 0.0 : sample->decaySeconds);
-        drumPadSustainControls[pad]->setValue(sample == nullptr ? 1.0 : sample->sustainLevel);
-        drumPadReleaseControls[pad]->setValue(sample == nullptr ? 0.06 : sample->releaseSeconds);
         const bool sampleAssigned = drumRackSelected && sample != nullptr &&
             sample->hasSampleAssignment();
+        const int selectedLayer = drumLayerSettingsControls[pad]->currentData().toInt();
+        const bool layerSpecific = selectedLayer >= 0 && selectedLayer < 5;
+        const bool selectedLayerAssigned = layerSpecific && sample != nullptr &&
+            sample->hasLayerAssignment(selectedLayer);
+        const DrumLayerSettings displayedSettings = sample == nullptr
+            ? DrumLayerSettings{}
+            : layerSpecific ? sample->layerSettings(selectedLayer) : sample->sharedLayerSettings();
+        drumSampleTuneControls[pad]->setValue(displayedSettings.tuningSemitones);
+        drumSampleStartControls[pad]->setValue(displayedSettings.startPositionPercent);
+        drumSampleLoopControls[pad]->setChecked(displayedSettings.loopEnabled);
+        drumPadAttackControls[pad]->setValue(displayedSettings.attackSeconds);
+        drumPadDecayControls[pad]->setValue(displayedSettings.decaySeconds);
+        drumPadSustainControls[pad]->setValue(displayedSettings.sustainLevel);
+        drumPadReleaseControls[pad]->setValue(displayedSettings.releaseSeconds);
         veryLowVelocityThresholdControls[pad]->setRange(1,
             sample == nullptr ? 124 : sample->lowVelocityThreshold);
         lowVelocityThresholdControls[pad]->setValue(sample == nullptr ? 48 : sample->lowVelocityThreshold);
@@ -3228,13 +3259,21 @@ void MainWindow::refreshProjectUi()
             sample == nullptr ? 100 : sample->highVelocityThreshold);
         veryHighVelocityThresholdControls[pad]->setValue(
             sample == nullptr ? 120 : sample->veryHighVelocityThreshold);
-        drumSampleTuneControls[pad]->setEnabled(sampleAssigned);
-        drumSampleStartControls[pad]->setEnabled(sampleAssigned);
-        drumSampleLoopControls[pad]->setEnabled(sampleAssigned);
-        drumPadAttackControls[pad]->setEnabled(drumRackSelected);
-        drumPadDecayControls[pad]->setEnabled(drumRackSelected);
-        drumPadSustainControls[pad]->setEnabled(drumRackSelected);
-        drumPadReleaseControls[pad]->setEnabled(drumRackSelected);
+        drumLayerSettingsControls[pad]->setEnabled(drumRackSelected);
+        resetDrumLayerSettingsButtons[pad]->setVisible(layerSpecific);
+        resetDrumLayerSettingsButtons[pad]->setEnabled(layerSpecific && sample != nullptr &&
+            sample->velocityLayerSettingsCustom[static_cast<size_t>(selectedLayer)]);
+        const bool playbackSettingsEnabled = layerSpecific
+            ? selectedLayerAssigned : sampleAssigned;
+        drumSampleTuneControls[pad]->setEnabled(playbackSettingsEnabled);
+        drumSampleStartControls[pad]->setEnabled(playbackSettingsEnabled);
+        drumSampleLoopControls[pad]->setEnabled(playbackSettingsEnabled);
+        const bool envelopeSettingsEnabled = layerSpecific
+            ? selectedLayerAssigned : drumRackSelected;
+        drumPadAttackControls[pad]->setEnabled(envelopeSettingsEnabled);
+        drumPadDecayControls[pad]->setEnabled(envelopeSettingsEnabled);
+        drumPadSustainControls[pad]->setEnabled(envelopeSettingsEnabled);
+        drumPadReleaseControls[pad]->setEnabled(envelopeSettingsEnabled);
         veryLowVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
         lowVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
         highVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
@@ -6656,6 +6695,26 @@ void MainWindow::clearDrumVelocityLayer(int pad, int layer)
     statusBar()->showMessage(tr("Velocity layer cleared"), 2000);
 }
 
+void MainWindow::resetSelectedDrumLayerSettings(int pad)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
+        return;
+    const int layer = drumLayerSettingsControls[static_cast<size_t>(pad)]->currentData().toInt();
+    if (layer < 0 || layer >= 5)
+        return;
+    DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+    if (!sample.velocityLayerSettingsCustom[static_cast<size_t>(layer)])
+        return;
+    sample.velocityLayerSettings[static_cast<size_t>(layer)] = DrumLayerSettings{};
+    sample.velocityLayerSettingsCustom[static_cast<size_t>(layer)] = false;
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshProjectUi();
+    statusBar()->showMessage(tr("Layer settings now use the shared pad controls"), 2000);
+}
+
 void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
 {
     InstrumentTrack* track = selectedTrack();
@@ -6665,32 +6724,57 @@ void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
     DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
     if (parameter <= 2 && !sample.hasSampleAssignment())
         return;
-    switch (parameter)
+    const bool editsLayerControls = parameter <= 2 || (parameter >= 4 && parameter <= 7);
+    const int selectedLayer = drumLayerSettingsControls[static_cast<size_t>(pad)]
+        ->currentData().toInt();
+    const bool layerSpecific = selectedLayer >= 0 && selectedLayer < 5;
+    if (editsLayerControls)
     {
-        case 0: sample.tuningSemitones = static_cast<float>(std::clamp(value, -24.0, 24.0)); break;
-        case 1: sample.startPositionPercent = static_cast<float>(std::clamp(value, 0.0, 99.0)); break;
-        case 2: sample.loopEnabled = value >= 0.5; break;
-        case 3:
-            sample.highVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)),
-                sample.lowVelocityThreshold + 1, sample.veryHighVelocityThreshold);
-            break;
-        case 4: sample.attackSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
-        case 5: sample.decaySeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
-        case 6: sample.sustainLevel = static_cast<float>(std::clamp(value, 0.0, 1.0)); break;
-        case 7: sample.releaseSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
-        case 8:
-            sample.lowVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)),
-                sample.veryLowVelocityThreshold, sample.highVelocityThreshold - 1);
-            break;
-        case 9:
-            sample.veryLowVelocityThreshold = std::clamp(
-                static_cast<int>(std::lround(value)), 1, sample.lowVelocityThreshold);
-            break;
-        case 10:
-            sample.veryHighVelocityThreshold = std::clamp(
-                static_cast<int>(std::lround(value)), sample.highVelocityThreshold, 127);
-            break;
-        default: return;
+        if (layerSpecific && !sample.hasLayerAssignment(selectedLayer))
+            return;
+        DrumLayerSettings settings = layerSpecific
+            ? sample.layerSettings(selectedLayer) : sample.sharedLayerSettings();
+        switch (parameter)
+        {
+            case 0: settings.tuningSemitones = static_cast<float>(std::clamp(value, -24.0, 24.0)); break;
+            case 1: settings.startPositionPercent = static_cast<float>(std::clamp(value, 0.0, 99.0)); break;
+            case 2: settings.loopEnabled = value >= 0.5; break;
+            case 4: settings.attackSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
+            case 5: settings.decaySeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
+            case 6: settings.sustainLevel = static_cast<float>(std::clamp(value, 0.0, 1.0)); break;
+            case 7: settings.releaseSeconds = static_cast<float>(std::clamp(value, 0.0, 5.0)); break;
+            default: return;
+        }
+        if (layerSpecific)
+        {
+            sample.setLayerSettings(selectedLayer, settings);
+            resetDrumLayerSettingsButtons[static_cast<size_t>(pad)]->setEnabled(true);
+        }
+        else
+            sample.setSharedLayerSettings(settings);
+    }
+    else
+    {
+        switch (parameter)
+        {
+            case 3:
+                sample.highVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)),
+                    sample.lowVelocityThreshold + 1, sample.veryHighVelocityThreshold);
+                break;
+            case 8:
+                sample.lowVelocityThreshold = std::clamp(static_cast<int>(std::lround(value)),
+                    sample.veryLowVelocityThreshold, sample.highVelocityThreshold - 1);
+                break;
+            case 9:
+                sample.veryLowVelocityThreshold = std::clamp(
+                    static_cast<int>(std::lround(value)), 1, sample.lowVelocityThreshold);
+                break;
+            case 10:
+                sample.veryHighVelocityThreshold = std::clamp(
+                    static_cast<int>(std::lround(value)), sample.highVelocityThreshold, 127);
+                break;
+            default: return;
+        }
     }
     const QSignalBlocker veryLowBlocker(veryLowVelocityThresholdControls[static_cast<size_t>(pad)]);
     const QSignalBlocker lowBlocker(lowVelocityThresholdControls[static_cast<size_t>(pad)]);

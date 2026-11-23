@@ -143,6 +143,7 @@ private:
     void clearVeryHighVelocityDrumSample(int pad);
     void importDrumVelocityLayer(int pad, int layer);
     void clearDrumVelocityLayer(int pad, int layer);
+    void resetSelectedDrumLayerSettings(int pad);
     void setSelectedDrumSample(int pad, int parameter, double value);
     quint64 projectAudioBytes() const;
     std::shared_ptr<const AudioAsset> findProjectAudioAsset(const QString& path) const;
@@ -278,6 +279,8 @@ private:
     std::array<QDoubleSpinBox*, 4> drumSampleTuneControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleStartControls{};
     std::array<QCheckBox*, 4> drumSampleLoopControls{};
+    std::array<QComboBox*, 4> drumLayerSettingsControls{};
+    std::array<QPushButton*, 4> resetDrumLayerSettingsButtons{};
     std::array<QDoubleSpinBox*, 4> drumPadAttackControls{};
     std::array<QDoubleSpinBox*, 4> drumPadDecayControls{};
     std::array<QDoubleSpinBox*, 4> drumPadSustainControls{};

@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 44;
+constexpr int currentProjectVersion = 45;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -562,7 +562,26 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                      {QStringLiteral("attackSeconds"), sample.attackSeconds},
                      {QStringLiteral("decaySeconds"), sample.decaySeconds},
                      {QStringLiteral("sustainLevel"), sample.sustainLevel},
-                     {QStringLiteral("releaseSeconds"), sample.releaseSeconds}
+                     {QStringLiteral("releaseSeconds"), sample.releaseSeconds},
+                     {QStringLiteral("velocityLayerSettings"), [&sample]
+                      {
+                          QJsonArray layers;
+                          for (size_t layer = 0; layer < sample.velocityLayerSettings.size(); ++layer)
+                          {
+                              const DrumLayerSettings& settings = sample.velocityLayerSettings[layer];
+                              layers.push_back(QJsonObject{
+                                  {QStringLiteral("custom"), sample.velocityLayerSettingsCustom[layer]},
+                                  {QStringLiteral("tuningSemitones"), settings.tuningSemitones},
+                                  {QStringLiteral("startPositionPercent"), settings.startPositionPercent},
+                                  {QStringLiteral("loopEnabled"), settings.loopEnabled},
+                                  {QStringLiteral("attackSeconds"), settings.attackSeconds},
+                                  {QStringLiteral("decaySeconds"), settings.decaySeconds},
+                                  {QStringLiteral("sustainLevel"), settings.sustainLevel},
+                                  {QStringLiteral("releaseSeconds"), settings.releaseSeconds}
+                              });
+                          }
+                          return layers;
+                      }()}
                  });
              return samples;
          }()},
@@ -937,6 +956,61 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                     }
                     sample.veryLowVelocityPath = veryLowVelocityPath.toString();
                     sample.veryHighVelocityPath = veryHighVelocityPath.toString();
+                }
+                if (version >= 45)
+                {
+                    const QJsonValue layerSettingsValue = sampleObject.value(
+                        QStringLiteral("velocityLayerSettings"));
+                    if (!layerSettingsValue.isArray() ||
+                        layerSettingsValue.toArray().size() !=
+                            static_cast<qsizetype>(sample.velocityLayerSettings.size()))
+                    {
+                        setError(error, QStringLiteral("The drum rack contains invalid per-layer controls."));
+                        return false;
+                    }
+                    const QJsonArray layerSettings = layerSettingsValue.toArray();
+                    for (qsizetype layer = 0; layer < layerSettings.size(); ++layer)
+                    {
+                        if (!layerSettings[layer].isObject())
+                        {
+                            setError(error, QStringLiteral("The drum rack contains invalid per-layer controls."));
+                            return false;
+                        }
+                        const QJsonObject layerObject = layerSettings[layer].toObject();
+                        const QJsonValue customValue = layerObject.value(QStringLiteral("custom"));
+                        const QJsonValue loopValue = layerObject.value(QStringLiteral("loopEnabled"));
+                        DrumLayerSettings& settings = sample.velocityLayerSettings[
+                            static_cast<size_t>(layer)];
+                        const double tuning = layerObject.value(QStringLiteral("tuningSemitones"))
+                            .toDouble(std::numeric_limits<double>::quiet_NaN());
+                        const double start = layerObject.value(QStringLiteral("startPositionPercent"))
+                            .toDouble(std::numeric_limits<double>::quiet_NaN());
+                        const double attack = layerObject.value(QStringLiteral("attackSeconds"))
+                            .toDouble(std::numeric_limits<double>::quiet_NaN());
+                        const double decay = layerObject.value(QStringLiteral("decaySeconds"))
+                            .toDouble(std::numeric_limits<double>::quiet_NaN());
+                        const double sustain = layerObject.value(QStringLiteral("sustainLevel"))
+                            .toDouble(std::numeric_limits<double>::quiet_NaN());
+                        const double release = layerObject.value(QStringLiteral("releaseSeconds"))
+                            .toDouble(std::numeric_limits<double>::quiet_NaN());
+                        if (!customValue.isBool() || !loopValue.isBool() ||
+                            !std::isfinite(tuning) || !std::isfinite(start) ||
+                            !std::isfinite(attack) || !std::isfinite(decay) ||
+                            !std::isfinite(sustain) || !std::isfinite(release))
+                        {
+                            setError(error, QStringLiteral("The drum rack contains invalid per-layer controls."));
+                            return false;
+                        }
+                        sample.velocityLayerSettingsCustom[static_cast<size_t>(layer)] =
+                            customValue.toBool();
+                        settings.tuningSemitones = static_cast<float>(tuning);
+                        settings.startPositionPercent = static_cast<float>(start);
+                        settings.loopEnabled = loopValue.toBool();
+                        settings.attackSeconds = static_cast<float>(attack);
+                        settings.decaySeconds = static_cast<float>(decay);
+                        settings.sustainLevel = static_cast<float>(sustain);
+                        settings.releaseSeconds = static_cast<float>(release);
+                    }
                 }
             }
             else

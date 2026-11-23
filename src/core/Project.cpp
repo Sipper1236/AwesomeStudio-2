@@ -640,6 +640,21 @@ void ProjectData::normalize()
             drumSample.decaySeconds = std::clamp(drumSample.decaySeconds, 0.0f, 5.0f);
             drumSample.sustainLevel = std::clamp(drumSample.sustainLevel, 0.0f, 1.0f);
             drumSample.releaseSeconds = std::clamp(drumSample.releaseSeconds, 0.0f, 5.0f);
+            for (DrumLayerSettings& settings : drumSample.velocityLayerSettings)
+            {
+                if (!std::isfinite(settings.tuningSemitones)) settings.tuningSemitones = 0.0f;
+                if (!std::isfinite(settings.startPositionPercent)) settings.startPositionPercent = 0.0f;
+                if (!std::isfinite(settings.attackSeconds)) settings.attackSeconds = 0.008f;
+                if (!std::isfinite(settings.decaySeconds)) settings.decaySeconds = 0.0f;
+                if (!std::isfinite(settings.sustainLevel)) settings.sustainLevel = 1.0f;
+                if (!std::isfinite(settings.releaseSeconds)) settings.releaseSeconds = 0.06f;
+                settings.tuningSemitones = std::clamp(settings.tuningSemitones, -24.0f, 24.0f);
+                settings.startPositionPercent = std::clamp(settings.startPositionPercent, 0.0f, 99.0f);
+                settings.attackSeconds = std::clamp(settings.attackSeconds, 0.0f, 5.0f);
+                settings.decaySeconds = std::clamp(settings.decaySeconds, 0.0f, 5.0f);
+                settings.sustainLevel = std::clamp(settings.sustainLevel, 0.0f, 1.0f);
+                settings.releaseSeconds = std::clamp(settings.releaseSeconds, 0.0f, 5.0f);
+            }
         }
         if (track.clips.size() > 10000)
             track.clips.resize(10000);
