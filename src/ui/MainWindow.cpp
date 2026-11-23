@@ -31,6 +31,7 @@
 #include <QMediaDevices>
 #include <QMessageBox>
 #include <QPointer>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -394,6 +395,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             midiEditor->setPlayheadBeat(0.0);
         if (!audioEngine.isPlaying() && playAction->isChecked())
             playAction->setChecked(false);
+        refreshMixerMeters();
     });
     uiTimer->start();
 }
@@ -1194,10 +1196,25 @@ void MainWindow::refreshMixer()
     if (mixerScrollArea == nullptr)
         return;
 
+    mixerTrackMeters.clear();
+    masterPeakMeter = nullptr;
     auto* content = new QWidget(mixerScrollArea);
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
+    const auto createPeakMeter = [](QWidget* parent)
+    {
+        auto* meter = new QProgressBar(parent);
+        meter->setRange(0, 1000);
+        meter->setValue(0);
+        meter->setTextVisible(false);
+        meter->setFixedHeight(9);
+        meter->setStyleSheet(QStringLiteral(
+            "QProgressBar { background: #20262e; border: 1px solid #3a434e; border-radius: 3px; }"
+            "QProgressBar::chunk { border-radius: 2px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #39c98c, stop:0.72 #c9c45b, stop:0.9 #ed8c4a, stop:1 #e75c5c); }"));
+        return meter;
+    };
 
     auto* masterBox = new QGroupBox(tr("Master"), content);
     auto* masterForm = new QFormLayout(masterBox);
@@ -1211,6 +1228,10 @@ void MainWindow::refreshMixer()
     masterRowLayout->addWidget(masterControl, 1);
     masterRowLayout->addWidget(masterGainReadout);
     masterForm->addRow(tr("Level"), masterRow);
+    masterPeakMeter = createPeakMeter(masterBox);
+    masterPeakMeter->setObjectName(QStringLiteral("masterPeakMeter"));
+    masterPeakMeter->setToolTip(tr("Master output peak level"));
+    masterForm->addRow(tr("Peak"), masterPeakMeter);
     layout->addWidget(masterBox);
     connect(masterControl, &QSlider::valueChanged, this, [this](int value)
     {
@@ -1260,6 +1281,11 @@ void MainWindow::refreshMixer()
         panLayout->addWidget(pan, 1);
         panLayout->addWidget(panLabel);
         form->addRow(tr("Pan"), panRow);
+        auto* peakMeter = createPeakMeter(group);
+        peakMeter->setObjectName(QStringLiteral("trackPeakMeter"));
+        peakMeter->setToolTip(tr("Track peak level after volume and pan"));
+        mixerTrackMeters.push_back({trackId, peakMeter});
+        form->addRow(tr("Peak"), peakMeter);
         layout->addWidget(group);
 
         connect(volume, &QSlider::sliderPressed, this, [this, trackId, volume]
@@ -1368,6 +1394,38 @@ void MainWindow::refreshMixer()
     }
     layout->addStretch();
     mixerScrollArea->setWidget(content);
+}
+
+void MainWindow::refreshMixerMeters()
+{
+    const auto meterValue = [](float peak)
+    {
+        if (!std::isfinite(peak) || peak <= 0.001f)
+            return 0;
+        const float decibels = 20.0f * std::log10(peak);
+        return static_cast<int>(std::round(std::clamp((decibels + 60.0f) / 60.0f, 0.0f, 1.0f) * 1000.0f));
+    };
+    const auto meterTip = [this](float peak)
+    {
+        if (!std::isfinite(peak) || peak <= 0.0f)
+            return tr("Peak: -∞ dBFS");
+        return tr("Peak: %1 dBFS").arg(20.0f * std::log10(peak), 0, 'f', 1);
+    };
+
+    if (masterPeakMeter != nullptr)
+    {
+        const float peak = audioEngine.masterPeakLevel();
+        masterPeakMeter->setValue(meterValue(peak));
+        masterPeakMeter->setToolTip(meterTip(peak));
+    }
+    for (const MixerTrackMeterWidget& entry : mixerTrackMeters)
+    {
+        if (entry.meter == nullptr)
+            continue;
+        const float peak = audioEngine.trackPeakLevel(entry.trackId);
+        entry.meter->setValue(meterValue(peak));
+        entry.meter->setToolTip(meterTip(peak));
+    }
 }
 
 void MainWindow::selectTrack(quint64 trackId)

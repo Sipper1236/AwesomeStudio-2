@@ -129,6 +129,10 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixAutomations.clear();
     trackMixValues.clear();
     liveTrackMixOverrides.clear();
+    trackFrameSamples.clear();
+    trackFrameTouched.clear();
+    touchedTrackIndices.clear();
+    trackPeakLevels.clear();
     nextStartIndex = 0;
     nextAudioStartIndex = 0;
     lastFrame = -1;
@@ -138,6 +142,10 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixAutomations.reserve(static_cast<size_t>(project->tracks.size()));
     trackMixValues.resize(static_cast<size_t>(project->tracks.size()));
     liveTrackMixOverrides.resize(static_cast<size_t>(project->tracks.size()));
+    trackFrameSamples.resize(static_cast<size_t>(project->tracks.size()));
+    trackFrameTouched.assign(static_cast<size_t>(project->tracks.size()), 0);
+    touchedTrackIndices.reserve(static_cast<size_t>(project->tracks.size()));
+    trackPeakLevels.assign(static_cast<size_t>(project->tracks.size()), 0.0f);
     for (const InstrumentTrack& track : project->tracks)
     {
         trackMixAutomations.push_back({track.gain, track.pan,
@@ -262,6 +270,30 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
         liveTrackMixOverrides[trackIndex].pan = value;
 }
 
+void SynthRenderer::resetTrackPeakLevels()
+{
+    std::fill(trackPeakLevels.begin(), trackPeakLevels.end(), 0.0f);
+}
+
+float SynthRenderer::trackPeakLevel(size_t trackIndex) const
+{
+    return trackIndex < trackPeakLevels.size() ? trackPeakLevels[trackIndex] : 0.0f;
+}
+
+void SynthRenderer::addTrackSample(size_t trackIndex, float left, float right)
+{
+    if (trackIndex >= trackFrameSamples.size())
+        return;
+    if (trackFrameTouched[trackIndex] == 0)
+    {
+        trackFrameTouched[trackIndex] = 1;
+        touchedTrackIndices.push_back(trackIndex);
+    }
+    StereoSample& sample = trackFrameSamples[trackIndex];
+    sample.left += left;
+    sample.right += right;
+}
+
 StereoSample SynthRenderer::renderSample(qint64 projectFrame)
 {
     if (!project)
@@ -308,8 +340,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
                 ? static_cast<float>(age) / static_cast<float>(note.attackFrames) : 1.0f;
             const float voice = renderPercussionSample(note.midiPitch, age, note.startFrame, sampleRate) *
                                 note.amplitude * envelope;
-            sample.left += voice * mix.leftGain;
-            sample.right += voice * mix.rightGain;
+            addTrackSample(note.trackIndex, voice * mix.leftGain, voice * mix.rightGain);
             continue;
         }
 
@@ -339,8 +370,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         const double phase = static_cast<double>(age) * note.frequency / sampleRate;
         const float voice = oscillatorSample(note.waveform, phase) * note.amplitude * envelope;
         const TrackMixValue& mix = trackMixAt(note.trackIndex, projectFrame, projectBeat);
-        sample.left += voice * mix.leftGain;
-        sample.right += voice * mix.rightGain;
+        addTrackSample(note.trackIndex, voice * mix.leftGain, voice * mix.rightGain);
     }
 
     for (const size_t index : activeAudioRegions)
@@ -375,9 +405,22 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
                 static_cast<double>(remainingFadeFrames) / fadeOutLength, 0.0, 1.0));
         }
         const TrackMixValue& mix = trackMixAt(region.trackIndex, projectFrame, projectBeat);
-        sample.left += left * region.sourceGain * mix.leftGain * fadeEnvelope;
-        sample.right += right * region.sourceGain * mix.rightGain * fadeEnvelope;
+        addTrackSample(region.trackIndex,
+                       left * region.sourceGain * mix.leftGain * fadeEnvelope,
+                       right * region.sourceGain * mix.rightGain * fadeEnvelope);
     }
+
+    for (const size_t trackIndex : touchedTrackIndices)
+    {
+        const StereoSample& trackSample = trackFrameSamples[trackIndex];
+        sample.left += trackSample.left;
+        sample.right += trackSample.right;
+        trackPeakLevels[trackIndex] = std::max(trackPeakLevels[trackIndex],
+            std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
+        trackFrameSamples[trackIndex] = {};
+        trackFrameTouched[trackIndex] = 0;
+    }
+    touchedTrackIndices.clear();
 
     const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
         sampleRate * 60.0 / project->tempoBpm * 4.0 / project->beatUnit)));

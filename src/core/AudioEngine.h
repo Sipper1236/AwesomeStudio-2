@@ -27,6 +27,8 @@ public:
     void stopPlayback();
     bool isPlaying() const;
     double positionBeats() const;
+    float trackPeakLevel(quint64 trackId) const;
+    float masterPeakLevel() const;
     void setLiveTrackMixOverride(quint64 trackId, int parameter, float value);
     void clearLiveTrackMixOverride(quint64 trackId, int parameter);
     void triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity, const InstrumentTrack& track);
@@ -51,6 +53,7 @@ private:
         int channel = 0;
         int pitch = 0;
         int velocity = 0;
+        size_t trackIndex = maximumTrackCount;
         bool percussion = false;
         SynthWaveform waveform = SynthWaveform::Sine;
         float gain = 1.0f;
@@ -69,6 +72,7 @@ private:
         bool percussion = false;
         int channel = 0;
         int pitch = 0;
+        size_t trackIndex = maximumTrackCount;
         qint64 startFrame = 0;
         qint64 releaseFrame = -1;
         qint64 attackFrames = 1;
@@ -113,10 +117,17 @@ private:
     std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
     std::array<LiveMidiEvent, liveMidiQueueCapacity> liveMidiEvents;
     std::array<LiveMidiVoice, maximumLiveMidiVoices> liveMidiVoices;
+    std::array<StereoSample, maximumTrackCount> liveMidiTrackFrameSamples{};
+    std::array<bool, maximumTrackCount> liveMidiTrackFrameTouched{};
+    std::array<size_t, maximumLiveMidiVoices> liveMidiTouchedTracks{};
+    std::array<float, maximumTrackCount> liveMidiBlockPeaks{};
+    size_t liveMidiTouchedTrackCount = 0;
     std::atomic<size_t> liveMidiWriteIndex{0};
     std::atomic<size_t> liveMidiReadIndex{0};
     std::atomic<bool> liveMidiPanic{false};
     quint64 nextLiveMidiSerial = 1;
+    std::array<std::atomic<float>, maximumTrackCount> trackPeakValues;
+    std::atomic<float> masterPeakValue{0.0f};
     std::atomic<int> previewPitch{-1};
     std::atomic<int> previewVelocity{96};
     std::atomic<double> previewFrequency{440.0};

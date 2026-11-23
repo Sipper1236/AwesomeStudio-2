@@ -72,6 +72,7 @@ AudioEngine::AudioEngine()
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_relaxed);
         liveTrackPans[index].store(2.0f, std::memory_order_relaxed);
+        trackPeakValues[index].store(0.0f, std::memory_order_relaxed);
     }
     setProject(ProjectData{});
 }
@@ -149,7 +150,9 @@ void AudioEngine::setProject(const ProjectData& project)
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_release);
         liveTrackPans[index].store(2.0f, std::memory_order_release);
+        trackPeakValues[index].store(0.0f, std::memory_order_release);
     }
+    masterPeakValue.store(0.0f, std::memory_order_release);
     std::atomic_store_explicit(&projectSnapshot,
                                std::make_shared<const ProjectData>(std::move(safeProject)),
                                std::memory_order_release);
@@ -184,6 +187,25 @@ double AudioEngine::positionBeats() const
     return framesPerBeat > 0.0
         ? static_cast<double>(publishedPositionFrames.load(std::memory_order_acquire)) / framesPerBeat
         : 0.0;
+}
+
+float AudioEngine::trackPeakLevel(quint64 trackId) const
+{
+    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    if (!project)
+        return 0.0f;
+    for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                            index < maximumTrackCount; ++index)
+    {
+        if (project->tracks[static_cast<qsizetype>(index)].id == trackId)
+            return trackPeakValues[index].load(std::memory_order_acquire);
+    }
+    return 0.0f;
+}
+
+float AudioEngine::masterPeakLevel() const
+{
+    return masterPeakValue.load(std::memory_order_acquire);
 }
 
 void AudioEngine::setLiveTrackMixOverride(quint64 trackId, int parameter, float value)
@@ -237,9 +259,22 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
     event.channel = std::clamp(channel, 0, 15);
     event.pitch = std::clamp(midiPitch, 0, 127);
     event.velocity = std::clamp(velocity, 1, 127);
+    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    bool hasSolo = false;
+    if (project != nullptr)
+    {
+        for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                                index < maximumTrackCount; ++index)
+        {
+            hasSolo = hasSolo || project->tracks[static_cast<qsizetype>(index)].solo;
+            if (project->tracks[static_cast<qsizetype>(index)].id == track.id)
+                event.trackIndex = index;
+        }
+    }
     event.percussion = track.instrumentType == InstrumentType::DrumRack;
     event.waveform = track.waveform;
-    event.gain = track.muted ? 0.0f : std::clamp(track.gain, 0.0f, 1.0f);
+    const bool suppressedBySolo = hasSolo && !track.solo;
+    event.gain = track.muted || suppressedBySolo ? 0.0f : std::clamp(track.gain, 0.0f, 1.0f);
     event.pan = std::clamp(track.pan, -1.0f, 1.0f);
     event.attackSeconds = std::clamp(track.attackSeconds, 0.0f, 5.0f);
     event.decaySeconds = std::clamp(track.decaySeconds, 0.0f, 5.0f);
@@ -348,6 +383,7 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     target->percussion = event.percussion;
     target->channel = event.channel;
     target->pitch = event.pitch;
+    target->trackIndex = event.trackIndex;
     target->startFrame = frame;
     target->attackFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
         event.attackSeconds * outputSampleRate)));
@@ -368,6 +404,20 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
 
 void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
 {
+    liveMidiTouchedTrackCount = 0;
+    const auto addTrackFrameSample = [this](size_t trackIndex, float left, float right)
+    {
+        if (trackIndex >= maximumTrackCount)
+            return;
+        if (!liveMidiTrackFrameTouched[trackIndex])
+        {
+            liveMidiTrackFrameTouched[trackIndex] = true;
+            liveMidiTouchedTracks[liveMidiTouchedTrackCount++] = trackIndex;
+        }
+        liveMidiTrackFrameSamples[trackIndex].left += left;
+        liveMidiTrackFrameSamples[trackIndex].right += right;
+    };
+
     for (LiveMidiVoice& voice : liveMidiVoices)
     {
         if (!voice.active)
@@ -402,8 +452,11 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
                                sampleAt(secondFrame, 0) * fraction;
             const float right = channels == 1 ? left :
                 sampleAt(firstFrame, 1) * (1.0f - fraction) + sampleAt(secondFrame, 1) * fraction;
-            mixed.left += left * voice.amplitude * voice.leftGain;
-            mixed.right += right * voice.amplitude * voice.rightGain;
+            const float leftContribution = left * voice.amplitude * voice.leftGain;
+            const float rightContribution = right * voice.amplitude * voice.rightGain;
+            mixed.left += leftContribution;
+            mixed.right += rightContribution;
+            addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
             continue;
         }
 
@@ -447,8 +500,21 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
                   voice.amplitude * envelope
             : oscillatorSample(voice.waveform, static_cast<double>(age) * voice.frequency / outputSampleRate) *
                   voice.amplitude * envelope;
-        mixed.left += voiceSample * voice.leftGain;
-        mixed.right += voiceSample * voice.rightGain;
+        const float leftContribution = voiceSample * voice.leftGain;
+        const float rightContribution = voiceSample * voice.rightGain;
+        mixed.left += leftContribution;
+        mixed.right += rightContribution;
+        addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
+    }
+
+    for (size_t index = 0; index < liveMidiTouchedTrackCount; ++index)
+    {
+        const size_t trackIndex = liveMidiTouchedTracks[index];
+        const StereoSample& trackSample = liveMidiTrackFrameSamples[trackIndex];
+        liveMidiBlockPeaks[trackIndex] = std::max(liveMidiBlockPeaks[trackIndex],
+            std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
+        liveMidiTrackFrameSamples[trackIndex] = {};
+        liveMidiTrackFrameTouched[trackIndex] = false;
     }
 }
 
@@ -522,6 +588,8 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     if (!project)
         return 0;
     prepareNotes(project);
+    renderer.resetTrackPeakLevels();
+    liveMidiBlockPeaks.fill(0.0f);
     for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
                             index < maximumTrackCount; ++index)
     {
@@ -566,6 +634,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         midiWriteIndex = liveMidiWriteIndex.load(std::memory_order_acquire);
     }
 
+    float blockMasterPeak = 0.0f;
     for (int frameIndex = 0; frameIndex < frames; ++frameIndex)
     {
         if (playingState && !project->loopEnabled && playbackFrame >= patternFrames + releaseTailFrames)
@@ -643,6 +712,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         const float gain = masterGain.load(std::memory_order_relaxed);
         mixed.left = std::tanh(mixed.left * gain);
         mixed.right = std::tanh(mixed.right * gain);
+        blockMasterPeak = std::max(blockMasterPeak, std::max(std::abs(mixed.left), std::abs(mixed.right)));
         for (int channel = 0; channel < outputChannels; ++channel)
         {
             const int byteOffset = (frameIndex * outputChannels + channel) * outputFormat->bytesPerSample();
@@ -683,6 +753,16 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         if (playingState)
             ++playbackFrame;
     }
+
+    const size_t meterTrackCount = std::min(static_cast<size_t>(project->tracks.size()), maximumTrackCount);
+    for (size_t index = 0; index < meterTrackCount; ++index)
+    {
+        const float blockPeak = std::max(renderer.trackPeakLevel(index), liveMidiBlockPeaks[index]);
+        const float decayedPeak = trackPeakValues[index].load(std::memory_order_relaxed) * 0.82f;
+        trackPeakValues[index].store(std::max(blockPeak, decayedPeak), std::memory_order_release);
+    }
+    const float decayedMasterPeak = masterPeakValue.load(std::memory_order_relaxed) * 0.82f;
+    masterPeakValue.store(std::max(blockMasterPeak, decayedMasterPeak), std::memory_order_release);
 
     audioClockFrames.store(clockStart + frames, std::memory_order_release);
     const qint64 publishedPosition = playingState

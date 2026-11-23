@@ -18,6 +18,8 @@ class SynthRenderer
 public:
     void setProject(std::shared_ptr<const ProjectData> project, double sampleRate);
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
+    void resetTrackPeakLevels();
+    float trackPeakLevel(size_t trackIndex) const;
     StereoSample renderSample(qint64 projectFrame);
 
 private:
@@ -71,11 +73,16 @@ private:
     };
 
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
+    void addTrackSample(size_t trackIndex, float left, float right);
 
     std::shared_ptr<const ProjectData> project;
     std::vector<TrackMixAutomation> trackMixAutomations;
     std::vector<TrackMixValue> trackMixValues;
     std::vector<LiveTrackMixOverride> liveTrackMixOverrides;
+    std::vector<StereoSample> trackFrameSamples;
+    std::vector<unsigned char> trackFrameTouched;
+    std::vector<size_t> touchedTrackIndices;
+    std::vector<float> trackPeakLevels;
     std::vector<VoiceNote> notes;
     std::vector<size_t> activeNotes;
     std::vector<AudioRegion> audioRegions;

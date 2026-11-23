@@ -23,7 +23,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Import mono or stereo WAV audio as a Playlist track. Supported sources are PCM 8/16/24/32-bit or IEEE float32 WAV at 8–192 kHz; regions display a waveform and play in the arrangement and WAV export.
 - Trim a loaded audio region from either edge by dragging its handle in the Playlist; the left edge updates the source offset and arrangement position together.
 - Set linear fade-in and fade-out durations in beats for the selected audio region.
-- Adjust track level, pan, mute, solo, and master level.
+- Adjust track level, pan, mute, solo, and master level; watch per-track and master peak meters during playback and live MIDI monitoring.
 - Enable Automation lanes in the Playlist toolbar to show track volume or pan. Click a lane to add a point, drag points to reshape it, and right-click or press Delete to remove a point. Edits share undo/redo with the keyframe list; playback and WAV export interpolate linearly.
 - Arm Write automation, choose Volume or Pan, start playback, then move the matching Mixer control to record a touch pass. Releasing the control or stopping playback commits one undoable edit; the change is audible while recording.
 - Import Standard MIDI Files (formats 0 and 1 with PPQN timing), and export arrangements as multitrack MIDI or stereo 16-bit WAV.

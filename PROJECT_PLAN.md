@@ -39,6 +39,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [ ] Bundled EQ, delay, compression, and reverb in the playback graph
 - [x] Graphical per-track volume/pan automation lanes with undoable point editing
 - [x] Touch recording for volume/pan automation from Mixer controls during playback
+- [x] Realtime per-track and master peak meters in the Mixer
 - [ ] Automation latch/trim modes and plugin parameter automation
 
 ### 3. Plugin and production workflow

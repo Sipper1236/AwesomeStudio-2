@@ -20,6 +20,7 @@ class QDockWidget;
 class QLabel;
 class QListWidget;
 class QPushButton;
+class QProgressBar;
 class QScrollArea;
 class QSlider;
 class QTabWidget;
@@ -51,6 +52,7 @@ private:
     void setProject(const ProjectData& project, const QString& path = QString());
     void refreshProjectUi();
     void refreshMixer();
+    void refreshMixerMeters();
     void selectTrack(quint64 trackId);
     void selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll);
     void addTrack();
@@ -133,6 +135,13 @@ private:
     QDoubleSpinBox* automationValueControl = nullptr;
     QLabel* automationValueLabel = nullptr;
     QPushButton* removeAutomationPointButton = nullptr;
+    struct MixerTrackMeterWidget
+    {
+        quint64 trackId = 0;
+        QProgressBar* meter = nullptr;
+    };
+    QVector<MixerTrackMeterWidget> mixerTrackMeters;
+    QProgressBar* masterPeakMeter = nullptr;
     std::array<QPushButton*, 4> drumSampleButtons{};
     std::array<QPushButton*, 4> clearDrumSampleButtons{};
     QLabel* masterGainReadout = nullptr;
