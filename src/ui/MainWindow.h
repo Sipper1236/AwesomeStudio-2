@@ -110,6 +110,8 @@ private:
     void setSelectedSynthFilter(int parameter, double value);
     void setSelectedSynthFilterEnvelope(int parameter, double value);
     void applySelectedSynthPreset(int presetIndex);
+    void populateSynthPresetControl(int selectedUserPresetIndex = -1);
+    void saveSelectedSynthPreset();
     void setSelectedTrackEqualizer(int band, double gainDb);
     void setSelectedTrackEqualizerCrossover(int band, double frequencyHz);
     void setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings);

@@ -47,7 +47,11 @@
 #include <QProgressBar>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QScrollArea>
+#include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
@@ -76,6 +80,7 @@
 namespace
 {
 constexpr double automationWritePointSpacingBeats = 0.04;
+constexpr int customSynthPresetRole = Qt::UserRole + 1;
 
 class TrackEqResponseWidget final : public QWidget
 {
@@ -572,6 +577,292 @@ struct FactorySynthPreset
     float filterEnvelopeSustainLevel;
     float filterEnvelopeReleaseSeconds;
 };
+
+struct SynthPresetSettings
+{
+    SynthWaveform waveform = SynthWaveform::Sine;
+    bool secondOscillatorEnabled = false;
+    SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
+    float secondOscillatorDetuneCents = 0.0f;
+    float secondOscillatorMix = 0.5f;
+    float attackSeconds = 0.008f;
+    float decaySeconds = 0.0f;
+    float sustainLevel = 1.0f;
+    float releaseSeconds = 0.06f;
+    bool filterEnabled = false;
+    SynthFilterType filterType = SynthFilterType::LowPass;
+    float filterCutoffHz = 20000.0f;
+    float filterResonance = 0.707f;
+    bool filterEnvelopeEnabled = false;
+    float filterEnvelopeAmountSemitones = 24.0f;
+    float filterEnvelopeAttackSeconds = 0.008f;
+    float filterEnvelopeDecaySeconds = 0.2f;
+    float filterEnvelopeSustainLevel = 0.0f;
+    float filterEnvelopeReleaseSeconds = 0.2f;
+};
+
+bool samePresetFloat(float left, float right);
+
+SynthPresetSettings synthPresetSettings(const InstrumentTrack& track)
+{
+    return {
+        track.waveform,
+        track.secondOscillatorEnabled,
+        track.secondOscillatorWaveform,
+        track.secondOscillatorDetuneCents,
+        track.secondOscillatorMix,
+        track.attackSeconds,
+        track.decaySeconds,
+        track.sustainLevel,
+        track.releaseSeconds,
+        track.synthFilterEnabled,
+        track.synthFilterType,
+        track.synthFilterCutoffHz,
+        track.synthFilterResonance,
+        track.synthFilterEnvelopeEnabled,
+        track.synthFilterEnvelopeAmountSemitones,
+        track.synthFilterEnvelopeAttackSeconds,
+        track.synthFilterEnvelopeDecaySeconds,
+        track.synthFilterEnvelopeSustainLevel,
+        track.synthFilterEnvelopeReleaseSeconds
+    };
+}
+
+QJsonObject synthPresetSettingsJson(const InstrumentTrack& track)
+{
+    const SynthPresetSettings settings = synthPresetSettings(track);
+    return {
+        {QStringLiteral("waveform"), static_cast<int>(settings.waveform)},
+        {QStringLiteral("secondOscillatorEnabled"), settings.secondOscillatorEnabled},
+        {QStringLiteral("secondOscillatorWaveform"),
+         static_cast<int>(settings.secondOscillatorWaveform)},
+        {QStringLiteral("secondOscillatorDetuneCents"), settings.secondOscillatorDetuneCents},
+        {QStringLiteral("secondOscillatorMix"), settings.secondOscillatorMix},
+        {QStringLiteral("attackSeconds"), settings.attackSeconds},
+        {QStringLiteral("decaySeconds"), settings.decaySeconds},
+        {QStringLiteral("sustainLevel"), settings.sustainLevel},
+        {QStringLiteral("releaseSeconds"), settings.releaseSeconds},
+        {QStringLiteral("filterEnabled"), settings.filterEnabled},
+        {QStringLiteral("filterType"), static_cast<int>(settings.filterType)},
+        {QStringLiteral("filterCutoffHz"), settings.filterCutoffHz},
+        {QStringLiteral("filterResonance"), settings.filterResonance},
+        {QStringLiteral("filterEnvelopeEnabled"), settings.filterEnvelopeEnabled},
+        {QStringLiteral("filterEnvelopeAmountSemitones"),
+         settings.filterEnvelopeAmountSemitones},
+        {QStringLiteral("filterEnvelopeAttackSeconds"),
+         settings.filterEnvelopeAttackSeconds},
+        {QStringLiteral("filterEnvelopeDecaySeconds"),
+         settings.filterEnvelopeDecaySeconds},
+        {QStringLiteral("filterEnvelopeSustainLevel"),
+         settings.filterEnvelopeSustainLevel},
+        {QStringLiteral("filterEnvelopeReleaseSeconds"),
+         settings.filterEnvelopeReleaseSeconds}
+    };
+}
+
+bool synthPresetSettingsFromJson(const QJsonObject& object, SynthPresetSettings& settings)
+{
+    const auto number = [&object](const char* key, double minimum, double maximum,
+                                  float& destination)
+    {
+        const QJsonValue value = object.value(QLatin1String(key));
+        if (!value.isDouble())
+            return false;
+        const double numberValue = value.toDouble();
+        if (!std::isfinite(numberValue) || numberValue < minimum || numberValue > maximum)
+            return false;
+        destination = static_cast<float>(numberValue);
+        return true;
+    };
+    const auto boolean = [&object](const char* key, bool& destination)
+    {
+        const QJsonValue value = object.value(QLatin1String(key));
+        if (!value.isBool())
+            return false;
+        destination = value.toBool();
+        return true;
+    };
+    const auto enumeration = [&object](const char* key, int maximum, int& destination)
+    {
+        const QJsonValue value = object.value(QLatin1String(key));
+        if (!value.isDouble())
+            return false;
+        const double numberValue = value.toDouble();
+        if (!std::isfinite(numberValue) || std::floor(numberValue) != numberValue ||
+            numberValue < 0.0 || numberValue > maximum)
+            return false;
+        destination = static_cast<int>(numberValue);
+        return true;
+    };
+
+    int waveform = 0;
+    int secondWaveform = 0;
+    int filterType = 0;
+    if (!enumeration("waveform", 3, waveform) ||
+        !boolean("secondOscillatorEnabled", settings.secondOscillatorEnabled) ||
+        !enumeration("secondOscillatorWaveform", 3, secondWaveform) ||
+        !number("secondOscillatorDetuneCents", -100.0, 100.0,
+                settings.secondOscillatorDetuneCents) ||
+        !number("secondOscillatorMix", 0.0, 1.0, settings.secondOscillatorMix) ||
+        !number("attackSeconds", 0.0, 5.0, settings.attackSeconds) ||
+        !number("decaySeconds", 0.0, 5.0, settings.decaySeconds) ||
+        !number("sustainLevel", 0.0, 1.0, settings.sustainLevel) ||
+        !number("releaseSeconds", 0.0, 5.0, settings.releaseSeconds) ||
+        !boolean("filterEnabled", settings.filterEnabled) ||
+        !enumeration("filterType", 3, filterType) ||
+        !number("filterCutoffHz", 20.0, 20000.0, settings.filterCutoffHz) ||
+        !number("filterResonance", 0.1, 10.0, settings.filterResonance) ||
+        !boolean("filterEnvelopeEnabled", settings.filterEnvelopeEnabled) ||
+        !number("filterEnvelopeAmountSemitones", -48.0, 48.0,
+                settings.filterEnvelopeAmountSemitones) ||
+        !number("filterEnvelopeAttackSeconds", 0.0, 5.0,
+                settings.filterEnvelopeAttackSeconds) ||
+        !number("filterEnvelopeDecaySeconds", 0.0, 5.0,
+                settings.filterEnvelopeDecaySeconds) ||
+        !number("filterEnvelopeSustainLevel", 0.0, 1.0,
+                settings.filterEnvelopeSustainLevel) ||
+        !number("filterEnvelopeReleaseSeconds", 0.0, 5.0,
+                settings.filterEnvelopeReleaseSeconds))
+        return false;
+
+    settings.waveform = static_cast<SynthWaveform>(waveform);
+    settings.secondOscillatorWaveform = static_cast<SynthWaveform>(secondWaveform);
+    settings.filterType = static_cast<SynthFilterType>(filterType);
+    return true;
+}
+
+void applySynthPresetSettings(InstrumentTrack& track, const SynthPresetSettings& settings)
+{
+    track.waveform = settings.waveform;
+    track.secondOscillatorEnabled = settings.secondOscillatorEnabled;
+    track.secondOscillatorWaveform = settings.secondOscillatorWaveform;
+    track.secondOscillatorDetuneCents = settings.secondOscillatorDetuneCents;
+    track.secondOscillatorMix = settings.secondOscillatorMix;
+    track.attackSeconds = settings.attackSeconds;
+    track.decaySeconds = settings.decaySeconds;
+    track.sustainLevel = settings.sustainLevel;
+    track.releaseSeconds = settings.releaseSeconds;
+    track.synthFilterEnabled = settings.filterEnabled;
+    track.synthFilterType = settings.filterType;
+    track.synthFilterCutoffHz = settings.filterCutoffHz;
+    track.synthFilterResonance = settings.filterResonance;
+    track.synthFilterEnvelopeEnabled = settings.filterEnvelopeEnabled;
+    track.synthFilterEnvelopeAmountSemitones = settings.filterEnvelopeAmountSemitones;
+    track.synthFilterEnvelopeAttackSeconds = settings.filterEnvelopeAttackSeconds;
+    track.synthFilterEnvelopeDecaySeconds = settings.filterEnvelopeDecaySeconds;
+    track.synthFilterEnvelopeSustainLevel = settings.filterEnvelopeSustainLevel;
+    track.synthFilterEnvelopeReleaseSeconds = settings.filterEnvelopeReleaseSeconds;
+}
+
+bool matchesSynthPresetSettings(const InstrumentTrack& track,
+                                const SynthPresetSettings& settings)
+{
+    const SynthPresetSettings current = synthPresetSettings(track);
+    return current.waveform == settings.waveform &&
+        current.secondOscillatorEnabled == settings.secondOscillatorEnabled &&
+        current.secondOscillatorWaveform == settings.secondOscillatorWaveform &&
+        samePresetFloat(current.secondOscillatorDetuneCents,
+                        settings.secondOscillatorDetuneCents) &&
+        samePresetFloat(current.secondOscillatorMix, settings.secondOscillatorMix) &&
+        samePresetFloat(current.attackSeconds, settings.attackSeconds) &&
+        samePresetFloat(current.decaySeconds, settings.decaySeconds) &&
+        samePresetFloat(current.sustainLevel, settings.sustainLevel) &&
+        samePresetFloat(current.releaseSeconds, settings.releaseSeconds) &&
+        current.filterEnabled == settings.filterEnabled &&
+        current.filterType == settings.filterType &&
+        samePresetFloat(current.filterCutoffHz, settings.filterCutoffHz) &&
+        samePresetFloat(current.filterResonance, settings.filterResonance) &&
+        current.filterEnvelopeEnabled == settings.filterEnvelopeEnabled &&
+        samePresetFloat(current.filterEnvelopeAmountSemitones,
+                        settings.filterEnvelopeAmountSemitones) &&
+        samePresetFloat(current.filterEnvelopeAttackSeconds,
+                        settings.filterEnvelopeAttackSeconds) &&
+        samePresetFloat(current.filterEnvelopeDecaySeconds,
+                        settings.filterEnvelopeDecaySeconds) &&
+        samePresetFloat(current.filterEnvelopeSustainLevel,
+                        settings.filterEnvelopeSustainLevel) &&
+        samePresetFloat(current.filterEnvelopeReleaseSeconds,
+                        settings.filterEnvelopeReleaseSeconds);
+}
+
+QString userSynthPresetFilePath()
+{
+    QString directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (directory.isEmpty())
+        directory = QDir::home().filePath(QStringLiteral(".awesome-studio"));
+    return QDir(directory).filePath(QStringLiteral("synth-presets.json"));
+}
+
+QVector<QJsonObject> loadUserSynthPresets(QString* error = nullptr)
+{
+    const QString path = userSynthPresetFilePath();
+    if (!QFileInfo::exists(path))
+        return {};
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (error != nullptr)
+            *error = QObject::tr("Could not read synth patches: %1").arg(file.errorString());
+        return {};
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
+        document.object().value(QStringLiteral("version")).toInt() != 1 ||
+        !document.object().value(QStringLiteral("presets")).isArray())
+    {
+        if (error != nullptr)
+            *error = QObject::tr("The synth patch library is invalid. Move or repair %1 before saving.")
+                .arg(path);
+        return {};
+    }
+
+    QVector<QJsonObject> presets;
+    const QJsonArray array = document.object().value(QStringLiteral("presets")).toArray();
+    for (const QJsonValue& value : array)
+    {
+        if (!value.isObject())
+            continue;
+        const QJsonObject preset = value.toObject();
+        const QString name = preset.value(QStringLiteral("name")).toString().trimmed();
+        SynthPresetSettings settings;
+        if (!name.isEmpty() && preset.value(QStringLiteral("settings")).isObject() &&
+            synthPresetSettingsFromJson(preset.value(QStringLiteral("settings")).toObject(),
+                                        settings))
+            presets.append(preset);
+    }
+    return presets;
+}
+
+bool saveUserSynthPresets(const QVector<QJsonObject>& presets, QString* error)
+{
+    const QString path = userSynthPresetFilePath();
+    const QFileInfo fileInfo(path);
+    if (!QDir().mkpath(fileInfo.absolutePath()))
+    {
+        if (error != nullptr)
+            *error = QObject::tr("Could not create the synth patch folder.");
+        return false;
+    }
+
+    QJsonArray array;
+    for (const QJsonObject& preset : presets)
+        array.append(preset);
+    QSaveFile file(path);
+    const QByteArray contents = QJsonDocument(QJsonObject{
+            {QStringLiteral("version"), 1},
+            {QStringLiteral("presets"), array}
+        }).toJson(QJsonDocument::Indented);
+    if (!file.open(QIODevice::WriteOnly) || file.write(contents) != contents.size() ||
+        !file.commit())
+    {
+        if (error != nullptr)
+            *error = QObject::tr("Could not save synth patches: %1").arg(file.errorString());
+        return false;
+    }
+    return true;
+}
 
 constexpr std::array<FactorySynthPreset, 7> factorySynthPresets = {{
     {"Deep Sub", SynthWaveform::Sine, false, SynthWaveform::Saw, 0.0f, 0.5f,
@@ -2824,17 +3115,20 @@ void MainWindow::createDocks()
     synthPresetControl = new QComboBox(synthPresetPanel);
     synthPresetControl->setPlaceholderText(tr("Custom"));
     synthPresetControl->setToolTip(
-        tr("Factory presets set oscillator, amplitude, and filter settings. Editing them makes a custom sound."));
-    for (size_t index = 0; index < factorySynthPresets.size(); ++index)
-        synthPresetControl->addItem(tr(factorySynthPresets[index].name),
-                                    static_cast<int>(index));
+        tr("Choose a factory or saved patch. Editing its controls makes a custom sound."));
+    populateSynthPresetControl();
+    auto* saveSynthPresetButton = new QPushButton(tr("Save…"), synthPresetPanel);
+    saveSynthPresetButton->setToolTip(tr("Save the selected synth's current sound as a patch"));
+    connect(saveSynthPresetButton, &QPushButton::clicked,
+            this, &MainWindow::saveSelectedSynthPreset);
     synthPresetRow->addWidget(synthPresetLabel);
     synthPresetRow->addWidget(synthPresetControl, 1);
+    synthPresetRow->addWidget(saveSynthPresetButton);
     connect(synthPresetControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int index)
     {
         if (index >= 0)
-            applySelectedSynthPreset(synthPresetControl->itemData(index).toInt());
+            applySelectedSynthPreset(index);
     });
     browserLayout->addWidget(synthPresetPanel);
     auto* oscillatorGroup = new QGroupBox(tr("OSCILLATORS"), browser);
@@ -3856,11 +4150,28 @@ void MainWindow::refreshProjectUi()
     int matchingPresetIndex = -1;
     if (synthTrackSelected)
     {
-        for (size_t index = 0; index < factorySynthPresets.size(); ++index)
+        for (int index = 0; index < synthPresetControl->count(); ++index)
         {
-            if (matchesFactorySynthPreset(*track, factorySynthPresets[index]))
+            bool matches = false;
+            if (synthPresetControl->itemData(index, customSynthPresetRole).toBool())
             {
-                matchingPresetIndex = static_cast<int>(index);
+                SynthPresetSettings settings;
+                const QJsonObject object =
+                    synthPresetControl->itemData(index).value<QJsonObject>();
+                matches = synthPresetSettingsFromJson(object, settings) &&
+                    matchesSynthPresetSettings(*track, settings);
+            }
+            else
+            {
+                const int factoryIndex = synthPresetControl->itemData(index).toInt();
+                matches = factoryIndex >= 0 &&
+                    factoryIndex < static_cast<int>(factorySynthPresets.size()) &&
+                    matchesFactorySynthPreset(*track,
+                        factorySynthPresets[static_cast<size_t>(factoryIndex)]);
+            }
+            if (matches)
+            {
+                matchingPresetIndex = index;
                 break;
             }
         }
@@ -6246,14 +6557,128 @@ void MainWindow::applySelectedSynthPreset(int presetIndex)
 {
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::Synth ||
-        presetIndex < 0 || presetIndex >= static_cast<int>(factorySynthPresets.size()))
+        synthPresetControl == nullptr || presetIndex < 0 ||
+        presetIndex >= synthPresetControl->count())
         return;
 
-    applyFactorySynthPreset(*track, factorySynthPresets[static_cast<size_t>(presetIndex)]);
+    if (synthPresetControl->itemData(presetIndex, customSynthPresetRole).toBool())
+    {
+        SynthPresetSettings settings;
+        if (!synthPresetSettingsFromJson(
+                synthPresetControl->itemData(presetIndex).value<QJsonObject>(), settings))
+            return;
+        applySynthPresetSettings(*track, settings);
+    }
+    else
+    {
+        const int factoryIndex = synthPresetControl->itemData(presetIndex).toInt();
+        if (factoryIndex < 0 || factoryIndex >= static_cast<int>(factorySynthPresets.size()))
+            return;
+        applyFactorySynthPreset(*track, factorySynthPresets[static_cast<size_t>(factoryIndex)]);
+    }
     audioEngine.setProject(project);
     settingsDirty = true;
     refreshProjectUi();
     refreshDirtyState();
+}
+
+void MainWindow::populateSynthPresetControl(int selectedUserPresetIndex)
+{
+    if (synthPresetControl == nullptr)
+        return;
+
+    const QSignalBlocker blocker(synthPresetControl);
+    synthPresetControl->clear();
+    for (size_t index = 0; index < factorySynthPresets.size(); ++index)
+    {
+        const int itemIndex = synthPresetControl->count();
+        synthPresetControl->addItem(tr(factorySynthPresets[index].name),
+                                    static_cast<int>(index));
+        synthPresetControl->setItemData(itemIndex, false, customSynthPresetRole);
+    }
+
+    const QVector<QJsonObject> presets = loadUserSynthPresets();
+    for (const QJsonObject& preset : presets)
+    {
+        const int itemIndex = synthPresetControl->count();
+        synthPresetControl->addItem(preset.value(QStringLiteral("name")).toString());
+        synthPresetControl->setItemData(itemIndex, QVariant::fromValue(
+            preset.value(QStringLiteral("settings")).toObject()));
+        synthPresetControl->setItemData(itemIndex, true, customSynthPresetRole);
+    }
+
+    if (selectedUserPresetIndex >= 0 && selectedUserPresetIndex < presets.size())
+        synthPresetControl->setCurrentIndex(static_cast<int>(factorySynthPresets.size()) +
+                                            selectedUserPresetIndex);
+    else
+        synthPresetControl->setCurrentIndex(-1);
+}
+
+void MainWindow::saveSelectedSynthPreset()
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::Synth)
+        return;
+
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this, tr("Save synth patch"),
+        tr("Patch name"), QLineEdit::Normal,
+        tr("%1 Patch").arg(track->name), &accepted).trimmed();
+    if (!accepted || name.isEmpty())
+        return;
+
+    for (const FactorySynthPreset& preset : factorySynthPresets)
+    {
+        if (name.compare(QString::fromLatin1(preset.name), Qt::CaseInsensitive) == 0)
+        {
+            QMessageBox::information(this, tr("Patch name already used"),
+                tr("Choose a name that does not match a factory patch."));
+            return;
+        }
+    }
+
+    QString error;
+    QVector<QJsonObject> presets = loadUserSynthPresets(&error);
+    if (!error.isEmpty())
+    {
+        QMessageBox::warning(this, tr("Could not save synth patch"), error);
+        return;
+    }
+
+    int selectedUserPresetIndex = -1;
+    for (int index = 0; index < presets.size(); ++index)
+    {
+        if (presets[index].value(QStringLiteral("name")).toString()
+                .compare(name, Qt::CaseInsensitive) != 0)
+            continue;
+        const auto answer = QMessageBox::question(this, tr("Replace synth patch"),
+            tr("A patch named “%1” already exists. Replace it with the current sound?")
+                .arg(name), QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+        selectedUserPresetIndex = index;
+        break;
+    }
+
+    const QJsonObject savedPreset{
+        {QStringLiteral("name"), name},
+        {QStringLiteral("settings"), synthPresetSettingsJson(*track)}
+    };
+    if (selectedUserPresetIndex >= 0)
+        presets[selectedUserPresetIndex] = savedPreset;
+    else
+    {
+        selectedUserPresetIndex = presets.size();
+        presets.append(savedPreset);
+    }
+    if (!saveUserSynthPresets(presets, &error))
+    {
+        QMessageBox::warning(this, tr("Could not save synth patch"), error);
+        return;
+    }
+
+    populateSynthPresetControl(selectedUserPresetIndex);
+    statusBar()->showMessage(tr("Saved synth patch “%1”").arg(name), 3000);
 }
 
 void MainWindow::setSelectedTrackEqualizer(int band, double gainDb)
