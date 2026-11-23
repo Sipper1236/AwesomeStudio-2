@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 45;
+constexpr int currentProjectVersion = 46;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -526,6 +526,8 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("eqLowDb"), track.eqLowDb},
         {QStringLiteral("eqMidDb"), track.eqMidDb},
         {QStringLiteral("eqHighDb"), track.eqHighDb},
+        {QStringLiteral("eqLowCrossoverHz"), track.eqLowCrossoverHz},
+        {QStringLiteral("eqHighCrossoverHz"), track.eqHighCrossoverHz},
         {QStringLiteral("outputBusId"), static_cast<qint64>(track.outputBusId)},
         {QStringLiteral("effects"), saveEffects(track.effects)},
         {QStringLiteral("sends"), [&track]
@@ -790,6 +792,10 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         track.eqLowDb = static_cast<float>(object.value(QStringLiteral("eqLowDb")).toDouble(0.0));
         track.eqMidDb = static_cast<float>(object.value(QStringLiteral("eqMidDb")).toDouble(0.0));
         track.eqHighDb = static_cast<float>(object.value(QStringLiteral("eqHighDb")).toDouble(0.0));
+        track.eqLowCrossoverHz = static_cast<float>(
+            object.value(QStringLiteral("eqLowCrossoverHz")).toDouble(120.0));
+        track.eqHighCrossoverHz = static_cast<float>(
+            object.value(QStringLiteral("eqHighCrossoverHz")).toDouble(6000.0));
     }
     if (version >= 14 && !readId(object, QStringLiteral("outputBusId"), track.outputBusId, error))
         return false;

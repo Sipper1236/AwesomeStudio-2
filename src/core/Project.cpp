@@ -560,6 +560,11 @@ void ProjectData::normalize()
         track.eqLowDb = std::clamp(track.eqLowDb, -18.0f, 18.0f);
         track.eqMidDb = std::clamp(track.eqMidDb, -18.0f, 18.0f);
         track.eqHighDb = std::clamp(track.eqHighDb, -18.0f, 18.0f);
+        if (!std::isfinite(track.eqLowCrossoverHz)) track.eqLowCrossoverHz = 120.0f;
+        if (!std::isfinite(track.eqHighCrossoverHz)) track.eqHighCrossoverHz = 6000.0f;
+        track.eqLowCrossoverHz = std::clamp(track.eqLowCrossoverHz, 20.0f, 2000.0f);
+        track.eqHighCrossoverHz = std::clamp(track.eqHighCrossoverHz,
+            std::max(500.0f, track.eqLowCrossoverHz + 1.0f), 20000.0f);
         normalizeAutomation(track.volumeAutomation, 0.0f, 1.0f);
         normalizeAutomation(track.panAutomation, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));

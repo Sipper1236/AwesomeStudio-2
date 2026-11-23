@@ -2372,7 +2372,7 @@ void MainWindow::createDocks()
     equalizerControls = equalizerGroup;
     auto* equalizerForm = new QFormLayout(equalizerGroup);
     const std::array<QString, 3> equalizerLabels = {
-        tr("Low · below 120 Hz"), tr("Mid · 120 Hz–6 kHz"), tr("High · above 6 kHz")
+        tr("Low band gain"), tr("Mid band gain"), tr("High band gain")
     };
     for (int band = 0; band < static_cast<int>(equalizerGainControls.size()); ++band)
     {
@@ -2385,6 +2385,21 @@ void MainWindow::createDocks()
         equalizerForm->addRow(equalizerLabels[static_cast<size_t>(band)], control);
         connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
                 [this, band](double value) { setSelectedTrackEqualizer(band, value); });
+    }
+    const std::array<QString, 2> crossoverLabels = {
+        tr("Low / mid split"), tr("Mid / high split")
+    };
+    for (int band = 0; band < static_cast<int>(equalizerCrossoverControls.size()); ++band)
+    {
+        QDoubleSpinBox* control = new QDoubleSpinBox(equalizerGroup);
+        control->setDecimals(0);
+        control->setSingleStep(band == 0 ? 10.0 : 100.0);
+        control->setSuffix(tr(" Hz"));
+        control->setRange(band == 0 ? 20.0 : 500.0, band == 0 ? 2000.0 : 20000.0);
+        equalizerCrossoverControls[static_cast<size_t>(band)] = control;
+        equalizerForm->addRow(crossoverLabels[static_cast<size_t>(band)], control);
+        connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, band](double value) { setSelectedTrackEqualizerCrossover(band, value); });
     }
     browserLayout->addWidget(equalizerGroup);
 
@@ -3125,6 +3140,16 @@ void MainWindow::refreshProjectUi()
         equalizerGainControls[index]->setValue(equalizerValues[index]);
         equalizerGainControls[index]->setEnabled(track != nullptr);
     }
+    const double lowCrossover = track == nullptr ? 120.0 : track->eqLowCrossoverHz;
+    const double highCrossover = track == nullptr ? 6000.0 : track->eqHighCrossoverHz;
+    const QSignalBlocker lowCrossoverBlocker(equalizerCrossoverControls[0]);
+    const QSignalBlocker highCrossoverBlocker(equalizerCrossoverControls[1]);
+    equalizerCrossoverControls[0]->setRange(20.0, std::min(2000.0, highCrossover - 1.0));
+    equalizerCrossoverControls[1]->setRange(std::max(500.0, lowCrossover + 1.0), 20000.0);
+    equalizerCrossoverControls[0]->setValue(lowCrossover);
+    equalizerCrossoverControls[1]->setValue(highCrossover);
+    equalizerCrossoverControls[0]->setEnabled(track != nullptr);
+    equalizerCrossoverControls[1]->setEnabled(track != nullptr);
     refreshAutomationEditor();
     instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
                                track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
@@ -5376,6 +5401,30 @@ void MainWindow::setSelectedTrackEqualizer(int band, double gainDb)
         case 2: track->eqHighDb = normalizedGain; break;
         default: return;
     }
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::setSelectedTrackEqualizerCrossover(int band, double frequencyHz)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || band < 0 || band > 1)
+        return;
+    if (band == 0)
+        track->eqLowCrossoverHz = static_cast<float>(std::clamp(
+            frequencyHz, 20.0, std::min(2000.0, static_cast<double>(track->eqHighCrossoverHz) - 1.0)));
+    else
+        track->eqHighCrossoverHz = static_cast<float>(std::clamp(
+            frequencyHz, std::max(500.0, static_cast<double>(track->eqLowCrossoverHz) + 1.0), 20000.0));
+    const QSignalBlocker lowBlocker(equalizerCrossoverControls[0]);
+    const QSignalBlocker highBlocker(equalizerCrossoverControls[1]);
+    equalizerCrossoverControls[0]->setRange(
+        20.0, std::min(2000.0, static_cast<double>(track->eqHighCrossoverHz) - 1.0));
+    equalizerCrossoverControls[1]->setRange(
+        std::max(500.0, static_cast<double>(track->eqLowCrossoverHz) + 1.0), 20000.0);
+    equalizerCrossoverControls[0]->setValue(track->eqLowCrossoverHz);
+    equalizerCrossoverControls[1]->setValue(track->eqHighCrossoverHz);
     audioEngine.setProject(project);
     settingsDirty = true;
     refreshDirtyState();

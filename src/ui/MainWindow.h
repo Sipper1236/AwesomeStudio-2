@@ -109,6 +109,7 @@ private:
     void setSelectedSynthFilterEnvelope(int parameter, double value);
     void applySelectedSynthPreset(int presetIndex);
     void setSelectedTrackEqualizer(int band, double gainDb);
+    void setSelectedTrackEqualizerCrossover(int band, double frequencyHz);
     void refreshAutomationEditor();
     void refreshArrangementAutomationView();
     void addAutomationPoint();
@@ -241,6 +242,7 @@ private:
     std::array<QDoubleSpinBox*, 4> envelopeControls{};
     std::array<QDoubleSpinBox*, 5> synthFilterEnvelopeControls{};
     std::array<QDoubleSpinBox*, 3> equalizerGainControls{};
+    std::array<QDoubleSpinBox*, 2> equalizerCrossoverControls{};
     QDoubleSpinBox* audioFadeInControl = nullptr;
     QDoubleSpinBox* audioFadeOutControl = nullptr;
     QComboBox* audioFadeInCurveControl = nullptr;

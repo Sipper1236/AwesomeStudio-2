@@ -156,6 +156,8 @@ private:
         float lowRight = 0.0f;
         float upperLeft = 0.0f;
         float upperRight = 0.0f;
+        float lowBandCoefficient = 0.0f;
+        float highBandCoefficient = 0.0f;
         bool tailActive = false;
     };
 
@@ -264,7 +266,5 @@ private:
     std::int32_t nextClapArrangementNoteId = 1;
     double sampleRate = 48000.0;
     double currentBeat = 0.0;
-    float lowBandCoefficient = 0.0f;
-    float highBandCoefficient = 0.0f;
     bool hasBusSolo = false;
 };

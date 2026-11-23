@@ -366,6 +366,8 @@ struct InstrumentTrack
     float eqLowDb = 0.0f;
     float eqMidDb = 0.0f;
     float eqHighDb = 0.0f;
+    float eqLowCrossoverHz = 120.0f;
+    float eqHighCrossoverHz = 6000.0f;
     quint64 outputBusId = 0;
     QVector<MixerSend> sends;
     QVector<MixerEffect> effects;

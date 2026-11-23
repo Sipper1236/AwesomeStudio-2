@@ -246,8 +246,6 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     touchedTrackIndices.reserve(static_cast<size_t>(project->tracks.size()));
     trackPeakLevels.assign(static_cast<size_t>(project->tracks.size()), 0.0f);
     prepareEffectChain(project->masterEffects, masterEffectStates);
-    lowBandCoefficient = static_cast<float>(1.0 - std::exp(-twoPi * 120.0 / sampleRate));
-    highBandCoefficient = static_cast<float>(1.0 - std::exp(-twoPi * 6000.0 / sampleRate));
     for (size_t trackIndex = 0; trackIndex < static_cast<size_t>(project->tracks.size()); ++trackIndex)
     {
         const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
@@ -258,6 +256,16 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             static_cast<float>(std::pow(10.0, track.eqMidDb / 20.0)),
             static_cast<float>(std::pow(10.0, track.eqHighDb / 20.0))
         });
+        TrackEqualizerState& equalizerState = trackEqualizerStates[trackIndex];
+        const double maximumCutoff = std::max(20.0, sampleRate * 0.49);
+        const double lowCutoff = std::clamp(static_cast<double>(track.eqLowCrossoverHz),
+                                             20.0, maximumCutoff);
+        const double highCutoff = std::clamp(static_cast<double>(track.eqHighCrossoverHz),
+                                              lowCutoff, maximumCutoff);
+        equalizerState.lowBandCoefficient = static_cast<float>(
+            1.0 - std::exp(-twoPi * lowCutoff / sampleRate));
+        equalizerState.highBandCoefficient = static_cast<float>(
+            1.0 - std::exp(-twoPi * highCutoff / sampleRate));
         if (track.instrumentType == InstrumentType::Synth && track.synthFilterEnabled)
         {
             MixerEffect instrumentFilter = defaultMixerEffect(MixerEffectType::LowPass);
@@ -1015,15 +1023,20 @@ StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample 
     if (std::abs(gains[0] - 1.0f) < 1.0e-6f && std::abs(gains[1] - 1.0f) < 1.0e-6f &&
         std::abs(gains[2] - 1.0f) < 1.0e-6f)
     {
-        trackEqualizerStates[trackIndex] = {};
+        TrackEqualizerState& state = trackEqualizerStates[trackIndex];
+        const float lowCoefficient = state.lowBandCoefficient;
+        const float highCoefficient = state.highBandCoefficient;
+        state = {};
+        state.lowBandCoefficient = lowCoefficient;
+        state.highBandCoefficient = highCoefficient;
         return input;
     }
 
     TrackEqualizerState& state = trackEqualizerStates[trackIndex];
-    state.lowLeft += lowBandCoefficient * (input.left - state.lowLeft);
-    state.lowRight += lowBandCoefficient * (input.right - state.lowRight);
-    state.upperLeft += highBandCoefficient * (input.left - state.upperLeft);
-    state.upperRight += highBandCoefficient * (input.right - state.upperRight);
+    state.lowLeft += state.lowBandCoefficient * (input.left - state.lowLeft);
+    state.lowRight += state.lowBandCoefficient * (input.right - state.lowRight);
+    state.upperLeft += state.highBandCoefficient * (input.left - state.upperLeft);
+    state.upperRight += state.highBandCoefficient * (input.right - state.upperRight);
 
     const float midLeft = state.upperLeft - state.lowLeft;
     const float midRight = state.upperRight - state.lowRight;
@@ -1038,7 +1051,13 @@ StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample 
 void SynthRenderer::resetTrackEqualizers()
 {
     for (TrackEqualizerState& state : trackEqualizerStates)
+    {
+        const float lowCoefficient = state.lowBandCoefficient;
+        const float highCoefficient = state.highBandCoefficient;
         state = {};
+        state.lowBandCoefficient = lowCoefficient;
+        state.highBandCoefficient = highCoefficient;
+    }
     activeEqualizerTailTracks.clear();
 }
 
