@@ -232,6 +232,33 @@ void ProjectData::normalize()
         bus.gain = std::clamp(bus.gain, 0.0f, 2.0f);
         bus.pan = std::clamp(bus.pan, -1.0f, 1.0f);
     }
+    std::unordered_map<quint64, MixerBus*> busById;
+    for (MixerBus& bus : buses)
+        busById.emplace(bus.id, &bus);
+    for (MixerBus& bus : buses)
+    {
+        if (bus.outputBusId != 0 && busById.find(bus.outputBusId) == busById.end())
+            bus.outputBusId = 0;
+    }
+    for (MixerBus& bus : buses)
+    {
+        std::unordered_set<quint64> route;
+        route.insert(bus.id);
+        quint64 nextBusId = bus.outputBusId;
+        while (nextBusId != 0)
+        {
+            if (route.find(nextBusId) != route.end())
+            {
+                bus.outputBusId = 0;
+                break;
+            }
+            route.insert(nextBusId);
+            const auto nextBus = busById.find(nextBusId);
+            if (nextBus == busById.end())
+                break;
+            nextBusId = nextBus->second->outputBusId;
+        }
+    }
     if (tracks.size() > 256)
         tracks.resize(256);
 
@@ -251,10 +278,21 @@ void ProjectData::normalize()
         usedTrackIds.insert(track.id);
         if (track.outputBusId != 0 && usedBusIds.find(track.outputBusId) == usedBusIds.end())
             track.outputBusId = 0;
-        if (track.sendBusId != 0 && usedBusIds.find(track.sendBusId) == usedBusIds.end())
-            track.sendBusId = 0;
-        if (!std::isfinite(track.sendGain)) track.sendGain = 0.0f;
-        track.sendGain = std::clamp(track.sendGain, 0.0f, 1.0f);
+        if (track.sends.size() > 64)
+            track.sends.resize(64);
+        QVector<MixerSend> validSends;
+        validSends.reserve(track.sends.size());
+        std::unordered_set<quint64> usedSendBuses;
+        for (MixerSend send : track.sends)
+        {
+            if (send.busId == 0 || usedBusIds.find(send.busId) == usedBusIds.end() ||
+                !usedSendBuses.insert(send.busId).second)
+                continue;
+            if (!std::isfinite(send.gain)) send.gain = 0.0f;
+            send.gain = std::clamp(send.gain, 0.0f, 1.0f);
+            validSends.push_back(send);
+        }
+        track.sends = std::move(validSends);
         track.instrumentType = static_cast<InstrumentType>(
             std::clamp(static_cast<int>(track.instrumentType), 0, 2));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);

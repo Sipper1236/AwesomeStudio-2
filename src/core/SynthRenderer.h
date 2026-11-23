@@ -20,9 +20,8 @@ public:
     void setProject(std::shared_ptr<const ProjectData> project, double sampleRate);
     void resetTransport();
     void beginMixerFrame();
-    void addLiveBusFrameSample(size_t busIndex, StereoSample input);
-    StereoSample routeLiveTrackSample(size_t trackIndex, StereoSample input, int* busIndex = nullptr,
-                                      StereoSample* sendSample = nullptr, int* sendBusIndex = nullptr) const;
+    StereoSample addLiveTrackSample(size_t trackIndex, StereoSample input);
+    StereoSample finishLiveMixerFrame();
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
@@ -97,6 +96,12 @@ private:
         float rightGain = 1.0f;
     };
 
+    struct TrackSendMix
+    {
+        int busIndex = -1;
+        float gain = 0.0f;
+    };
+
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
     void addTrackSample(size_t trackIndex, float left, float right);
     void addBusFrameSample(size_t busIndex, StereoSample input);
@@ -111,13 +116,16 @@ private:
     std::vector<TrackEqualizerState> trackEqualizerStates;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;
-    std::vector<int> trackSendBusIndices;
-    std::vector<float> trackSendGains;
+    std::vector<std::vector<TrackSendMix>> trackSends;
     std::vector<unsigned char> trackAudible;
     std::vector<BusMixState> busMixStates;
-    std::vector<unsigned char> busAudible;
+    std::vector<int> busOutputIndices;
+    std::vector<unsigned char> busInputAudible;
+    std::vector<unsigned char> busOutputAudible;
+    std::vector<size_t> busRouteOrder;
     std::vector<StereoSample> busFrameSamples;
     std::vector<StereoSample> lastBusOutputSamples;
+    std::vector<StereoSample> liveBusFrameSamples;
     std::vector<unsigned char> busFrameTouched;
     std::vector<size_t> touchedBusIndices;
     std::vector<float> busPeakLevels;

@@ -116,6 +116,7 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         const int frames = static_cast<int>(std::min<qint64>(framesPerChunk, frameCount - writtenFrames));
         for (int index = 0; index < frames; ++index)
         {
+            renderer.beginMixerFrame();
             const StereoSample rendered = renderer.renderSample(writtenFrames + index - countInFrames);
             const qint16 left = static_cast<qint16>(std::lrint(std::clamp(
                 std::tanh(rendered.left * safeProject.masterGain), -1.0f, 1.0f) * 32767.0f));

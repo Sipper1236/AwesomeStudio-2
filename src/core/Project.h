@@ -97,10 +97,17 @@ struct TimelineMarker
     bool operator==(const TimelineMarker& other) const;
 };
 
+struct MixerSend
+{
+    quint64 busId = 0;
+    float gain = 0.0f;
+};
+
 struct MixerBus
 {
     quint64 id = 0;
     QString name = QStringLiteral("Bus");
+    quint64 outputBusId = 0;
     float gain = 1.0f;
     float pan = 0.0f;
     bool muted = false;
@@ -123,8 +130,7 @@ struct InstrumentTrack
     float eqMidDb = 0.0f;
     float eqHighDb = 0.0f;
     quint64 outputBusId = 0;
-    quint64 sendBusId = 0;
-    float sendGain = 0.0f;
+    QVector<MixerSend> sends;
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
     bool muted = false;

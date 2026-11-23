@@ -125,12 +125,8 @@ private:
     std::array<StereoSample, maximumTrackCount> liveMidiTrackFrameSamples{};
     std::array<bool, maximumTrackCount> liveMidiTrackFrameTouched{};
     std::array<size_t, maximumLiveMidiVoices> liveMidiTouchedTracks{};
-    std::array<StereoSample, maximumBusCount> liveMidiBusFrameSamples{};
-    std::array<bool, maximumBusCount> liveMidiBusFrameTouched{};
-    std::array<size_t, maximumBusCount> liveMidiTouchedBuses{};
     std::array<float, maximumTrackCount> liveMidiBlockPeaks{};
     size_t liveMidiTouchedTrackCount = 0;
-    size_t liveMidiTouchedBusCount = 0;
     std::atomic<size_t> liveMidiWriteIndex{0};
     std::atomic<size_t> liveMidiReadIndex{0};
     std::atomic<bool> liveMidiPanic{false};

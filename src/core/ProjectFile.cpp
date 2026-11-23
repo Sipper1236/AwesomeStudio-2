@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 16;
+constexpr int currentProjectVersion = 17;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -225,8 +225,16 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("eqMidDb"), track.eqMidDb},
         {QStringLiteral("eqHighDb"), track.eqHighDb},
         {QStringLiteral("outputBusId"), static_cast<qint64>(track.outputBusId)},
-        {QStringLiteral("sendBusId"), static_cast<qint64>(track.sendBusId)},
-        {QStringLiteral("sendGain"), track.sendGain},
+        {QStringLiteral("sends"), [&track]
+         {
+             QJsonArray sends;
+             for (const MixerSend& send : track.sends)
+                 sends.push_back(QJsonObject{
+                     {QStringLiteral("busId"), static_cast<qint64>(send.busId)},
+                     {QStringLiteral("gain"), send.gain}
+                 });
+             return sends;
+         }()},
         {QStringLiteral("volumeAutomation"), saveAutomation(track.volumeAutomation)},
         {QStringLiteral("panAutomation"), saveAutomation(track.panAutomation)},
         {QStringLiteral("muted"), track.muted},
@@ -331,9 +339,40 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     }
     if (version >= 14 && !readId(object, QStringLiteral("outputBusId"), track.outputBusId, error))
         return false;
-    if (version >= 15)
+    if (version >= 17)
     {
-        if (!readId(object, QStringLiteral("sendBusId"), track.sendBusId, error))
+        const QJsonValue sendsValue = object.value(QStringLiteral("sends"));
+        if (!sendsValue.isArray() || sendsValue.toArray().size() > 64)
+        {
+            setError(error, QStringLiteral("The track has invalid or excessive mixer sends."));
+            return false;
+        }
+        for (const QJsonValue& sendValue : sendsValue.toArray())
+        {
+            if (!sendValue.isObject())
+            {
+                setError(error, QStringLiteral("The track contains an invalid mixer send."));
+                return false;
+            }
+            const QJsonObject sendObject = sendValue.toObject();
+            MixerSend send;
+            if (!readId(sendObject, QStringLiteral("busId"), send.busId, error))
+                return false;
+            const double gain = sendObject.value(QStringLiteral("gain")).toDouble(
+                std::numeric_limits<double>::quiet_NaN());
+            if (send.busId == 0 || !std::isfinite(gain))
+            {
+                setError(error, QStringLiteral("The track contains an invalid mixer send setting."));
+                return false;
+            }
+            send.gain = static_cast<float>(gain);
+            track.sends.push_back(send);
+        }
+    }
+    else if (version >= 16)
+    {
+        quint64 sendBusId = 0;
+        if (!readId(object, QStringLiteral("sendBusId"), sendBusId, error))
             return false;
         const double sendGain = object.value(QStringLiteral("sendGain")).toDouble(
             std::numeric_limits<double>::quiet_NaN());
@@ -342,7 +381,8 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
             setError(error, QStringLiteral("The track contains an invalid mixer send level."));
             return false;
         }
-        track.sendGain = static_cast<float>(sendGain);
+        if (sendBusId != 0)
+            track.sends.push_back({sendBusId, static_cast<float>(sendGain)});
     }
     if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
                         QStringLiteral("volume"), error) ||
@@ -413,6 +453,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         buses.push_back(QJsonObject{
             {QStringLiteral("id"), static_cast<qint64>(bus.id)},
             {QStringLiteral("name"), bus.name},
+            {QStringLiteral("outputBusId"), static_cast<qint64>(bus.outputBusId)},
             {QStringLiteral("gain"), bus.gain},
             {QStringLiteral("pan"), bus.pan},
             {QStringLiteral("muted"), bus.muted},
@@ -546,6 +587,9 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
             const QJsonObject busObject = busJson.toObject();
             MixerBus bus;
             if (!readId(busObject, QStringLiteral("id"), bus.id, error))
+                return false;
+            if (version >= 17 && !readId(busObject, QStringLiteral("outputBusId"),
+                                         bus.outputBusId, error))
                 return false;
             bus.name = busObject.value(QStringLiteral("name")).toString().trimmed();
             const double gain = busObject.value(QStringLiteral("gain")).toDouble(

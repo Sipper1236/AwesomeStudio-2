@@ -67,8 +67,11 @@ private:
     void refreshMixerMeters();
     void addMixerBus();
     void removeMixerBus(quint64 busId);
+    void setMixerBusOutput(quint64 busId, quint64 outputBusId);
     void setTrackOutputBus(quint64 trackId, quint64 busId);
-    void setTrackSend(quint64 trackId, quint64 busId, float gain);
+    void setTrackSend(quint64 trackId, qsizetype sendIndex, quint64 busId, float gain);
+    void addTrackSend(quint64 trackId);
+    void removeTrackSend(quint64 trackId, qsizetype sendIndex);
     void selectTrack(quint64 trackId);
     void selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll);
     void addTrack();

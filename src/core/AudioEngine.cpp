@@ -430,7 +430,6 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
 void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
 {
     liveMidiTouchedTrackCount = 0;
-    liveMidiTouchedBusCount = 0;
     const auto addTrackFrameSample = [this](size_t trackIndex, float left, float right)
     {
         if (trackIndex >= maximumTrackCount)
@@ -529,47 +528,17 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
         addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
     }
 
-    const auto addLiveBusSample = [this](int busIndex, StereoSample sample)
-    {
-        if (busIndex < 0 || static_cast<size_t>(busIndex) >= maximumBusCount)
-            return;
-        const size_t bus = static_cast<size_t>(busIndex);
-        if (!liveMidiBusFrameTouched[bus])
-        {
-            liveMidiBusFrameTouched[bus] = true;
-            liveMidiTouchedBuses[liveMidiTouchedBusCount++] = bus;
-        }
-        liveMidiBusFrameSamples[bus].left += sample.left;
-        liveMidiBusFrameSamples[bus].right += sample.right;
-    };
-
     for (size_t index = 0; index < liveMidiTouchedTrackCount; ++index)
     {
         const size_t trackIndex = liveMidiTouchedTracks[index];
         const StereoSample& trackSample = liveMidiTrackFrameSamples[trackIndex];
-        int busIndex = -1;
-        StereoSample sendSample;
-        int sendBusIndex = -1;
-        const StereoSample routedSample = renderer.routeLiveTrackSample(
-            trackIndex, trackSample, &busIndex, &sendSample, &sendBusIndex);
-        mixed.left += routedSample.left;
-        mixed.right += routedSample.right;
-        mixed.left += sendSample.left;
-        mixed.right += sendSample.right;
-        addLiveBusSample(busIndex, routedSample);
-        addLiveBusSample(sendBusIndex, sendSample);
+        const StereoSample directMasterSample = renderer.addLiveTrackSample(trackIndex, trackSample);
+        mixed.left += directMasterSample.left;
+        mixed.right += directMasterSample.right;
         liveMidiBlockPeaks[trackIndex] = std::max(liveMidiBlockPeaks[trackIndex],
             std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
         liveMidiTrackFrameSamples[trackIndex] = {};
         liveMidiTrackFrameTouched[trackIndex] = false;
-    }
-    for (size_t index = 0; index < liveMidiTouchedBusCount; ++index)
-    {
-        const size_t bus = liveMidiTouchedBuses[index];
-        const StereoSample& sample = liveMidiBusFrameSamples[bus];
-        renderer.addLiveBusFrameSample(bus, sample);
-        liveMidiBusFrameSamples[bus] = {};
-        liveMidiBusFrameTouched[bus] = false;
     }
 }
 
@@ -712,6 +681,9 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;
         renderLiveMidiVoices(mixed, clockFrame);
+        const StereoSample liveBusMix = renderer.finishLiveMixerFrame();
+        mixed.left += liveBusMix.left;
+        mixed.right += liveBusMix.right;
         const int preview = previewPitch.load(std::memory_order_acquire);
         const qint64 previewStart = previewStartFrame.load(std::memory_order_acquire);
         const qint64 previewEnd = previewEndFrame.load(std::memory_order_acquire);
