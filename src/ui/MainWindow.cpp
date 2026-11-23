@@ -41,6 +41,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStandardPaths>
 #include <QSettings>
 #include <QSlider>
 #include <QStatusBar>
@@ -85,6 +86,15 @@ float automationValueAt(const QVector<AutomationPoint>& points, double beat, flo
 QString projectAutosavePath(const QString& projectPath)
 {
     return projectPath + QStringLiteral(".autosave");
+}
+
+QString unsavedSessionAutosavePath()
+{
+    QString directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (directory.isEmpty())
+        directory = QDir::home().filePath(QStringLiteral(".awesome-studio"));
+    QDir().mkpath(directory);
+    return QDir(directory).filePath(QStringLiteral("unsaved-session.autosave"));
 }
 
 QString projectBackupPath(const QString& projectPath, int generation)
@@ -962,6 +972,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             selectedClipId = project.tracks.first().clips.first().id;
     }
     refreshProjectUi();
+    offerUnsavedSessionRecovery();
 
     if (audioEngine.initialize())
     {
@@ -4544,7 +4555,11 @@ bool MainWindow::maybeSave()
     if (midiRecordingActive || midiRecordingPending)
         finishMidiRecording(true);
     if (!isWindowModified())
+    {
+        QFile::remove(projectPath.isEmpty() ? unsavedSessionAutosavePath()
+                                            : projectAutosavePath(projectPath));
         return true;
+    }
 
     const QMessageBox::StandardButton choice = QMessageBox::warning(
         this, tr("Unsaved project"), tr("Save changes to %1?").arg(project.title),
@@ -4565,6 +4580,7 @@ bool MainWindow::maybeSave()
     {
         if (!projectPath.isEmpty())
             QFile::remove(projectAutosavePath(projectPath));
+        QFile::remove(unsavedSessionAutosavePath());
         return true;
     }
     return false;
@@ -4633,6 +4649,7 @@ bool MainWindow::saveToPath(const QString& path)
 
     projectPath = savePath;
     QFile::remove(projectAutosavePath(savePath));
+    QFile::remove(unsavedSessionAutosavePath());
     settingsDirty = false;
     undoStack.setClean();
     audioEngine.setProject(project);
@@ -4814,14 +4831,53 @@ void MainWindow::savePortableProjectCopy()
     statusBar()->showMessage(summary, 8000);
 }
 
-void MainWindow::autosaveProject()
+void MainWindow::offerUnsavedSessionRecovery()
 {
-    if (projectPath.isEmpty() || !isWindowModified() || audioRecorder || recordingPending ||
-        midiRecordingActive || midiRecordingPending || automationWriteSession.active)
+    const QString path = unsavedSessionAutosavePath();
+    if (!QFileInfo::exists(path))
         return;
 
+    const QMessageBox::StandardButton choice = QMessageBox::question(
+        this, tr("Recover unsaved session"),
+        tr("An autosaved unsaved session from %1 is available. Recover it?")
+            .arg(QFileInfo(path).lastModified().toString(Qt::ISODate)),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (choice != QMessageBox::Yes)
+    {
+        QFile::remove(path);
+        return;
+    }
+
+    ProjectData recovered;
     QString error;
-    if (!ProjectFile::save(projectAutosavePath(projectPath), project, &error))
+    if (!ProjectFile::load(path, recovered, &error))
+    {
+        QFile::remove(path);
+        QMessageBox::warning(this, tr("Autosave could not be recovered"), error);
+        return;
+    }
+    setProject(recovered);
+    settingsDirty = true;
+    refreshDirtyState();
+    statusBar()->showMessage(tr("Recovered unsaved session; save it to keep the project."), 7000);
+}
+
+void MainWindow::autosaveProject()
+{
+    if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending ||
+        automationWriteSession.active)
+        return;
+    if (!isWindowModified())
+    {
+        QFile::remove(projectPath.isEmpty() ? unsavedSessionAutosavePath()
+                                            : projectAutosavePath(projectPath));
+        return;
+    }
+
+    QString error;
+    const QString path = projectPath.isEmpty()
+        ? unsavedSessionAutosavePath() : projectAutosavePath(projectPath);
+    if (!ProjectFile::save(path, project, &error))
         statusBar()->showMessage(tr("Autosave failed: %1").arg(error), 6000);
 }
 

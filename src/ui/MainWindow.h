@@ -131,6 +131,7 @@ private:
     bool maybeSave();
     bool saveToPath(const QString& path);
     void savePortableProjectCopy();
+    void offerUnsavedSessionRecovery();
     void autosaveProject();
     void updateProjectTitle();
     void refreshDirtyState();
