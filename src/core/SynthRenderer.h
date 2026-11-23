@@ -5,6 +5,7 @@
 #include "Project.h"
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -24,6 +25,14 @@ public:
     void beginMixerFrame();
     void setCurrentBeat(double beat);
     StereoSample addLiveTrackSample(size_t trackIndex, StereoSample input);
+    bool isClapInstrumentTrack(size_t trackIndex) const;
+    void clapInstrumentNoteOn(size_t trackIndex, std::int32_t noteId,
+                              int channel, int key, float velocity);
+    void clapInstrumentNoteOff(size_t trackIndex, std::int32_t noteId,
+                               int channel, int key, float velocity = 0.0f);
+    void clapInstrumentAllNotesOff(size_t trackIndex);
+    void clapInstrumentPitchBend(size_t trackIndex, int channel, int value);
+    void clapInstrumentsAllNotesOff();
     StereoSample finishMixerFrame();
     StereoSample processMasterEffects(StereoSample input);
     double effectTailSeconds() const;
@@ -69,7 +78,22 @@ private:
         qint64 frame = 0;
         size_t trackIndex = 0;
         int channel = 0;
+        int value = 8192;
         float semitones = 0.0f;
+    };
+
+    struct ClapInstrumentEvent
+    {
+        enum class Type { NoteOn, NoteOff } type = Type::NoteOn;
+        qint64 frame = 0;
+        qint64 endFrame = 0;
+        size_t trackIndex = 0;
+        std::int32_t noteId = 0;
+        int channel = 0;
+        int key = 60;
+        float velocity = 1.0f;
+        int probabilityPercent = 100;
+        quint64 probabilitySeed = 0;
     };
 
     struct AudioRegion
@@ -155,7 +179,7 @@ private:
         std::array<float, 2> filterY2{};
         std::vector<float> liveParameterOverrides;
         std::unique_ptr<Lv2AudioEffectInstance> lv2Effect;
-        std::unique_ptr<ClapAudioEffectInstance> clapEffect;
+        std::unique_ptr<ClapAudioPluginInstance> clapEffect;
         float filterB0 = 1.0f;
         float filterB1 = 0.0f;
         float filterB2 = 0.0f;
@@ -187,6 +211,7 @@ private:
     std::vector<std::vector<EffectState>> trackInstrumentFilterStates;
     std::vector<unsigned char> trackInstrumentFilterHasTail;
     std::vector<std::vector<EffectState>> trackEffectStates;
+    std::vector<std::unique_ptr<ClapAudioPluginInstance>> clapInstruments;
     std::vector<unsigned char> trackEffectHasTail;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;
@@ -213,15 +238,18 @@ private:
     std::vector<EffectState> masterEffectStates;
     std::vector<VoiceNote> notes;
     std::vector<PitchBendEvent> pitchBendEvents;
+    std::vector<ClapInstrumentEvent> clapInstrumentEvents;
     std::vector<std::array<float, 16>> trackPitchBends;
     std::vector<size_t> activeNotes;
     std::vector<AudioRegion> audioRegions;
     std::vector<size_t> activeAudioRegions;
     size_t nextStartIndex = 0;
     size_t nextPitchBendIndex = 0;
+    size_t nextClapInstrumentEventIndex = 0;
     size_t nextAudioStartIndex = 0;
     quint64 playbackCycle = 0;
     qint64 lastFrame = -1;
+    std::int32_t nextClapArrangementNoteId = 1;
     double sampleRate = 48000.0;
     double currentBeat = 0.0;
     float lowBandCoefficient = 0.0f;

@@ -89,6 +89,8 @@ private:
     void selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll);
     void addTrack();
     void addDrumTrack();
+    void addClapInstrumentTrack();
+    void editSelectedClapInstrument();
     void addClipAt(quint64 trackId, double startBeat);
     void addNewPattern();
     void removeClip(quint64 trackId, quint64 clipId);
@@ -268,6 +270,7 @@ private:
     std::array<QSpinBox*, 4> highVelocityThresholdControls{};
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
+    QPushButton* clapInstrumentControlsButton = nullptr;
     QLabel* playheadLabel = nullptr;
     QLabel* audioDeviceLabel = nullptr;
     QAction* playAction = nullptr;
@@ -276,6 +279,7 @@ private:
     QAction* metronomeAction = nullptr;
     QAction* addTrackAction = nullptr;
     QAction* addDrumTrackAction = nullptr;
+    QAction* addClapInstrumentTrackAction = nullptr;
     QAction* addPatternAction = nullptr;
     QAction* undoAction = nullptr;
     QAction* redoAction = nullptr;

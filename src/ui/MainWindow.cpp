@@ -199,11 +199,12 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
             }
             else
             {
-                ClapEffectDescriptor descriptor;
-                if (!ClapAudioEffectInstance::describe(effect.pluginUri, descriptor))
+                ClapPluginDescriptor descriptor;
+                if (!ClapAudioPluginInstance::describe(
+                        effect.pluginUri, ClapPluginKind::AudioEffect, descriptor))
                     continue;
                 discoveredName = descriptor.name;
-                for (const ClapEffectParameter& parameter : descriptor.parameters)
+                for (const ClapPluginParameter& parameter : descriptor.parameters)
                 {
                     Lv2EffectParameter converted;
                     converted.symbol = QString::number(parameter.id);
@@ -543,7 +544,8 @@ bool chooseMixerEffect(QWidget* parent, MixerEffectType type, MixerEffect& effec
         return true;
     }
 
-    const QVector<ClapEffectDescriptor> plugins = ClapAudioEffectInstance::availableEffects();
+    const QVector<ClapPluginDescriptor> plugins = ClapAudioPluginInstance::availablePlugins(
+        ClapPluginKind::AudioEffect);
     if (plugins.isEmpty())
     {
         error = QObject::tr("No CLAP audio effects were found in the standard plug-in folders or CLAP_PATH.");
@@ -551,7 +553,7 @@ bool chooseMixerEffect(QWidget* parent, MixerEffectType type, MixerEffect& effec
     }
     QStringList choices;
     choices.reserve(plugins.size());
-    for (const ClapEffectDescriptor& plugin : plugins)
+    for (const ClapPluginDescriptor& plugin : plugins)
         choices.push_back(QStringLiteral("%1 — %2 — %3")
                                .arg(plugin.name, plugin.vendor, plugin.id));
     bool accepted = false;
@@ -563,10 +565,10 @@ bool chooseMixerEffect(QWidget* parent, MixerEffectType type, MixerEffect& effec
     if (index < 0)
         return false;
 
-    const ClapEffectDescriptor& plugin = plugins[index];
+    const ClapPluginDescriptor& plugin = plugins[index];
     effect.pluginUri = plugin.id;
     effect.pluginName = plugin.name;
-    for (const ClapEffectParameter& parameter : plugin.parameters)
+    for (const ClapPluginParameter& parameter : plugin.parameters)
         effect.pluginParameterValues.push_back(parameter.defaultValue);
     return true;
 }
@@ -639,15 +641,16 @@ int drumSamplePadForPitch(int pitch)
 
 int midiExportChannelForTrack(const ProjectData& project, quint64 targetTrackId)
 {
-    int synthChannel = 0;
+    int instrumentChannel = 0;
     for (const InstrumentTrack& track : project.tracks)
     {
         if (track.instrumentType == InstrumentType::Audio)
             continue;
         int channel = 9;
-        if (track.instrumentType == InstrumentType::Synth)
+        if (track.instrumentType == InstrumentType::Synth ||
+            track.instrumentType == InstrumentType::ClapInstrument)
         {
-            const int channelSlot = synthChannel++ % 15;
+            const int channelSlot = instrumentChannel++ % 15;
             channel = channelSlot < 9 ? channelSlot : channelSlot + 1;
         }
         if (track.id == targetTrackId)
@@ -1050,6 +1053,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(midiEditor, &MidiEditor::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
+        if (track != nullptr && track->instrumentType == InstrumentType::ClapInstrument)
+        {
+            audioEngine.triggerClapInstrumentPreview(pitch, 96, *track);
+            return;
+        }
         const int pad = track != nullptr && track->instrumentType == InstrumentType::DrumRack
             ? drumSamplePadForPitch(pitch) : -1;
         const DrumPadSample* padSample = pad >= 0
@@ -1091,6 +1099,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
+        if (track != nullptr && track->instrumentType == InstrumentType::ClapInstrument)
+        {
+            audioEngine.triggerClapInstrumentPreview(pitch, 100, *track);
+            return;
+        }
         const int pad = track != nullptr && track->instrumentType == InstrumentType::DrumRack
             ? drumSamplePadForPitch(pitch) : -1;
         const DrumPadSample* padSample = pad >= 0
@@ -1426,6 +1439,11 @@ void MainWindow::createActions()
     connect(addTrackAction, &QAction::triggered, this, &MainWindow::addTrack);
     addDrumTrackAction = new QAction(tr("Add drum track"), this);
     connect(addDrumTrackAction, &QAction::triggered, this, &MainWindow::addDrumTrack);
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    addClapInstrumentTrackAction = new QAction(tr("Add CLAP instrument"), this);
+    connect(addClapInstrumentTrackAction, &QAction::triggered,
+            this, &MainWindow::addClapInstrumentTrack);
+#endif
     addPatternAction = new QAction(tr("New pattern"), this);
     connect(addPatternAction, &QAction::triggered, this, &MainWindow::addNewPattern);
 
@@ -1509,7 +1527,7 @@ void MainWindow::createActions()
 
     midiMonitorAction = new QAction(tr("Monitor MIDI"), this);
     midiMonitorAction->setCheckable(true);
-    midiMonitorAction->setToolTip(tr("Play incoming MIDI on the selected synth or drum rack without recording"));
+    midiMonitorAction->setToolTip(tr("Play incoming MIDI on the selected synth, drum rack, or CLAP instrument without recording"));
     connect(midiMonitorAction, &QAction::toggled, this, &MainWindow::setMidiMonitorEnabled);
 
     loopAction = new QAction(tr("Loop"), this);
@@ -1558,6 +1576,8 @@ void MainWindow::createToolBars()
     arrangementBar->setMovable(false);
     arrangementBar->addAction(addTrackAction);
     arrangementBar->addAction(addDrumTrackAction);
+    if (addClapInstrumentTrackAction != nullptr)
+        arrangementBar->addAction(addClapInstrumentTrackAction);
     arrangementBar->addAction(addPatternAction);
     arrangementBar->addSeparator();
     arrangementBar->addWidget(new QLabel(tr("CLIP LENGTH"), arrangementBar));
@@ -1892,6 +1912,12 @@ void MainWindow::createDocks()
     auto* addDrumButton = new QPushButton(tr("Add drum rack"), browser);
     connect(addDrumButton, &QPushButton::clicked, this, &MainWindow::addDrumTrack);
     browserLayout->addWidget(addDrumButton);
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    auto* addClapInstrumentButton = new QPushButton(tr("Add CLAP instrument"), browser);
+    connect(addClapInstrumentButton, &QPushButton::clicked,
+            this, &MainWindow::addClapInstrumentTrack);
+    browserLayout->addWidget(addClapInstrumentButton);
+#endif
     auto* importAudioButton = new QPushButton(tr("Import WAV audio"), browser);
     connect(importAudioButton, &QPushButton::clicked, this, &MainWindow::importAudio);
     browserLayout->addWidget(importAudioButton);
@@ -1899,6 +1925,13 @@ void MainWindow::createDocks()
     instrumentHeading = new QLabel(tr("SELECTED INSTRUMENT"), browser);
     instrumentHeading->setStyleSheet(QStringLiteral("color: #8d9aa7; font-size: 10px; font-weight: 700; margin-top: 10px;"));
     browserLayout->addWidget(instrumentHeading);
+    clapInstrumentControlsButton = new QPushButton(tr("Instrument controls…"), browser);
+    clapInstrumentControlsButton->setToolTip(
+        tr("Edit the selected CLAP instrument's advertised parameters"));
+    clapInstrumentControlsButton->setVisible(false);
+    connect(clapInstrumentControlsButton, &QPushButton::clicked,
+            this, &MainWindow::editSelectedClapInstrument);
+    browserLayout->addWidget(clapInstrumentControlsButton);
     auto* oscillatorGroup = new QGroupBox(tr("OSCILLATORS"), browser);
     oscillatorPanel = oscillatorGroup;
     auto* oscillatorForm = new QFormLayout(oscillatorGroup);
@@ -2455,6 +2488,8 @@ void MainWindow::createMenus()
     QMenu* patternMenu = menuBar()->addMenu(tr("&Track"));
     patternMenu->addAction(addTrackAction);
     patternMenu->addAction(addDrumTrackAction);
+    if (addClapInstrumentTrackAction != nullptr)
+        patternMenu->addAction(addClapInstrumentTrackAction);
     patternMenu->addAction(addPatternAction);
 
     QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
@@ -2616,6 +2651,30 @@ void MainWindow::refreshProjectUi()
         envelopeControls[index]->setValue(envelopeValues[index]);
         envelopeControls[index]->setEnabled(synthTrackSelected);
     }
+    const bool clapInstrumentSelected = track != nullptr &&
+        track->instrumentType == InstrumentType::ClapInstrument;
+    bool clapInstrumentAvailable = false;
+    bool clapInstrumentHasControls = false;
+    ClapPluginDescriptor clapInstrumentDescriptor;
+    if (clapInstrumentSelected)
+    {
+        clapInstrumentAvailable = ClapAudioPluginInstance::describe(
+            track->clapPluginId, ClapPluginKind::Instrument, clapInstrumentDescriptor);
+        if (clapInstrumentAvailable)
+        {
+            clapInstrumentHasControls = std::any_of(
+                clapInstrumentDescriptor.parameters.cbegin(),
+                clapInstrumentDescriptor.parameters.cend(),
+                [](const ClapPluginParameter& parameter)
+                { return !parameter.hidden && !parameter.readOnly; });
+        }
+    }
+    clapInstrumentControlsButton->setVisible(clapInstrumentSelected);
+    clapInstrumentControlsButton->setEnabled(clapInstrumentAvailable && clapInstrumentHasControls);
+    clapInstrumentControlsButton->setToolTip(
+        !clapInstrumentAvailable ? tr("This CLAP instrument is not installed") :
+        !clapInstrumentHasControls ? tr("This instrument exposes no editable parameters") :
+        tr("Edit the selected CLAP instrument's advertised parameters"));
     equalizerControls->setVisible(track != nullptr);
     const std::array<float, 3> equalizerValues = track == nullptr
         ? std::array<float, 3>{0.0f, 0.0f, 0.0f}
@@ -2630,7 +2689,12 @@ void MainWindow::refreshProjectUi()
     instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
                                track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
                                track->instrumentType == InstrumentType::Audio ? tr("AUDIO SOURCE") :
-                               tr("SELECTED INSTRUMENT"));
+                               clapInstrumentSelected
+                                   ? tr("CLAP INSTRUMENT · %1%2")
+                                         .arg(track->clapPluginName.isEmpty()
+                                                  ? track->name : track->clapPluginName,
+                                              clapInstrumentAvailable ? QString() : tr(" (unavailable)"))
+                                   : tr("SELECTED INSTRUMENT"));
 
     const MidiClip* clip = selectedClip();
     const QSignalBlocker audioFadeInBlocker(audioFadeInControl);
@@ -2942,11 +3006,12 @@ void MainWindow::refreshMixer()
                 }
                 else if (effect.type == MixerEffectType::ClapPlugin)
                 {
-                    ClapEffectDescriptor descriptor;
-                    if (ClapAudioEffectInstance::describe(effect.pluginUri, descriptor))
+                    ClapPluginDescriptor descriptor;
+                    if (ClapAudioPluginInstance::describe(
+                            effect.pluginUri, ClapPluginKind::AudioEffect, descriptor))
                     {
                         pluginAvailable = true;
-                        for (const ClapEffectParameter& clapParameter : descriptor.parameters)
+                        for (const ClapPluginParameter& clapParameter : descriptor.parameters)
                         {
                             Lv2EffectParameter parameter;
                             parameter.symbol = QString::number(clapParameter.id);
@@ -4189,6 +4254,166 @@ void MainWindow::addDrumTrack()
     refreshProjectUi();
     editorTabs->setCurrentWidget(stepSequencer);
     statusBar()->showMessage(tr("Added a drum rack with kick, snare, closed-hat, and open-hat sounds"), 2500);
+}
+
+void MainWindow::addClapInstrumentTrack()
+{
+    if (project.tracks.size() >= 256)
+    {
+        statusBar()->showMessage(tr("The project has reached the 256-track limit"), 3000);
+        return;
+    }
+
+    const QVector<ClapPluginDescriptor> plugins = ClapAudioPluginInstance::availablePlugins(
+        ClapPluginKind::Instrument);
+    if (plugins.isEmpty())
+    {
+        QMessageBox::information(this, tr("Add CLAP instrument"),
+            tr("No supported CLAP instruments were found in the standard plug-in folders or CLAP_PATH."));
+        return;
+    }
+
+    QStringList choices;
+    choices.reserve(plugins.size());
+    for (const ClapPluginDescriptor& plugin : plugins)
+        choices.push_back(QStringLiteral("%1 — %2 — %3")
+                              .arg(plugin.name, plugin.vendor, plugin.id));
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(this, tr("Add CLAP instrument"),
+        tr("Instrument"), choices, 0, false, &accepted);
+    if (!accepted)
+        return;
+    const int index = choices.indexOf(selected);
+    if (index < 0)
+        return;
+
+    const ClapPluginDescriptor& plugin = plugins[index];
+    InstrumentTrack track;
+    track.id = project.nextTrackId();
+    track.name = tr("%1 %2").arg(plugin.name).arg(track.id);
+    track.instrumentType = InstrumentType::ClapInstrument;
+    track.clapPluginId = plugin.id;
+    track.clapPluginName = plugin.name;
+    track.clapParameterValues.reserve(plugin.parameters.size());
+    for (const ClapPluginParameter& parameter : plugin.parameters)
+        track.clapParameterValues.push_back(parameter.defaultValue);
+
+    MidiClip clip;
+    clip.id = project.nextClipId();
+    clip.name = tr("Pattern %1").arg(clip.id);
+    clip.lengthBeats = project.patternLengthBeats();
+    track.clips.push_back(std::move(clip));
+    project.tracks.push_back(std::move(track));
+    selectedTrackId = project.tracks.last().id;
+    selectedClipId = project.tracks.last().clips.first().id;
+    settingsDirty = true;
+    refreshProjectUi();
+    editorTabs->setCurrentWidget(midiEditor);
+    statusBar()->showMessage(tr("Added CLAP instrument: %1").arg(plugin.name), 2500);
+}
+
+void MainWindow::editSelectedClapInstrument()
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::ClapInstrument)
+        return;
+
+    ClapPluginDescriptor descriptor;
+    if (!ClapAudioPluginInstance::describe(track->clapPluginId,
+                                           ClapPluginKind::Instrument, descriptor))
+    {
+        QMessageBox::warning(this, tr("CLAP instrument unavailable"),
+            tr("Install %1 or choose another instrument to edit its parameters.")
+                .arg(track->clapPluginName.isEmpty() ? track->name : track->clapPluginName));
+        return;
+    }
+
+    struct ParameterControl
+    {
+        qsizetype index = 0;
+        QWidget* editor = nullptr;
+    };
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("%1 controls").arg(descriptor.name));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* scroll = new QScrollArea(&dialog);
+    scroll->setWidgetResizable(true);
+    auto* formContents = new QWidget(scroll);
+    auto* form = new QFormLayout(formContents);
+    QVector<float> values = track->clapParameterValues;
+    if (values.size() > descriptor.parameters.size())
+        values.resize(descriptor.parameters.size());
+    while (values.size() < descriptor.parameters.size())
+        values.push_back(descriptor.parameters[values.size()].defaultValue);
+
+    QVector<ParameterControl> controls;
+    for (qsizetype index = 0; index < descriptor.parameters.size(); ++index)
+    {
+        const ClapPluginParameter& parameter = descriptor.parameters[index];
+        if (parameter.hidden)
+            continue;
+        const float value = std::clamp(values[index], parameter.minimum, parameter.maximum);
+        if (parameter.toggled)
+        {
+            auto* editor = new QCheckBox(formContents);
+            editor->setChecked(value >= (parameter.minimum + parameter.maximum) * 0.5f);
+            editor->setEnabled(!parameter.readOnly);
+            form->addRow(parameter.name, editor);
+            controls.push_back({index, editor});
+        }
+        else
+        {
+            auto* editor = new QDoubleSpinBox(formContents);
+            editor->setRange(parameter.minimum, parameter.maximum);
+            const bool wholeNumberRange = std::floor(parameter.minimum) == parameter.minimum &&
+                std::floor(parameter.maximum) == parameter.maximum;
+            editor->setDecimals(parameter.integer && wholeNumberRange ? 0 : 3);
+            editor->setSingleStep(parameter.integer ? 1.0 :
+                std::max(0.001, static_cast<double>(parameter.maximum - parameter.minimum) / 100.0));
+            editor->setValue(value);
+            editor->setEnabled(!parameter.readOnly);
+            form->addRow(parameter.name, editor);
+            controls.push_back({index, editor});
+        }
+    }
+    scroll->setWidget(formContents);
+    layout->addWidget(scroll);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog.resize(440, 520);
+    if (controls.isEmpty())
+    {
+        QMessageBox::information(this, tr("CLAP instrument controls"),
+            tr("This instrument does not expose editable parameters."));
+        return;
+    }
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const quint64 trackId = track->id;
+    audioEngine.capturePluginStates(project);
+    track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+    for (const ParameterControl& control : controls)
+    {
+        if (auto* toggle = qobject_cast<QCheckBox*>(control.editor))
+        {
+            const ClapPluginParameter& parameter = descriptor.parameters[control.index];
+            values[control.index] = toggle->isChecked() ? parameter.maximum : parameter.minimum;
+        }
+        else if (auto* number = qobject_cast<QDoubleSpinBox*>(control.editor))
+        {
+            values[control.index] = static_cast<float>(number->value());
+        }
+    }
+    track->clapParameterValues = std::move(values);
+    project.normalize();
+    settingsDirty = true;
+    refreshProjectUi();
 }
 
 void MainWindow::addClipAt(quint64 trackId, double startBeat)
@@ -6857,7 +7082,10 @@ void MainWindow::pollMidiInput()
         if (event.pitchBend)
         {
             if (midiMonitorAction->isChecked())
-                audioEngine.triggerLiveMidiPitchBend(event.channel, event.value);
+            {
+                const InstrumentTrack* track = selectedTrack();
+                audioEngine.triggerLiveMidiPitchBend(event.channel, event.value, track);
+            }
             if (midiRecordingActive && recordedMidiPitchBends.size() < 100000)
             {
                 recordedMidiPitchBends.push_back({event.channel, event.value,

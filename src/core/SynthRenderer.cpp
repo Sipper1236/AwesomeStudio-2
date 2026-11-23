@@ -158,6 +158,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     currentBeat = 0.0;
     notes.clear();
     pitchBendEvents.clear();
+    clapInstrumentEvents.clear();
     trackPitchBends.clear();
     activeNotes.clear();
     audioRegions.clear();
@@ -170,6 +171,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackInstrumentFilterStates.clear();
     trackInstrumentFilterHasTail.clear();
     trackEffectStates.clear();
+    clapInstruments.clear();
     trackEffectHasTail.clear();
     activeEqualizerTailTracks.clear();
     trackBusIndices.clear();
@@ -196,9 +198,11 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     hasBusSolo = false;
     nextStartIndex = 0;
     nextPitchBendIndex = 0;
+    nextClapInstrumentEventIndex = 0;
     nextAudioStartIndex = 0;
     playbackCycle = 0;
     lastFrame = -1;
+    nextClapArrangementNoteId = 1;
     if (!project)
         return;
 
@@ -211,6 +215,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackInstrumentFilterStates.resize(static_cast<size_t>(project->tracks.size()));
     trackInstrumentFilterHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackEffectStates.resize(static_cast<size_t>(project->tracks.size()));
+    clapInstruments.resize(static_cast<size_t>(project->tracks.size()));
     trackEffectHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackBusIndices.resize(static_cast<size_t>(project->tracks.size()), -1);
     trackSends.resize(static_cast<size_t>(project->tracks.size()));
@@ -253,6 +258,12 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             instrumentFilter.resonance = track.synthFilterResonance;
             QVector<MixerEffect> instrumentFilterChain{instrumentFilter};
             prepareEffectChain(instrumentFilterChain, trackInstrumentFilterStates[trackIndex]);
+        }
+        if (track.instrumentType == InstrumentType::ClapInstrument && !track.clapPluginId.isEmpty())
+        {
+            clapInstruments[trackIndex] = std::make_unique<ClapAudioPluginInstance>(
+                track.clapPluginId, ClapPluginKind::Instrument, sampleRate,
+                track.clapParameterValues, track.clapPluginState);
         }
         prepareEffectChain(track.effects, trackEffectStates[trackIndex]);
     }
@@ -402,7 +413,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     {
         const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
         int trackMidiChannel = 9;
-        if (track.instrumentType == InstrumentType::Synth)
+        if (track.instrumentType == InstrumentType::Synth ||
+            track.instrumentType == InstrumentType::ClapInstrument)
         {
             const int channelSlot = synthChannel++ % 15;
             trackMidiChannel = channelSlot < 9 ? channelSlot : channelSlot + 1;
@@ -460,6 +472,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                                     static_cast<int>(sampleRate));
                 event.trackIndex = trackIndex;
                 event.channel = std::clamp(bend.channel, 0, 15);
+                event.value = std::clamp(bend.value, 0, 16383);
                 event.semitones = (static_cast<float>(std::clamp(bend.value, 0, 16383)) - 8192.0f) /
                                   8192.0f * static_cast<float>(project->pitchBendRangeSemitones);
                 pitchBendEvents.push_back(event);
@@ -468,6 +481,36 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             {
                 const quint64 probabilitySeed = track.id * 0x9e3779b97f4a7c15ULL ^
                     clip.id * 0xbf58476d1ce4e5b9ULL ^ note.id * 0x94d049bb133111ebULL;
+                if (track.instrumentType == InstrumentType::ClapInstrument)
+                {
+                    ClapInstrumentEvent noteOn;
+                    noteOn.type = ClapInstrumentEvent::Type::NoteOn;
+                    noteOn.frame = project->frameAtBeat(clip.startBeat + note.startBeat,
+                                                         static_cast<int>(sampleRate));
+                    noteOn.endFrame = std::max(noteOn.frame + 1, project->frameAtBeat(
+                        clip.startBeat + note.startBeat + note.lengthBeats,
+                        static_cast<int>(sampleRate)));
+                    noteOn.trackIndex = trackIndex;
+                    noteOn.noteId = nextClapArrangementNoteId;
+                    nextClapArrangementNoteId = nextClapArrangementNoteId ==
+                        std::numeric_limits<std::int32_t>::max()
+                        ? 1 : nextClapArrangementNoteId + 1;
+                    noteOn.channel = note.channel >= 0
+                        ? std::clamp(note.channel, 0, 15) : trackMidiChannel;
+                    noteOn.key = std::clamp(note.pitch, 0, 127);
+                    noteOn.velocity = std::clamp(static_cast<float>(note.velocity) / 127.0f,
+                                                  0.0f, 1.0f);
+                    noteOn.probabilityPercent = note.probabilityPercent;
+                    noteOn.probabilitySeed = probabilitySeed;
+                    clapInstrumentEvents.push_back(noteOn);
+
+                    ClapInstrumentEvent noteOff = noteOn;
+                    noteOff.type = ClapInstrumentEvent::Type::NoteOff;
+                    noteOff.frame = noteOn.endFrame;
+                    noteOff.velocity = 0.0f;
+                    clapInstrumentEvents.push_back(noteOff);
+                    continue;
+                }
                 if (track.instrumentType == InstrumentType::DrumRack)
                 {
                     const int pad = drumPadForPitch(note.pitch);
@@ -610,6 +653,15 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             if (left.trackIndex != right.trackIndex) return left.trackIndex < right.trackIndex;
             return left.channel < right.channel;
         });
+    std::stable_sort(clapInstrumentEvents.begin(), clapInstrumentEvents.end(),
+        [](const ClapInstrumentEvent& left, const ClapInstrumentEvent& right)
+        {
+            if (left.frame != right.frame) return left.frame < right.frame;
+            if (left.trackIndex != right.trackIndex) return left.trackIndex < right.trackIndex;
+            if (left.type != right.type)
+                return left.type == ClapInstrumentEvent::Type::NoteOff;
+            return left.noteId < right.noteId;
+        });
     std::sort(audioRegions.begin(), audioRegions.end(), [](const AudioRegion& left, const AudioRegion& right)
     {
         return left.startFrame < right.startFrame;
@@ -618,6 +670,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
 
 void SynthRenderer::resetTransport()
 {
+    clapInstrumentsAllNotesOff();
     activeNotes.clear();
     activeAudioRegions.clear();
     resetTrackEqualizers();
@@ -640,6 +693,7 @@ void SynthRenderer::resetTransport()
     touchedBusIndices.clear();
     nextStartIndex = 0;
     nextPitchBendIndex = 0;
+    nextClapInstrumentEventIndex = 0;
     nextAudioStartIndex = 0;
     playbackCycle = 0;
     for (std::array<float, 16>& bends : trackPitchBends)
@@ -665,9 +719,61 @@ StereoSample SynthRenderer::addLiveTrackSample(size_t trackIndex, StereoSample i
     return {};
 }
 
+bool SynthRenderer::isClapInstrumentTrack(size_t trackIndex) const
+{
+    return project != nullptr && trackIndex < static_cast<size_t>(project->tracks.size()) &&
+        project->tracks[static_cast<qsizetype>(trackIndex)].instrumentType ==
+            InstrumentType::ClapInstrument;
+}
+
+void SynthRenderer::clapInstrumentNoteOn(size_t trackIndex, std::int32_t noteId,
+                                         int channel, int key, float velocity)
+{
+    if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
+        clapInstruments[trackIndex]->noteOn(noteId, channel, key, velocity);
+}
+
+void SynthRenderer::clapInstrumentNoteOff(size_t trackIndex, std::int32_t noteId,
+                                          int channel, int key, float velocity)
+{
+    if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
+        clapInstruments[trackIndex]->noteOff(noteId, channel, key, velocity);
+}
+
+void SynthRenderer::clapInstrumentAllNotesOff(size_t trackIndex)
+{
+    if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
+        clapInstruments[trackIndex]->allNotesOff();
+}
+
+void SynthRenderer::clapInstrumentPitchBend(size_t trackIndex, int channel, int value)
+{
+    if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
+        clapInstruments[trackIndex]->pitchBend(channel, value);
+}
+
+void SynthRenderer::clapInstrumentsAllNotesOff()
+{
+    for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
+        if (instrument != nullptr)
+            instrument->allNotesOff();
+}
+
 StereoSample SynthRenderer::finishMixerFrame()
 {
     StereoSample masterSample;
+
+    for (size_t trackIndex = 0; trackIndex < clapInstruments.size(); ++trackIndex)
+    {
+        ClapAudioPluginInstance* instrument = clapInstruments[trackIndex].get();
+        if (instrument == nullptr || !instrument->isValid() || trackIndex >= trackAudible.size() ||
+            trackAudible[trackIndex] == 0)
+            continue;
+        float left = 0.0f;
+        float right = 0.0f;
+        if (instrument->process(left, right))
+            addTrackSample(trackIndex, left, right);
+    }
 
     for (size_t trackIndex = 0; trackIndex < trackEffectHasTail.size(); ++trackIndex)
     {
@@ -893,8 +999,9 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
         else if (effect.enabled && effect.wet > 0.0f &&
                  effect.type == MixerEffectType::ClapPlugin && !effect.pluginUri.isEmpty())
         {
-            state.clapEffect = std::make_unique<ClapAudioEffectInstance>(
-                effect.pluginUri, sampleRate, effect.pluginParameterValues,
+            state.clapEffect = std::make_unique<ClapAudioPluginInstance>(
+                effect.pluginUri, ClapPluginKind::AudioEffect, sampleRate,
+                effect.pluginParameterValues,
                 effect.pluginState);
             if (state.clapEffect != nullptr)
                 state.liveParameterOverrides.assign(
@@ -1213,6 +1320,10 @@ double SynthRenderer::effectTailSeconds() const
     for (const VoiceNote& note : notes)
         renderOverrunSeconds = std::max(renderOverrunSeconds,
             std::max(0.0, note.endFrame + note.releaseFrames - songEndFrame) / sampleRate);
+    for (const ClapInstrumentEvent& event : clapInstrumentEvents)
+        if (event.type == ClapInstrumentEvent::Type::NoteOff)
+            renderOverrunSeconds = std::max(renderOverrunSeconds,
+                std::max(0.0, event.frame - songEndFrame) / sampleRate);
     for (qsizetype trackIndex = 0; trackIndex < project->tracks.size(); ++trackIndex)
     {
         const InstrumentTrack& track = project->tracks[trackIndex];
@@ -1224,8 +1335,19 @@ double SynthRenderer::effectTailSeconds() const
             instrumentFilterTail = std::min(4.0,
                 7.0 * track.synthFilterResonance / (3.14159265358979323846 * cutoff));
         }
+        const bool hasClapNotes = track.instrumentType == InstrumentType::ClapInstrument &&
+            std::any_of(clapInstrumentEvents.cbegin(), clapInstrumentEvents.cend(),
+                [trackIndex](const ClapInstrumentEvent& event)
+                {
+                    return event.trackIndex == static_cast<size_t>(trackIndex) &&
+                        event.type == ClapInstrumentEvent::Type::NoteOn;
+                });
+        const double clapInstrumentTail = hasClapNotes &&
+            static_cast<size_t>(trackIndex) < clapInstruments.size() &&
+            clapInstruments[static_cast<size_t>(trackIndex)] != nullptr &&
+            clapInstruments[static_cast<size_t>(trackIndex)]->isValid() ? 5.0 : 0.0;
         longestTrackTail = std::max(longestTrackTail,
-            instrumentFilterTail + chainTail(track.effects,
+            instrumentFilterTail + clapInstrumentTail + chainTail(track.effects,
                 trackEffectStates[static_cast<size_t>(trackIndex)]));
     }
     longestTrackTail += renderOverrunSeconds;
@@ -1286,7 +1408,16 @@ void SynthRenderer::capturePluginStates(ProjectData& target) const
     const size_t trackCount = std::min(trackEffectStates.size(),
                                        static_cast<size_t>(target.tracks.size()));
     for (size_t index = 0; index < trackCount; ++index)
+    {
+        if (index < clapInstruments.size() && clapInstruments[index] != nullptr &&
+            clapInstruments[index]->isValid())
+        {
+            QString savedState;
+            if (clapInstruments[index]->saveState(savedState))
+                target.tracks[static_cast<qsizetype>(index)].clapPluginState = std::move(savedState);
+        }
         captureEffectStates(trackEffectStates[index], target.tracks[static_cast<qsizetype>(index)].effects);
+    }
 
     const size_t busCount = std::min(busEffectStates.size(),
                                      static_cast<size_t>(target.buses.size()));
@@ -1305,6 +1436,9 @@ void SynthRenderer::serviceEffectCallbacks(std::vector<EffectState>& states)
 
 void SynthRenderer::servicePluginCallbacks()
 {
+    for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
+        if (instrument != nullptr)
+            instrument->serviceMainThread();
     for (std::vector<EffectState>& states : trackEffectStates)
         serviceEffectCallbacks(states);
     for (std::vector<EffectState>& states : busEffectStates)
@@ -1314,6 +1448,9 @@ void SynthRenderer::servicePluginCallbacks()
 
 void SynthRenderer::stopClapProcessing()
 {
+    for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
+        if (instrument != nullptr)
+            instrument->stopProcessing();
     const auto stopEffectProcessing = [](std::vector<EffectState>& states)
     {
         for (EffectState& state : states)
@@ -1382,6 +1519,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     // A backwards frame means the transport restarted or wrapped at the loop boundary.
     if (lastFrame != -1 && projectFrame < lastFrame)
     {
+        clapInstrumentsAllNotesOff();
         ++playbackCycle;
         activeNotes.clear();
         activeAudioRegions.clear();
@@ -1391,6 +1529,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         std::fill(trackInstrumentFilterHasTail.begin(), trackInstrumentFilterHasTail.end(), 0);
         nextStartIndex = 0;
         nextPitchBendIndex = 0;
+        nextClapInstrumentEventIndex = 0;
         nextAudioStartIndex = 0;
         for (std::array<float, 16>& bends : trackPitchBends)
             bends.fill(0.0f);
@@ -1407,6 +1546,8 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         if (bend.trackIndex >= trackPitchBends.size())
             continue;
         trackPitchBends[bend.trackIndex][static_cast<size_t>(bend.channel)] = bend.semitones;
+        if (bend.trackIndex < clapInstruments.size())
+            clapInstrumentPitchBend(bend.trackIndex, bend.channel, bend.value);
         const double bendRatio = std::pow(2.0, static_cast<double>(bend.semitones) / 12.0);
         for (const size_t index : activeNotes)
         {
@@ -1415,6 +1556,24 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
                 voice.midiChannel == bend.channel)
                 voice.frequency = voice.baseFrequency * bendRatio;
         }
+    }
+
+    while (nextClapInstrumentEventIndex < clapInstrumentEvents.size() &&
+           clapInstrumentEvents[nextClapInstrumentEventIndex].frame <= projectFrame)
+    {
+        const ClapInstrumentEvent& event = clapInstrumentEvents[nextClapInstrumentEventIndex++];
+        if ((event.type == ClapInstrumentEvent::Type::NoteOn &&
+             event.endFrame <= projectFrame) ||
+            (event.type == ClapInstrumentEvent::Type::NoteOff &&
+             event.frame < projectFrame) ||
+            !probabilityPasses(event.probabilityPercent, event.probabilitySeed, playbackCycle))
+            continue;
+        if (event.type == ClapInstrumentEvent::Type::NoteOn)
+            clapInstrumentNoteOn(event.trackIndex, event.noteId, event.channel,
+                                 event.key, event.velocity);
+        else
+            clapInstrumentNoteOff(event.trackIndex, event.noteId, event.channel,
+                                  event.key, event.velocity);
     }
 
     while (nextStartIndex < notes.size() && notes[nextStartIndex].startFrame <= projectFrame)

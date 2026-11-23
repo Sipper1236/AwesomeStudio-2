@@ -6,7 +6,13 @@
 #include <cstdint>
 #include <memory>
 
-struct ClapEffectParameter
+enum class ClapPluginKind
+{
+    AudioEffect,
+    Instrument
+};
+
+struct ClapPluginParameter
 {
     std::uint32_t id = 0;
     QString name;
@@ -19,7 +25,7 @@ struct ClapEffectParameter
     bool readOnly = false;
 };
 
-struct ClapEffectDescriptor
+struct ClapPluginDescriptor
 {
     QString id;
     QString name;
@@ -28,26 +34,32 @@ struct ClapEffectDescriptor
     std::uint32_t inputChannels = 0;
     std::uint32_t outputChannels = 0;
     bool hasState = false;
-    QVector<ClapEffectParameter> parameters;
+    bool supportsMidiDialect = false;
+    QVector<ClapPluginParameter> parameters;
 };
 
-class ClapAudioEffectInstance
+class ClapAudioPluginInstance
 {
 public:
-    static QVector<ClapEffectDescriptor> availableEffects();
-    static bool describe(const QString& id, ClapEffectDescriptor& descriptor);
+    static QVector<ClapPluginDescriptor> availablePlugins(ClapPluginKind kind);
+    static bool describe(const QString& id, ClapPluginKind kind,
+                         ClapPluginDescriptor& descriptor);
 
-    ClapAudioEffectInstance(const QString& id, double sampleRate,
+    ClapAudioPluginInstance(const QString& id, ClapPluginKind kind, double sampleRate,
                             const QVector<float>& parameterValues,
                             const QString& pluginState = QString());
-    ~ClapAudioEffectInstance();
+    ~ClapAudioPluginInstance();
 
-    ClapAudioEffectInstance(const ClapAudioEffectInstance&) = delete;
-    ClapAudioEffectInstance& operator=(const ClapAudioEffectInstance&) = delete;
+    ClapAudioPluginInstance(const ClapAudioPluginInstance&) = delete;
+    ClapAudioPluginInstance& operator=(const ClapAudioPluginInstance&) = delete;
 
     bool isValid() const;
     qsizetype parameterCount() const;
     void setParameter(qsizetype index, float value);
+    void noteOn(std::int32_t noteId, int channel, int key, float velocity);
+    void noteOff(std::int32_t noteId, int channel, int key, float velocity = 0.0f);
+    void allNotesOff();
+    void pitchBend(int channel, int value);
     bool saveState(QString& pluginState) const;
     void serviceMainThread();
     void stopProcessing();

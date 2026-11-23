@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 39;
+constexpr int currentProjectVersion = 40;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -480,6 +480,16 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("id"), static_cast<qint64>(track.id)},
         {QStringLiteral("name"), track.name},
         {QStringLiteral("instrumentType"), static_cast<int>(track.instrumentType)},
+        {QStringLiteral("clapPluginId"), track.clapPluginId},
+        {QStringLiteral("clapPluginName"), track.clapPluginName},
+        {QStringLiteral("clapPluginState"), track.clapPluginState},
+        {QStringLiteral("clapParameterValues"), [&track]
+         {
+             QJsonArray values;
+             for (float value : track.clapParameterValues)
+                 values.push_back(value);
+             return values;
+         }()},
         {QStringLiteral("waveform"), static_cast<int>(track.waveform)},
         {QStringLiteral("secondOscillatorEnabled"), track.secondOscillatorEnabled},
         {QStringLiteral("secondOscillatorWaveform"), static_cast<int>(track.secondOscillatorWaveform)},
@@ -625,7 +635,47 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     if (!readId(object, QStringLiteral("id"), track.id, error))
         return false;
     track.name = object.value(QStringLiteral("name")).toString(QStringLiteral("Synth"));
-    track.instrumentType = static_cast<InstrumentType>(object.value(QStringLiteral("instrumentType")).toInt(0));
+    const int instrumentType = object.value(QStringLiteral("instrumentType")).toInt(0);
+    if (instrumentType < 0 || instrumentType > (version >= 40 ? 3 : 2))
+    {
+        setError(error, QStringLiteral("The project contains an unsupported instrument type."));
+        return false;
+    }
+    track.instrumentType = static_cast<InstrumentType>(instrumentType);
+    if (version >= 40)
+    {
+        const QJsonValue pluginId = object.value(QStringLiteral("clapPluginId"));
+        const QJsonValue pluginName = object.value(QStringLiteral("clapPluginName"));
+        const QJsonValue pluginState = object.value(QStringLiteral("clapPluginState"));
+        const QJsonValue parameterValues = object.value(QStringLiteral("clapParameterValues"));
+        if ((!pluginId.isString() && !pluginId.isUndefined()) ||
+            (!pluginName.isString() && !pluginName.isUndefined()) ||
+            (!pluginState.isString() && !pluginState.isUndefined()) ||
+            !parameterValues.isArray() || parameterValues.toArray().size() > 256)
+        {
+            setError(error, QStringLiteral("The track contains invalid CLAP instrument settings."));
+            return false;
+        }
+        track.clapPluginId = pluginId.toString();
+        track.clapPluginName = pluginName.toString();
+        track.clapPluginState = pluginState.toString();
+        if (track.clapPluginId.size() > 1024 || track.clapPluginName.size() > 512 ||
+            track.clapPluginState.toUtf8().size() > maximumPluginStateBytes)
+        {
+            setError(error, QStringLiteral("The track contains oversized CLAP instrument settings."));
+            return false;
+        }
+        for (const QJsonValue& value : parameterValues.toArray())
+        {
+            const double number = value.toDouble(std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(number) || number < -1.0e9 || number > 1.0e9)
+            {
+                setError(error, QStringLiteral("The track contains an invalid CLAP parameter value."));
+                return false;
+            }
+            track.clapParameterValues.push_back(static_cast<float>(number));
+        }
+    }
     track.waveform = static_cast<SynthWaveform>(object.value(QStringLiteral("waveform")).toInt(0));
     if (version >= 23)
     {
@@ -856,7 +906,8 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
     if (!statesAreWithinLimit(safeProject.masterEffects) ||
         !std::all_of(safeProject.tracks.cbegin(), safeProject.tracks.cend(),
                      [&statesAreWithinLimit](const InstrumentTrack& track)
-                     { return statesAreWithinLimit(track.effects); }) ||
+                     { return statesAreWithinLimit(track.effects) &&
+                         track.clapPluginState.toUtf8().size() <= maximumPluginStateBytes; }) ||
         !std::all_of(safeProject.buses.cbegin(), safeProject.buses.cend(),
                      [&statesAreWithinLimit](const MixerBus& bus)
                      { return statesAreWithinLimit(bus.effects); }))

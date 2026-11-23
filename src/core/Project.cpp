@@ -542,7 +542,12 @@ void ProjectData::normalize()
         track.sends = std::move(validSends);
         normalizeEffectChain(track.effects, effectBudget);
         track.instrumentType = static_cast<InstrumentType>(
-            std::clamp(static_cast<int>(track.instrumentType), 0, 2));
+            std::clamp(static_cast<int>(track.instrumentType), 0, 3));
+        if (track.clapParameterValues.size() > 256)
+            track.clapParameterValues.resize(256);
+        for (float& value : track.clapParameterValues)
+            if (!std::isfinite(value))
+                value = 0.0f;
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
         if (!std::isfinite(track.eqLowDb)) track.eqLowDb = 0.0f;

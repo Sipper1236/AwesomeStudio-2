@@ -6,6 +6,7 @@
 #include <QString>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -42,7 +43,9 @@ public:
     void servicePluginCallbacks();
     void triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity, const InstrumentTrack& track);
     void triggerLiveMidiNoteOff(int channel, int midiPitch);
-    void triggerLiveMidiPitchBend(int channel, int value);
+    void triggerLiveMidiPitchBend(int channel, int value,
+                                  const InstrumentTrack* track = nullptr);
+    void triggerClapInstrumentPreview(int midiPitch, int velocity, const InstrumentTrack& track);
     void stopLiveMidiNotes();
     void triggerPreview(int midiPitch, int velocity = 96,
                         SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
@@ -85,10 +88,13 @@ private:
         int channel = 0;
         int pitch = 0;
         int velocity = 0;
+        std::int32_t noteId = 0;
         int pitchBendValue = 8192;
         size_t trackIndex = maximumTrackCount;
         bool percussion = false;
         bool pitchBend = false;
+        bool clapInstrument = false;
+        bool preview = false;
         SynthWaveform waveform = SynthWaveform::Sine;
         SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
         float secondOscillatorDetuneCents = 0.0f;
@@ -111,8 +117,11 @@ private:
         bool active = false;
         bool held = false;
         bool percussion = false;
+        bool clapInstrument = false;
+        bool preview = false;
         int channel = 0;
         int pitch = 0;
+        std::int32_t clapNoteId = 0;
         size_t trackIndex = maximumTrackCount;
         qint64 startFrame = 0;
         qint64 releaseFrame = -1;
@@ -149,7 +158,7 @@ private:
     std::atomic<bool> pluginStateCaptureInProgress{false};
     std::atomic<size_t> activeRenderCallbacks{0};
     bool enqueueLiveMidiEvent(const LiveMidiEvent& event);
-    void applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame);
+    void applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame, SynthRenderer& renderer);
     void renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer);
     void clearLiveMidiVoices();
 
@@ -204,6 +213,12 @@ private:
     std::atomic<size_t> liveMidiWriteIndex{0};
     std::atomic<size_t> liveMidiReadIndex{0};
     std::atomic<bool> liveMidiPanic{false};
+    std::atomic<bool> clapPreviewNoteOffPending{false};
+    std::atomic<qint64> clapPreviewNoteOffFrame{-1};
+    std::atomic<std::int32_t> clapPreviewNoteOffId{0};
+    std::atomic<int> clapPreviewNoteOffChannel{0};
+    std::atomic<int> clapPreviewNoteOffPitch{0};
+    std::atomic<std::int32_t> nextClapPreviewNoteId{1};
     std::atomic<float> liveMidiPitchBendRangeSemitones{2.0f};
     float liveMidiAppliedPitchBendRangeSemitones = 2.0f;
     quint64 nextLiveMidiSerial = 1;

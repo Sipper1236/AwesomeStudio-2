@@ -11,6 +11,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -24,6 +25,7 @@
 
 #if defined(AWESOME_STUDIO_HAS_CLAP)
 #include <clap/entry.h>
+#include <clap/events.h>
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin.h>
 #include <clap/ext/audio-ports.h>
@@ -194,7 +196,8 @@ std::shared_ptr<ClapLibrary> loadLibrary(const QString& path)
 
 struct ClapCatalogEntry
 {
-    ClapEffectDescriptor descriptor;
+    ClapPluginDescriptor descriptor;
+    ClapPluginKind kind = ClapPluginKind::AudioEffect;
     std::shared_ptr<ClapLibrary> library;
 };
 
@@ -208,39 +211,72 @@ bool isAudioEffect(const clap_plugin_descriptor_t* plugin)
     return false;
 }
 
-bool inspectPlugin(const clap_plugin_t* plugin, const clap_plugin_descriptor_t* source,
-                   const QString& path, ClapEffectDescriptor& result)
+bool isInstrument(const clap_plugin_descriptor_t* plugin)
 {
-    if (plugin == nullptr || source == nullptr || !isAudioEffect(source))
+    if (plugin == nullptr || plugin->features == nullptr)
+        return false;
+    for (const char* const* feature = plugin->features; *feature != nullptr; ++feature)
+        if (std::strcmp(*feature, CLAP_PLUGIN_FEATURE_INSTRUMENT) == 0)
+            return true;
+    return false;
+}
+
+bool inspectPlugin(const clap_plugin_t* plugin, const clap_plugin_descriptor_t* source,
+                   const QString& path, ClapPluginKind kind, ClapPluginDescriptor& result)
+{
+    if (plugin == nullptr || source == nullptr ||
+        (kind == ClapPluginKind::AudioEffect ? !isAudioEffect(source) : !isInstrument(source)))
         return false;
     const auto* audioPorts = static_cast<const clap_plugin_audio_ports_t*>(
         plugin->get_extension(plugin, CLAP_EXT_AUDIO_PORTS));
-    if (audioPorts == nullptr || audioPorts->count == nullptr || audioPorts->get == nullptr ||
-        audioPorts->count(plugin, true) != 1 || audioPorts->count(plugin, false) != 1)
+    if (audioPorts == nullptr || audioPorts->count == nullptr || audioPorts->get == nullptr)
+        return false;
+
+    const uint32_t inputCount = audioPorts->count(plugin, true);
+    const uint32_t outputCount = audioPorts->count(plugin, false);
+    if ((kind == ClapPluginKind::AudioEffect && (inputCount != 1 || outputCount != 1)) ||
+        (kind == ClapPluginKind::Instrument && (inputCount != 0 || outputCount != 1)))
         return false;
 
     clap_audio_port_info_t inputInfo{};
     clap_audio_port_info_t outputInfo{};
-    if (!audioPorts->get(plugin, 0, true, &inputInfo) ||
+    if ((kind == ClapPluginKind::AudioEffect &&
+         (!audioPorts->get(plugin, 0, true, &inputInfo) ||
+          (inputInfo.flags & CLAP_AUDIO_PORT_IS_MAIN) == 0 ||
+          inputInfo.channel_count == 0 || inputInfo.channel_count > 2)) ||
         !audioPorts->get(plugin, 0, false, &outputInfo) ||
-        (inputInfo.flags & CLAP_AUDIO_PORT_IS_MAIN) == 0 ||
         (outputInfo.flags & CLAP_AUDIO_PORT_IS_MAIN) == 0 ||
-        inputInfo.channel_count == 0 || inputInfo.channel_count > 2 ||
         outputInfo.channel_count == 0 || outputInfo.channel_count > 2)
         return false;
 
     const auto* notePorts = static_cast<const clap_plugin_note_ports_t*>(
         plugin->get_extension(plugin, CLAP_EXT_NOTE_PORTS));
-    if (notePorts != nullptr && notePorts->count != nullptr &&
-        (notePorts->count(plugin, true) != 0 || notePorts->count(plugin, false) != 0))
-        return false;
+    clap_note_port_info_t noteInput{};
+    if (kind == ClapPluginKind::AudioEffect)
+    {
+        if (notePorts != nullptr && notePorts->count != nullptr &&
+            (notePorts->count(plugin, true) != 0 || notePorts->count(plugin, false) != 0))
+            return false;
+    }
+    else
+    {
+        if (notePorts == nullptr || notePorts->count == nullptr || notePorts->get == nullptr ||
+            notePorts->count(plugin, true) != 1 || notePorts->count(plugin, false) != 0 ||
+            !notePorts->get(plugin, 0, true, &noteInput) ||
+            (noteInput.supported_dialects & CLAP_NOTE_DIALECT_CLAP) == 0)
+            return false;
+    }
 
     result.id = QString::fromUtf8(source->id);
     result.name = QString::fromUtf8(source->name);
     result.vendor = source->vendor == nullptr ? QString() : QString::fromUtf8(source->vendor);
     result.path = path;
-    result.inputChannels = inputInfo.channel_count;
+    result.inputChannels = kind == ClapPluginKind::AudioEffect ? inputInfo.channel_count : 0;
     result.outputChannels = outputInfo.channel_count;
+    result.supportsMidiDialect = kind == ClapPluginKind::Instrument &&
+        notePorts != nullptr && notePorts->count(plugin, true) == 1 &&
+        notePorts->get(plugin, 0, true, &noteInput) &&
+        (noteInput.supported_dialects & CLAP_NOTE_DIALECT_MIDI) != 0;
     result.hasState = plugin->get_extension(plugin, CLAP_EXT_STATE) != nullptr;
     const auto* params = static_cast<const clap_plugin_params_t*>(
         plugin->get_extension(plugin, CLAP_EXT_PARAMS));
@@ -273,7 +309,7 @@ bool inspectPlugin(const clap_plugin_t* plugin, const clap_plugin_descriptor_t* 
     return true;
 }
 
-std::vector<ClapCatalogEntry> buildCatalog()
+std::vector<ClapCatalogEntry> buildCatalog(ClapPluginKind kind)
 {
     QStringList searchPaths{QDir::home().filePath(QStringLiteral(".clap")),
                             QStringLiteral("/usr/lib/clap"),
@@ -316,7 +352,7 @@ std::vector<ClapCatalogEntry> buildCatalog()
             const clap_plugin_descriptor_t* source =
                 library->factory->get_plugin_descriptor(library->factory, index);
             if (source == nullptr || source->id == nullptr || source->name == nullptr ||
-                !isAudioEffect(source))
+                (kind == ClapPluginKind::AudioEffect ? !isAudioEffect(source) : !isInstrument(source)))
                 continue;
 
             ClapHostContext host;
@@ -325,12 +361,12 @@ std::vector<ClapCatalogEntry> buildCatalog()
             if (plugin == nullptr)
                 continue;
             const bool initialized = plugin->init != nullptr && plugin->init(plugin);
-            ClapEffectDescriptor descriptor;
-            const bool usable = initialized && inspectPlugin(plugin, source, path, descriptor);
+            ClapPluginDescriptor descriptor;
+            const bool usable = initialized && inspectPlugin(plugin, source, path, kind, descriptor);
             if (plugin->destroy != nullptr)
                 plugin->destroy(plugin);
             if (usable)
-                result.push_back({std::move(descriptor), library});
+                result.push_back({std::move(descriptor), kind, library});
         }
     }
     std::sort(result.begin(), result.end(), [](const ClapCatalogEntry& left,
@@ -343,15 +379,21 @@ std::vector<ClapCatalogEntry> buildCatalog()
     return result;
 }
 
-const std::vector<ClapCatalogEntry>& catalog()
+const std::vector<ClapCatalogEntry>& catalog(ClapPluginKind kind)
 {
-    static const std::vector<ClapCatalogEntry> entries = buildCatalog();
-    return entries;
+    if (kind == ClapPluginKind::Instrument)
+    {
+        static const std::vector<ClapCatalogEntry> instruments =
+            buildCatalog(ClapPluginKind::Instrument);
+        return instruments;
+    }
+    static const std::vector<ClapCatalogEntry> effects = buildCatalog(ClapPluginKind::AudioEffect);
+    return effects;
 }
 
-const ClapCatalogEntry* findCatalogEntry(const QString& id)
+const ClapCatalogEntry* findCatalogEntry(const QString& id, ClapPluginKind kind)
 {
-    const std::vector<ClapCatalogEntry>& entries = catalog();
+    const std::vector<ClapCatalogEntry>& entries = catalog(kind);
     const auto found = std::find_if(entries.cbegin(), entries.cend(),
         [&id](const ClapCatalogEntry& entry) { return entry.descriptor.id == id; });
     return found == entries.cend() ? nullptr : &*found;
@@ -404,19 +446,39 @@ struct StateInput
 #endif
 }
 
-struct ClapAudioEffectInstance::Private
+struct ClapAudioPluginInstance::Private
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
+    struct PendingEvent
+    {
+        enum class Kind { Note, Midi } kind = Kind::Note;
+        union Payload
+        {
+            clap_event_note_t note;
+            clap_event_midi_t midi;
+            Payload() : note{} {}
+        } payload;
+
+        const clap_event_header_t* header() const
+        {
+            return kind == Kind::Note ? &payload.note.header : &payload.midi.header;
+        }
+    };
+
     std::shared_ptr<ClapLibrary> library;
     ClapHostContext hostContext;
     const clap_plugin_t* plugin = nullptr;
     const clap_plugin_params_t* params = nullptr;
     const clap_plugin_state_t* state = nullptr;
-    ClapEffectDescriptor descriptor;
+    ClapPluginKind kind = ClapPluginKind::AudioEffect;
+    ClapPluginDescriptor descriptor;
     std::vector<float> controlValues;
     std::vector<float> sentValues;
     std::vector<clap_event_param_value_t> pendingEvents;
+    std::array<PendingEvent, 512> pendingInstrumentEvents{};
+    size_t pendingInstrumentEventCount = 0;
     clap_input_events_t inputEvents{};
+    clap_input_events_t parameterEvents{};
     clap_output_events_t outputEvents{};
     float inputLeft = 0.0f;
     float inputRight = 0.0f;
@@ -439,15 +501,70 @@ struct ClapAudioEffectInstance::Private
     static uint32_t CLAP_ABI inputEventCount(const clap_input_events_t* events)
     {
         const Private* self = fromInputEvents(events);
-        return self == nullptr ? 0 : static_cast<uint32_t>(self->pendingEvents.size());
+        return self == nullptr ? 0 : static_cast<uint32_t>(
+            self->pendingEvents.size() + self->pendingInstrumentEventCount);
     }
 
     static const clap_event_header_t* CLAP_ABI inputEventAt(
         const clap_input_events_t* events, uint32_t index)
     {
         const Private* self = fromInputEvents(events);
+        if (self == nullptr)
+            return nullptr;
+        if (index < self->pendingEvents.size())
+            return &self->pendingEvents[index].header;
+        const uint32_t instrumentIndex = index - static_cast<uint32_t>(self->pendingEvents.size());
+        return instrumentIndex < self->pendingInstrumentEventCount
+            ? self->pendingInstrumentEvents[instrumentIndex].header() : nullptr;
+    }
+
+    static uint32_t CLAP_ABI parameterEventCount(const clap_input_events_t* events)
+    {
+        const Private* self = fromInputEvents(events);
+        return self == nullptr ? 0 : static_cast<uint32_t>(self->pendingEvents.size());
+    }
+
+    static const clap_event_header_t* CLAP_ABI parameterEventAt(
+        const clap_input_events_t* events, uint32_t index)
+    {
+        const Private* self = fromInputEvents(events);
         return self == nullptr || index >= self->pendingEvents.size()
             ? nullptr : &self->pendingEvents[index].header;
+    }
+
+    void queueNoteEvent(uint16_t type, int32_t noteId, int channel, int key, float velocity)
+    {
+        if (kind != ClapPluginKind::Instrument ||
+            pendingInstrumentEventCount >= pendingInstrumentEvents.size())
+            return;
+        PendingEvent& pending = pendingInstrumentEvents[pendingInstrumentEventCount++];
+        pending.kind = PendingEvent::Kind::Note;
+        pending.payload.note = {};
+        pending.payload.note.header.size = sizeof(clap_event_note_t);
+        pending.payload.note.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+        pending.payload.note.header.type = type;
+        pending.payload.note.header.flags = CLAP_EVENT_IS_LIVE;
+        pending.payload.note.note_id = noteId;
+        pending.payload.note.port_index = 0;
+        pending.payload.note.channel = static_cast<int16_t>(channel);
+        pending.payload.note.key = static_cast<int16_t>(key);
+        pending.payload.note.velocity = velocity;
+    }
+
+    void queueMidiEvent(uint16_t portIndex, const std::array<uint8_t, 3>& data)
+    {
+        if (kind != ClapPluginKind::Instrument ||
+            pendingInstrumentEventCount >= pendingInstrumentEvents.size())
+            return;
+        PendingEvent& pending = pendingInstrumentEvents[pendingInstrumentEventCount++];
+        pending.kind = PendingEvent::Kind::Midi;
+        pending.payload.midi = {};
+        pending.payload.midi.header.size = sizeof(clap_event_midi_t);
+        pending.payload.midi.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+        pending.payload.midi.header.type = CLAP_EVENT_MIDI;
+        pending.payload.midi.header.flags = CLAP_EVENT_IS_LIVE;
+        pending.payload.midi.port_index = portIndex;
+        std::copy(data.cbegin(), data.cend(), pending.payload.midi.data);
     }
 
     static bool CLAP_ABI outputEventPush(const clap_output_events_t* events,
@@ -463,7 +580,7 @@ struct ClapAudioEffectInstance::Private
             if (self->descriptor.parameters[static_cast<qsizetype>(index)].id == value->param_id &&
                 std::isfinite(value->value))
             {
-                const ClapEffectParameter& parameter =
+                const ClapPluginParameter& parameter =
                     self->descriptor.parameters[static_cast<qsizetype>(index)];
                 float converted = std::clamp(static_cast<float>(value->value),
                                              parameter.minimum, parameter.maximum);
@@ -517,11 +634,11 @@ struct ClapAudioEffectInstance::Private
 #endif
 };
 
-QVector<ClapEffectDescriptor> ClapAudioEffectInstance::availableEffects()
+QVector<ClapPluginDescriptor> ClapAudioPluginInstance::availablePlugins(ClapPluginKind kind)
 {
-    QVector<ClapEffectDescriptor> result;
+    QVector<ClapPluginDescriptor> result;
 #if defined(AWESOME_STUDIO_HAS_CLAP)
-    const std::vector<ClapCatalogEntry>& entries = catalog();
+    const std::vector<ClapCatalogEntry>& entries = catalog(kind);
     result.reserve(static_cast<qsizetype>(entries.size()));
     for (const ClapCatalogEntry& entry : entries)
         result.push_back(entry.descriptor);
@@ -529,30 +646,34 @@ QVector<ClapEffectDescriptor> ClapAudioEffectInstance::availableEffects()
     return result;
 }
 
-bool ClapAudioEffectInstance::describe(const QString& id, ClapEffectDescriptor& descriptor)
+bool ClapAudioPluginInstance::describe(const QString& id, ClapPluginKind kind,
+                                       ClapPluginDescriptor& descriptor)
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
-    const ClapCatalogEntry* entry = findCatalogEntry(id);
+    const ClapCatalogEntry* entry = findCatalogEntry(id, kind);
     if (entry == nullptr)
         return false;
     descriptor = entry->descriptor;
     return true;
 #else
     Q_UNUSED(id)
+    Q_UNUSED(kind)
     Q_UNUSED(descriptor)
     return false;
 #endif
 }
 
-ClapAudioEffectInstance::ClapAudioEffectInstance(const QString& id, double sampleRate,
+ClapAudioPluginInstance::ClapAudioPluginInstance(const QString& id, ClapPluginKind kind,
+                                                 double sampleRate,
                                                  const QVector<float>& parameterValues,
                                                  const QString& pluginState)
     : d(std::make_unique<Private>())
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
+    d->kind = kind;
     if (!std::isfinite(sampleRate) || sampleRate <= 0.0)
         return;
-    const ClapCatalogEntry* entry = findCatalogEntry(id);
+    const ClapCatalogEntry* entry = findCatalogEntry(id, kind);
     if (entry == nullptr)
         return;
     d->library = entry->library;
@@ -583,7 +704,7 @@ ClapAudioEffectInstance::ClapAudioEffectInstance(const QString& id, double sampl
     d->pendingEvents.reserve(d->controlValues.size());
     for (qsizetype index = 0; index < d->descriptor.parameters.size(); ++index)
     {
-        const ClapEffectParameter& parameter = d->descriptor.parameters[index];
+        const ClapPluginParameter& parameter = d->descriptor.parameters[index];
         double currentValue = parameter.defaultValue;
         if (d->params != nullptr && d->params->get_value != nullptr)
             d->params->get_value(d->plugin, parameter.id, &currentValue);
@@ -599,7 +720,8 @@ ClapAudioEffectInstance::ClapAudioEffectInstance(const QString& id, double sampl
         d->controlValues[static_cast<size_t>(index)] = value;
     }
 
-    if (d->descriptor.inputChannels == 0 || d->descriptor.outputChannels == 0)
+    if ((kind == ClapPluginKind::AudioEffect && d->descriptor.inputChannels == 0) ||
+        d->descriptor.outputChannels == 0)
         return;
 
     d->inputChannels[0] = d->descriptor.inputChannels == 1 ? &d->monoInput : &d->inputLeft;
@@ -613,19 +735,23 @@ ClapAudioEffectInstance::ClapAudioEffectInstance(const QString& id, double sampl
     d->inputEvents.ctx = d.get();
     d->inputEvents.size = &Private::inputEventCount;
     d->inputEvents.get = &Private::inputEventAt;
+    d->parameterEvents.ctx = d.get();
+    d->parameterEvents.size = &Private::parameterEventCount;
+    d->parameterEvents.get = &Private::parameterEventAt;
     d->outputEvents.ctx = d.get();
     d->outputEvents.try_push = &Private::outputEventPush;
 #else
     Q_UNUSED(id)
+    Q_UNUSED(kind)
     Q_UNUSED(sampleRate)
     Q_UNUSED(parameterValues)
     Q_UNUSED(pluginState)
 #endif
 }
 
-ClapAudioEffectInstance::~ClapAudioEffectInstance() = default;
+ClapAudioPluginInstance::~ClapAudioPluginInstance() = default;
 
-bool ClapAudioEffectInstance::isValid() const
+bool ClapAudioPluginInstance::isValid() const
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     return d != nullptr && d->plugin != nullptr && d->activated;
@@ -634,7 +760,7 @@ bool ClapAudioEffectInstance::isValid() const
 #endif
 }
 
-qsizetype ClapAudioEffectInstance::parameterCount() const
+qsizetype ClapAudioPluginInstance::parameterCount() const
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     return d == nullptr ? 0 : d->descriptor.parameters.size();
@@ -643,12 +769,12 @@ qsizetype ClapAudioEffectInstance::parameterCount() const
 #endif
 }
 
-void ClapAudioEffectInstance::setParameter(qsizetype index, float value)
+void ClapAudioPluginInstance::setParameter(qsizetype index, float value)
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     if (d == nullptr || !isValid() || index < 0 || index >= d->descriptor.parameters.size())
         return;
-    const ClapEffectParameter& parameter = d->descriptor.parameters[index];
+    const ClapPluginParameter& parameter = d->descriptor.parameters[index];
     if (!std::isfinite(value))
         value = parameter.defaultValue;
     value = std::clamp(value, parameter.minimum, parameter.maximum);
@@ -663,7 +789,61 @@ void ClapAudioEffectInstance::setParameter(qsizetype index, float value)
 #endif
 }
 
-bool ClapAudioEffectInstance::saveState(QString& pluginState) const
+void ClapAudioPluginInstance::noteOn(std::int32_t noteId, int channel, int key, float velocity)
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d == nullptr || !isValid() || !std::isfinite(velocity))
+        return;
+    d->queueNoteEvent(CLAP_EVENT_NOTE_ON, noteId, std::clamp(channel, 0, 15),
+                      std::clamp(key, 0, 127), std::clamp(velocity, 0.0f, 1.0f));
+#else
+    Q_UNUSED(noteId)
+    Q_UNUSED(channel)
+    Q_UNUSED(key)
+    Q_UNUSED(velocity)
+#endif
+}
+
+void ClapAudioPluginInstance::noteOff(std::int32_t noteId, int channel, int key, float velocity)
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d == nullptr || !isValid() || !std::isfinite(velocity))
+        return;
+    d->queueNoteEvent(CLAP_EVENT_NOTE_OFF, noteId, std::clamp(channel, 0, 15),
+                      std::clamp(key, 0, 127), std::clamp(velocity, 0.0f, 1.0f));
+#else
+    Q_UNUSED(noteId)
+    Q_UNUSED(channel)
+    Q_UNUSED(key)
+    Q_UNUSED(velocity)
+#endif
+}
+
+void ClapAudioPluginInstance::allNotesOff()
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d != nullptr && isValid())
+        d->queueNoteEvent(CLAP_EVENT_NOTE_CHOKE, -1, -1, -1, 0.0f);
+#endif
+}
+
+void ClapAudioPluginInstance::pitchBend(int channel, int value)
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d == nullptr || !isValid() || !d->descriptor.supportsMidiDialect)
+        return;
+    const int safeChannel = std::clamp(channel, 0, 15);
+    const int safeValue = std::clamp(value, 0, 16383);
+    d->queueMidiEvent(0, {static_cast<uint8_t>(0xE0 | safeChannel),
+                          static_cast<uint8_t>(safeValue & 0x7F),
+                          static_cast<uint8_t>((safeValue >> 7) & 0x7F)});
+#else
+    Q_UNUSED(channel)
+    Q_UNUSED(value)
+#endif
+}
+
+bool ClapAudioPluginInstance::saveState(QString& pluginState) const
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     if (!isValid() || d->state == nullptr || d->state->save == nullptr)
@@ -684,7 +864,7 @@ bool ClapAudioEffectInstance::saveState(QString& pluginState) const
 #endif
 }
 
-void ClapAudioEffectInstance::serviceMainThread()
+void ClapAudioPluginInstance::serviceMainThread()
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     if (isValid() && d->hostContext.callbackRequested.exchange(false, std::memory_order_acq_rel) &&
@@ -693,7 +873,7 @@ void ClapAudioEffectInstance::serviceMainThread()
 #endif
 }
 
-void ClapAudioEffectInstance::stopProcessing()
+void ClapAudioPluginInstance::stopProcessing()
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     if (d != nullptr && d->processing &&
@@ -702,7 +882,7 @@ void ClapAudioEffectInstance::stopProcessing()
 #endif
 }
 
-bool ClapAudioEffectInstance::process(float& left, float& right)
+bool ClapAudioPluginInstance::process(float& left, float& right)
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     if (!isValid())
@@ -713,7 +893,10 @@ bool ClapAudioEffectInstance::process(float& left, float& right)
     if (!d->processing)
     {
         if (d->plugin->start_processing == nullptr || !d->plugin->start_processing(d->plugin))
+        {
+            d->pendingInstrumentEventCount = 0;
             return false;
+        }
         d->processing = true;
         d->processingThread = std::this_thread::get_id();
     }
@@ -722,7 +905,7 @@ bool ClapAudioEffectInstance::process(float& left, float& right)
     for (size_t index = 0; index < d->controlValues.size(); ++index)
     {
         const float value = d->controlValues[index];
-        const ClapEffectParameter& parameter =
+        const ClapPluginParameter& parameter =
             d->descriptor.parameters[static_cast<qsizetype>(index)];
         if (parameter.readOnly)
         {
@@ -752,14 +935,14 @@ bool ClapAudioEffectInstance::process(float& left, float& right)
 
     if (d->hostContext.flushRequested.exchange(false, std::memory_order_acq_rel) &&
         d->params != nullptr && d->params->flush != nullptr)
-        d->params->flush(d->plugin, &d->inputEvents, &d->outputEvents);
+        d->params->flush(d->plugin, &d->parameterEvents, &d->outputEvents);
 
     d->inputLeft = left;
     d->inputRight = right;
     d->monoInput = (left + right) * 0.5f;
     d->outputLeft = d->outputRight = d->monoOutput = 0.0f;
     clap_audio_buffer_t inputBuffer{};
-    inputBuffer.data32 = d->inputChannels;
+    inputBuffer.data32 = d->kind == ClapPluginKind::Instrument ? nullptr : d->inputChannels;
     inputBuffer.channel_count = d->descriptor.inputChannels;
     clap_audio_buffer_t outputBuffer{};
     outputBuffer.data32 = d->outputChannels;
@@ -768,13 +951,14 @@ bool ClapAudioEffectInstance::process(float& left, float& right)
     clap_process_t process{};
     process.steady_time = d->steadyTime++;
     process.frames_count = 1;
-    process.audio_inputs = &inputBuffer;
+    process.audio_inputs = d->kind == ClapPluginKind::Instrument ? nullptr : &inputBuffer;
     process.audio_outputs = &outputBuffer;
-    process.audio_inputs_count = 1;
+    process.audio_inputs_count = d->kind == ClapPluginKind::Instrument ? 0 : 1;
     process.audio_outputs_count = 1;
     process.in_events = &d->inputEvents;
     process.out_events = &d->outputEvents;
     const clap_process_status status = d->plugin->process(d->plugin, &process);
+    d->pendingInstrumentEventCount = 0;
     if (status == CLAP_PROCESS_ERROR)
         return false;
     if (outputBuffer.channel_count == 1)

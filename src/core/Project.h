@@ -19,7 +19,8 @@ enum class InstrumentType
 {
     Synth,
     DrumRack,
-    Audio
+    Audio,
+    ClapInstrument
 };
 
 enum class AudioFadeCurve
@@ -251,6 +252,10 @@ struct InstrumentTrack
     quint64 id = 0;
     QString name = QStringLiteral("Synth");
     InstrumentType instrumentType = InstrumentType::Synth;
+    QString clapPluginId;
+    QString clapPluginName;
+    QString clapPluginState;
+    QVector<float> clapParameterValues;
     SynthWaveform waveform = SynthWaveform::Sine;
     bool secondOscillatorEnabled = false;
     SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
