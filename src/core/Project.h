@@ -197,10 +197,16 @@ enum class MixerEffectType
     Reverb,
     Compressor,
     LowPass,
-    Lv2Plugin
+    Lv2Plugin,
+    ClapPlugin
 };
 
-inline constexpr qsizetype maximumLv2PluginStateBytes = 1024 * 1024;
+inline bool isPluginEffect(MixerEffectType type)
+{
+    return type == MixerEffectType::Lv2Plugin || type == MixerEffectType::ClapPlugin;
+}
+
+inline constexpr qsizetype maximumPluginStateBytes = 1024 * 1024;
 
 struct MixerEffect
 {

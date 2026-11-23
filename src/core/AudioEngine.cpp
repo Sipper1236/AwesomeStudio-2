@@ -311,36 +311,36 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
     }
 }
 
-void AudioEngine::setLiveLv2ParameterOverride(quint64 trackId, qsizetype effectIndex,
-                                             qsizetype parameterIndex, float value)
+void AudioEngine::setLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
+                                                 qsizetype parameterIndex, float value)
 {
     if (trackId == 0 || effectIndex < 0 || effectIndex >= 8 ||
         parameterIndex < 0 || parameterIndex >= 256 || !std::isfinite(value))
         return;
-    const bool sameTarget = liveLv2TrackId.load(std::memory_order_acquire) == trackId &&
-        liveLv2EffectIndex.load(std::memory_order_relaxed) == effectIndex &&
-        liveLv2ParameterIndex.load(std::memory_order_relaxed) == parameterIndex;
+    const bool sameTarget = livePluginTrackId.load(std::memory_order_acquire) == trackId &&
+        livePluginEffectIndex.load(std::memory_order_relaxed) == effectIndex &&
+        livePluginParameterIndex.load(std::memory_order_relaxed) == parameterIndex;
     if (!sameTarget)
     {
-        liveLv2ParameterOverrideActive.store(false, std::memory_order_release);
-        liveLv2TrackId.store(trackId, std::memory_order_relaxed);
-        liveLv2EffectIndex.store(effectIndex, std::memory_order_relaxed);
-        liveLv2ParameterIndex.store(parameterIndex, std::memory_order_relaxed);
+        livePluginParameterOverrideActive.store(false, std::memory_order_release);
+        livePluginTrackId.store(trackId, std::memory_order_relaxed);
+        livePluginEffectIndex.store(effectIndex, std::memory_order_relaxed);
+        livePluginParameterIndex.store(parameterIndex, std::memory_order_relaxed);
     }
-    liveLv2ParameterValue.store(value, std::memory_order_release);
-    liveLv2ParameterOverrideActive.store(true, std::memory_order_release);
+    livePluginParameterValue.store(value, std::memory_order_release);
+    livePluginParameterOverrideActive.store(true, std::memory_order_release);
 }
 
-void AudioEngine::clearLiveLv2ParameterOverride(quint64 trackId, qsizetype effectIndex,
-                                               qsizetype parameterIndex)
+void AudioEngine::clearLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
+                                                   qsizetype parameterIndex)
 {
-    if (liveLv2TrackId.load(std::memory_order_acquire) == trackId &&
-        liveLv2EffectIndex.load(std::memory_order_relaxed) == effectIndex &&
-        liveLv2ParameterIndex.load(std::memory_order_relaxed) == parameterIndex)
-        liveLv2ParameterOverrideActive.store(false, std::memory_order_release);
+    if (livePluginTrackId.load(std::memory_order_acquire) == trackId &&
+        livePluginEffectIndex.load(std::memory_order_relaxed) == effectIndex &&
+        livePluginParameterIndex.load(std::memory_order_relaxed) == parameterIndex)
+        livePluginParameterOverrideActive.store(false, std::memory_order_release);
 }
 
-void AudioEngine::captureLv2PluginStates(ProjectData& project)
+void AudioEngine::capturePluginStates(ProjectData& project)
 {
     const bool resumeSink = sink != nullptr && sink->state() == QAudio::ActiveState;
     if (resumeSink)
@@ -369,8 +369,16 @@ void AudioEngine::captureLv2PluginStates(ProjectData& project)
     const auto renderState = std::atomic_load_explicit(&preparedRenderState,
                                                         std::memory_order_acquire);
     if (renderState != nullptr && renderState->renderer != nullptr)
-        renderState->renderer->captureLv2PluginStates(project);
+        renderState->renderer->capturePluginStates(project);
     captureExit.finish();
+}
+
+void AudioEngine::servicePluginCallbacks()
+{
+    const auto renderState = std::atomic_load_explicit(&preparedRenderState,
+                                                        std::memory_order_acquire);
+    if (renderState != nullptr && renderState->renderer != nullptr)
+        renderState->renderer->servicePluginCallbacks();
 }
 
 void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity,
@@ -998,6 +1006,11 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         return 0;
     const auto& project = renderState->project;
     SynthRenderer& renderer = *renderState->renderer;
+    struct ClapProcessingExit
+    {
+        SynthRenderer& renderer;
+        ~ClapProcessingExit() { renderer.stopClapProcessing(); }
+    } clapProcessingExit{renderer};
     renderer.resetTrackPeakLevels();
     renderer.resetBusPeakLevels();
     liveMidiBlockPeaks.fill(0.0f);
@@ -1009,22 +1022,22 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         renderer.setLiveTrackMixOverride(index, 1,
             liveTrackPans[index].load(std::memory_order_acquire));
     }
-    const quint64 liveLv2TrackId = this->liveLv2TrackId.load(std::memory_order_acquire);
-    const qsizetype liveLv2EffectIndex = this->liveLv2EffectIndex.load(std::memory_order_relaxed);
-    const qsizetype liveLv2ParameterIndex = this->liveLv2ParameterIndex.load(std::memory_order_relaxed);
-    if (liveLv2TrackId != 0 && liveLv2EffectIndex >= 0 && liveLv2ParameterIndex >= 0)
+    const quint64 livePluginTrackId = this->livePluginTrackId.load(std::memory_order_acquire);
+    const qsizetype livePluginEffectIndex = this->livePluginEffectIndex.load(std::memory_order_relaxed);
+    const qsizetype livePluginParameterIndex = this->livePluginParameterIndex.load(std::memory_order_relaxed);
+    if (livePluginTrackId != 0 && livePluginEffectIndex >= 0 && livePluginParameterIndex >= 0)
     {
         for (size_t trackIndex = 0;
              trackIndex < static_cast<size_t>(project->tracks.size()) &&
                  trackIndex < maximumTrackCount; ++trackIndex)
         {
-            if (project->tracks[static_cast<qsizetype>(trackIndex)].id != liveLv2TrackId)
+            if (project->tracks[static_cast<qsizetype>(trackIndex)].id != livePluginTrackId)
                 continue;
-            const float liveValue = liveLv2ParameterOverrideActive.load(std::memory_order_acquire)
-                ? this->liveLv2ParameterValue.load(std::memory_order_acquire)
+            const float liveValue = livePluginParameterOverrideActive.load(std::memory_order_acquire)
+                ? this->livePluginParameterValue.load(std::memory_order_acquire)
                 : std::numeric_limits<float>::quiet_NaN();
-            renderer.setLiveLv2ParameterOverride(
-                trackIndex, liveLv2EffectIndex, liveLv2ParameterIndex, liveValue);
+            renderer.setLivePluginParameterOverride(
+                trackIndex, livePluginEffectIndex, livePluginParameterIndex, liveValue);
             break;
         }
     }

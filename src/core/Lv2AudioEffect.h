@@ -16,6 +16,8 @@ struct Lv2EffectParameter
     float defaultValue = 0.0f;
     bool integer = false;
     bool toggled = false;
+    bool hidden = false;
+    bool readOnly = false;
     std::uint32_t portIndex = 0;
 };
 

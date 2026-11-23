@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 38;
+constexpr int currentProjectVersion = 39;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -192,7 +192,7 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
         }
         const QJsonObject object = effectValue.toObject();
         const int type = object.value(QStringLiteral("type")).toInt(-1);
-        if (type < 0 || type > (version >= 34 ? 4 : 3))
+        if (type < 0 || type > (version >= 39 ? 5 : version >= 34 ? 4 : 3))
         {
             setError(error, QStringLiteral("The %1 contains an unsupported effect type.").arg(ownerName));
             return false;
@@ -264,7 +264,7 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
                 }
                 effect.pluginParameterValues.push_back(static_cast<float>(number));
             }
-            if (effect.type == MixerEffectType::Lv2Plugin && effect.pluginUri.isEmpty())
+            if (isPluginEffect(effect.type) && effect.pluginUri.isEmpty())
             {
                 setError(error, QStringLiteral("The %1 contains a plugin effect without a URI.")
                                     .arg(ownerName));
@@ -300,7 +300,7 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
                 return false;
             }
             effect.pluginState = stateValue.toString();
-            if (effect.pluginState.toUtf8().size() > maximumLv2PluginStateBytes)
+            if (effect.pluginState.toUtf8().size() > maximumPluginStateBytes)
             {
                 setError(error, QStringLiteral("The %1 contains plugin state larger than 1 MiB.")
                                     .arg(ownerName));
@@ -850,7 +850,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
     {
         return std::all_of(effects.cbegin(), effects.cend(), [](const MixerEffect& effect)
         {
-            return effect.pluginState.toUtf8().size() <= maximumLv2PluginStateBytes;
+            return effect.pluginState.toUtf8().size() <= maximumPluginStateBytes;
         });
     };
     if (!statesAreWithinLimit(safeProject.masterEffects) ||
@@ -861,7 +861,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
                      [&statesAreWithinLimit](const MixerBus& bus)
                      { return statesAreWithinLimit(bus.effects); }))
     {
-        setError(error, QStringLiteral("An LV2 plugin state is larger than 1 MiB; the project was not saved."));
+        setError(error, QStringLiteral("A plugin state is larger than 1 MiB; the project was not saved."));
         return false;
     }
 

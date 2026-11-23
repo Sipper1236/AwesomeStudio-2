@@ -28,6 +28,8 @@ add_executable(AwesomeStudio
     src/core/AudioFile.h
     src/core/Lv2AudioEffect.cpp
     src/core/Lv2AudioEffect.h
+    src/core/ClapAudioEffect.cpp
+    src/core/ClapAudioEffect.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
     src/core/MidiFile.cpp
@@ -48,9 +50,14 @@ add_executable(AwesomeStudio
     src/ui/MidiEditor.h
 )
 
-target_include_directories(AwesomeStudio PRIVATE src)
+target_include_directories(AwesomeStudio PRIVATE src third_party/clap/include)
 target_link_libraries(AwesomeStudio PRIVATE Qt6::Widgets Qt6::Multimedia)
+target_link_libraries(AwesomeStudio PRIVATE ${CMAKE_DL_LIBS})
 target_compile_features(AwesomeStudio PRIVATE cxx_std_17)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(AwesomeStudio PRIVATE AWESOME_STUDIO_HAS_CLAP=1)
+endif()
 
 if(TARGET PkgConfig::ALSA)
     target_link_libraries(AwesomeStudio PRIVATE PkgConfig::ALSA)

@@ -2,6 +2,7 @@
 
 #include "core/AudioFile.h"
 #include "core/AudioRecorder.h"
+#include "core/ClapAudioEffect.h"
 #include "core/ProjectFile.h"
 #include "core/MidiFile.h"
 #include "core/MidiInput.h"
@@ -129,7 +130,7 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
         effectIndex >= track.effects.size())
         return nullptr;
     const MixerEffect& effect = track.effects[effectIndex];
-    if (effect.type != MixerEffectType::Lv2Plugin || pluginUri.isEmpty() || effect.pluginUri != pluginUri)
+    if (!isPluginEffect(effect.type) || pluginUri.isEmpty() || effect.pluginUri != pluginUri)
         return nullptr;
     static const QVector<AutomationPoint> empty;
     if (parameterIndex >= effect.pluginParameterAutomation.size())
@@ -150,7 +151,7 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         effectIndex >= track.effects.size())
         return nullptr;
     MixerEffect& effect = track.effects[effectIndex];
-    if (effect.type != MixerEffectType::Lv2Plugin || pluginUri.isEmpty() || effect.pluginUri != pluginUri)
+    if (!isPluginEffect(effect.type) || pluginUri.isEmpty() || effect.pluginUri != pluginUri)
         return nullptr;
     while (effect.pluginParameterAutomation.size() <= parameterIndex)
         effect.pluginParameterAutomation.push_back({});
@@ -184,17 +185,47 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
         for (qsizetype effectIndex = 0; effectIndex < track->effects.size(); ++effectIndex)
         {
             const MixerEffect& effect = track->effects[effectIndex];
-            if (effect.type != MixerEffectType::Lv2Plugin)
+            if (!isPluginEffect(effect.type))
                 continue;
-            Lv2EffectDescriptor descriptor;
-            if (!Lv2AudioEffectInstance::describe(effect.pluginUri, descriptor))
-                continue;
-            const QString pluginName = effect.pluginName.isEmpty() ? descriptor.name : effect.pluginName;
+            QVector<Lv2EffectParameter> parameters;
+            QString discoveredName;
+            if (effect.type == MixerEffectType::Lv2Plugin)
+            {
+                Lv2EffectDescriptor descriptor;
+                if (!Lv2AudioEffectInstance::describe(effect.pluginUri, descriptor))
+                    continue;
+                parameters = descriptor.parameters;
+                discoveredName = descriptor.name;
+            }
+            else
+            {
+                ClapEffectDescriptor descriptor;
+                if (!ClapAudioEffectInstance::describe(effect.pluginUri, descriptor))
+                    continue;
+                discoveredName = descriptor.name;
+                for (const ClapEffectParameter& parameter : descriptor.parameters)
+                {
+                    Lv2EffectParameter converted;
+                    converted.symbol = QString::number(parameter.id);
+                    converted.name = parameter.name;
+                    converted.minimum = parameter.minimum;
+                    converted.maximum = parameter.maximum;
+                    converted.defaultValue = parameter.defaultValue;
+                    converted.integer = parameter.integer;
+                    converted.toggled = parameter.toggled;
+                    converted.hidden = parameter.hidden;
+                    converted.readOnly = parameter.readOnly;
+                    parameters.push_back(std::move(converted));
+                }
+            }
+            const QString pluginName = effect.pluginName.isEmpty() ? discoveredName : effect.pluginName;
             for (qsizetype parameterIndex = 0;
-                 parameterIndex < descriptor.parameters.size() && parameterIndex < pluginParametersPerEffect;
+                 parameterIndex < parameters.size() && parameterIndex < pluginParametersPerEffect;
                  ++parameterIndex)
             {
-                const Lv2EffectParameter& parameter = descriptor.parameters[parameterIndex];
+                const Lv2EffectParameter& parameter = parameters[parameterIndex];
+                if (parameter.hidden || parameter.readOnly)
+                    continue;
                 const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
                     ? effect.pluginParameterValues[parameterIndex] : parameter.defaultValue;
                 addTarget(QObject::tr("%1 · %2 · %3")
@@ -481,21 +512,50 @@ WavExportOptions& previousWavExportOptions()
 bool chooseMixerEffect(QWidget* parent, MixerEffectType type, MixerEffect& effect, QString& error)
 {
     effect = defaultMixerEffect(type);
-    if (type != MixerEffectType::Lv2Plugin)
+    if (!isPluginEffect(type))
         return true;
 
-    const QVector<Lv2EffectDescriptor> plugins = Lv2AudioEffectInstance::availableEffects();
+    if (type == MixerEffectType::Lv2Plugin)
+    {
+        const QVector<Lv2EffectDescriptor> plugins = Lv2AudioEffectInstance::availableEffects();
+        if (plugins.isEmpty())
+        {
+            error = QObject::tr("No real-time-safe LV2 audio effects are installed.");
+            return false;
+        }
+        QStringList choices;
+        choices.reserve(plugins.size());
+        for (const Lv2EffectDescriptor& plugin : plugins)
+            choices.push_back(QStringLiteral("%1 — %2").arg(plugin.name, plugin.uri));
+        bool accepted = false;
+        const QString selected = QInputDialog::getItem(parent, QObject::tr("Add LV2 effect"),
+            QObject::tr("Audio effect"), choices, 0, false, &accepted);
+        if (!accepted)
+            return false;
+        const int index = choices.indexOf(selected);
+        if (index < 0)
+            return false;
+        const Lv2EffectDescriptor& plugin = plugins[index];
+        effect.pluginUri = plugin.uri;
+        effect.pluginName = plugin.name;
+        for (const Lv2EffectParameter& parameter : plugin.parameters)
+            effect.pluginParameterValues.push_back(parameter.defaultValue);
+        return true;
+    }
+
+    const QVector<ClapEffectDescriptor> plugins = ClapAudioEffectInstance::availableEffects();
     if (plugins.isEmpty())
     {
-        error = QObject::tr("No real-time-safe LV2 audio effects are installed.");
+        error = QObject::tr("No CLAP audio effects were found in the standard plug-in folders or CLAP_PATH.");
         return false;
     }
     QStringList choices;
     choices.reserve(plugins.size());
-    for (const Lv2EffectDescriptor& plugin : plugins)
-        choices.push_back(QStringLiteral("%1 — %2").arg(plugin.name, plugin.uri));
+    for (const ClapEffectDescriptor& plugin : plugins)
+        choices.push_back(QStringLiteral("%1 — %2 — %3")
+                               .arg(plugin.name, plugin.vendor, plugin.id));
     bool accepted = false;
-    const QString selected = QInputDialog::getItem(parent, QObject::tr("Add LV2 effect"),
+    const QString selected = QInputDialog::getItem(parent, QObject::tr("Add CLAP effect"),
         QObject::tr("Audio effect"), choices, 0, false, &accepted);
     if (!accepted)
         return false;
@@ -503,10 +563,10 @@ bool chooseMixerEffect(QWidget* parent, MixerEffectType type, MixerEffect& effec
     if (index < 0)
         return false;
 
-    const Lv2EffectDescriptor& plugin = plugins[index];
-    effect.pluginUri = plugin.uri;
+    const ClapEffectDescriptor& plugin = plugins[index];
+    effect.pluginUri = plugin.id;
     effect.pluginName = plugin.name;
-    for (const Lv2EffectParameter& parameter : plugin.parameters)
+    for (const ClapEffectParameter& parameter : plugin.parameters)
         effect.pluginParameterValues.push_back(parameter.defaultValue);
     return true;
 }
@@ -1169,6 +1229,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     uiTimer->setInterval(33);
     connect(uiTimer, &QTimer::timeout, this, [this]
     {
+        audioEngine.servicePluginCallbacks();
         const double beat = audioEngine.positionBeats();
         if (automationWriteSession.active)
         {
@@ -1534,14 +1595,14 @@ void MainWindow::createToolBars()
     arrangementBar->addSeparator();
     automationViewAction = new QAction(tr("Automation lanes"), this);
     automationViewAction->setCheckable(true);
-    automationViewAction->setToolTip(tr("Show and edit volume, pan, or LV2 control automation in the Playlist"));
+    automationViewAction->setToolTip(tr("Show and edit volume, pan, or LV2/CLAP parameter automation in the Playlist"));
     arrangementBar->addAction(automationViewAction);
     automationLaneParameterControl = new QComboBox(arrangementBar);
     automationLaneParameterControl->addItem(tr("Volume"), 0);
     automationLaneParameterControl->addItem(tr("Pan"), 1);
     automationLaneParameterControl->setMinimumWidth(190);
     automationLaneParameterControl->setEnabled(false);
-    automationLaneParameterControl->setToolTip(tr("Volume, pan, or LV2 control shown in the Playlist lanes"));
+    automationLaneParameterControl->setToolTip(tr("Volume, pan, or LV2/CLAP parameter shown in the Playlist lanes"));
     arrangementBar->addWidget(automationLaneParameterControl);
     automationWriteModeControl = new QComboBox(arrangementBar);
     automationWriteModeControl->addItem(tr("Touch"), 0);
@@ -1552,7 +1613,7 @@ void MainWindow::createToolBars()
     arrangementBar->addWidget(automationWriteModeControl);
     automationWriteAction = new QAction(tr("Write automation"), this);
     automationWriteAction->setCheckable(true);
-    automationWriteAction->setToolTip(tr("Record the selected track volume, pan, or LV2 control while the transport plays"));
+    automationWriteAction->setToolTip(tr("Record the selected track volume, pan, or LV2/CLAP parameter while the transport plays"));
     arrangementBar->addAction(automationWriteAction);
     automationWriteIdleTimer = new QTimer(this);
     automationWriteIdleTimer->setSingleShot(true);
@@ -2782,7 +2843,9 @@ void MainWindow::refreshMixer()
                 effect.type == MixerEffectType::Reverb ? tr("Reverb") :
                 effect.type == MixerEffectType::Compressor ? tr("Compressor") :
                 effect.type == MixerEffectType::LowPass ? tr("Low-pass filter") :
-                effect.pluginName.isEmpty() ? tr("LV2 plug-in") : effect.pluginName;
+                effect.pluginName.isEmpty()
+                    ? effect.type == MixerEffectType::ClapPlugin ? tr("CLAP plug-in") : tr("LV2 plug-in")
+                    : effect.pluginName;
             auto* effectBox = new QGroupBox(tr("%1. %2").arg(index + 1).arg(effectName), chain);
             auto* effectForm = new QFormLayout(effectBox);
             auto* stateRow = new QWidget(effectBox);
@@ -2859,19 +2922,54 @@ void MainWindow::refreshMixer()
                                 0.5f, 1, tr(" dB"), index, updateEffect,
                                 [](MixerEffect& target, float value) { target.makeupDb = value; });
             }
-            else if (effect.type == MixerEffectType::Lv2Plugin)
+            else if (isPluginEffect(effect.type))
             {
                 auto* pluginUri = new QLabel(effect.pluginUri, effectBox);
                 pluginUri->setWordWrap(true);
                 pluginUri->setTextInteractionFlags(Qt::TextSelectableByMouse);
-                effectForm->addRow(tr("LV2 URI"), pluginUri);
-                Lv2EffectDescriptor descriptor;
-                if (Lv2AudioEffectInstance::describe(effect.pluginUri, descriptor))
+                effectForm->addRow(effect.type == MixerEffectType::Lv2Plugin
+                                       ? tr("LV2 URI") : tr("CLAP ID"), pluginUri);
+                QVector<Lv2EffectParameter> parameters;
+                bool pluginAvailable = false;
+                if (effect.type == MixerEffectType::Lv2Plugin)
+                {
+                    Lv2EffectDescriptor descriptor;
+                    if (Lv2AudioEffectInstance::describe(effect.pluginUri, descriptor))
+                    {
+                        parameters = descriptor.parameters;
+                        pluginAvailable = true;
+                    }
+                }
+                else if (effect.type == MixerEffectType::ClapPlugin)
+                {
+                    ClapEffectDescriptor descriptor;
+                    if (ClapAudioEffectInstance::describe(effect.pluginUri, descriptor))
+                    {
+                        pluginAvailable = true;
+                        for (const ClapEffectParameter& clapParameter : descriptor.parameters)
+                        {
+                            Lv2EffectParameter parameter;
+                            parameter.symbol = QString::number(clapParameter.id);
+                            parameter.name = clapParameter.name;
+                            parameter.minimum = clapParameter.minimum;
+                            parameter.maximum = clapParameter.maximum;
+                            parameter.defaultValue = clapParameter.defaultValue;
+                            parameter.integer = clapParameter.integer;
+                            parameter.toggled = clapParameter.toggled;
+                            parameter.hidden = clapParameter.hidden;
+                            parameter.readOnly = clapParameter.readOnly;
+                            parameters.push_back(std::move(parameter));
+                        }
+                    }
+                }
+                if (pluginAvailable)
                 {
                     for (qsizetype parameterIndex = 0;
-                         parameterIndex < descriptor.parameters.size(); ++parameterIndex)
+                         parameterIndex < parameters.size(); ++parameterIndex)
                     {
-                        const Lv2EffectParameter parameter = descriptor.parameters[parameterIndex];
+                        const Lv2EffectParameter parameter = parameters[parameterIndex];
+                        if (parameter.hidden || parameter.readOnly)
+                            continue;
                         const float value = parameterIndex < effect.pluginParameterValues.size()
                             ? effect.pluginParameterValues[parameterIndex] : parameter.defaultValue;
                         const float step = parameter.toggled || parameter.integer ? 1.0f :
@@ -2916,7 +3014,7 @@ void MainWindow::refreshMixer()
                                 if (track == nullptr || index < 0 || index >= track->effects.size())
                                     return;
                                 const MixerEffect& currentEffect = track->effects[index];
-                                if (currentEffect.type != MixerEffectType::Lv2Plugin ||
+                                if (!isPluginEffect(currentEffect.type) ||
                                     currentEffect.pluginUri != targetUri)
                                     return;
                                 const float baseValue = parameterIndex < currentEffect.pluginParameterValues.size()
@@ -2991,6 +3089,9 @@ void MainWindow::refreshMixer()
         type->addItem(tr("Compressor"), static_cast<int>(MixerEffectType::Compressor));
         type->addItem(tr("Low-pass filter"), static_cast<int>(MixerEffectType::LowPass));
         type->addItem(tr("LV2 plug-in…"), static_cast<int>(MixerEffectType::Lv2Plugin));
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+        type->addItem(tr("CLAP plug-in…"), static_cast<int>(MixerEffectType::ClapPlugin));
+#endif
         auto* add = new QPushButton(tr("Add effect"), addRow);
         add->setEnabled(canAddEffect && effects.size() < 8);
         addLayout->addWidget(type, 1);
@@ -4714,7 +4815,7 @@ void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float valu
     if (pluginUri.isEmpty())
         audioEngine.setLiveTrackMixOverride(trackId, parameter, initialWriteValue);
     else
-        audioEngine.setLiveLv2ParameterOverride(trackId, effectIndex, parameterIndex, initialWriteValue);
+        audioEngine.setLivePluginParameterOverride(trackId, effectIndex, parameterIndex, initialWriteValue);
 }
 
 void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float value)
@@ -4765,8 +4866,8 @@ void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float val
     if (automationWriteSession.pluginUri.isEmpty())
         audioEngine.setLiveTrackMixOverride(trackId, parameter, writeValue);
     else
-        audioEngine.setLiveLv2ParameterOverride(trackId, automationWriteSession.effectIndex,
-                                                automationWriteSession.parameterIndex, writeValue);
+        audioEngine.setLivePluginParameterOverride(trackId, automationWriteSession.effectIndex,
+                                                   automationWriteSession.parameterIndex, writeValue);
 }
 
 void MainWindow::finishAutomationWrite()
@@ -4779,8 +4880,8 @@ void MainWindow::finishAutomationWrite()
     if (session.pluginUri.isEmpty())
         audioEngine.clearLiveTrackMixOverride(session.trackId, session.parameter);
     else
-        audioEngine.clearLiveLv2ParameterOverride(session.trackId, session.effectIndex,
-                                                  session.parameterIndex);
+        audioEngine.clearLivePluginParameterOverride(session.trackId, session.effectIndex,
+                                                     session.parameterIndex);
 
     InstrumentTrack* track = project.findTrack(session.trackId);
     if (track == nullptr)
@@ -5110,7 +5211,7 @@ bool MainWindow::saveToPath(const QString& path)
         finishAudioRecording(true);
     if (midiRecordingActive || midiRecordingPending)
         finishMidiRecording(true);
-    audioEngine.captureLv2PluginStates(project);
+    audioEngine.capturePluginStates(project);
     QString savePath = path;
     if (QFileInfo(savePath).suffix().isEmpty())
         savePath += QStringLiteral(".aws");
@@ -5170,7 +5271,7 @@ void MainWindow::savePortableProjectCopy()
     if (midiRecordingActive || midiRecordingPending)
         finishMidiRecording(true);
 
-    audioEngine.captureLv2PluginStates(project);
+    audioEngine.capturePluginStates(project);
     ProjectData portable = project;
     portable.normalize();
     const QFileInfo targetInfo(savePath);
@@ -5363,7 +5464,7 @@ void MainWindow::autosaveProject()
     QString error;
     const QString path = projectPath.isEmpty()
         ? unsavedSessionAutosavePath() : projectAutosavePath(projectPath);
-    audioEngine.captureLv2PluginStates(project);
+    audioEngine.capturePluginStates(project);
     if (!ProjectFile::save(path, project, &error))
         statusBar()->showMessage(tr("Autosave failed: %1").arg(error), 6000);
 }

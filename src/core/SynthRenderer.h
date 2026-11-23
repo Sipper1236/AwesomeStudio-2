@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ClapAudioEffect.h"
 #include "Lv2AudioEffect.h"
 #include "Project.h"
 
@@ -27,9 +28,11 @@ public:
     StereoSample processMasterEffects(StereoSample input);
     double effectTailSeconds() const;
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
-    void setLiveLv2ParameterOverride(size_t trackIndex, qsizetype effectIndex,
-                                     qsizetype parameterIndex, float value);
-    void captureLv2PluginStates(ProjectData& target) const;
+    void setLivePluginParameterOverride(size_t trackIndex, qsizetype effectIndex,
+                                        qsizetype parameterIndex, float value);
+    void capturePluginStates(ProjectData& target) const;
+    void servicePluginCallbacks();
+    void stopClapProcessing();
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
     float trackPeakLevel(size_t trackIndex) const;
@@ -152,6 +155,7 @@ private:
         std::array<float, 2> filterY2{};
         std::vector<float> liveParameterOverrides;
         std::unique_ptr<Lv2AudioEffectInstance> lv2Effect;
+        std::unique_ptr<ClapAudioEffectInstance> clapEffect;
         float filterB0 = 1.0f;
         float filterB1 = 0.0f;
         float filterB2 = 0.0f;
@@ -171,6 +175,7 @@ private:
     bool effectChainHasTail(const std::vector<EffectState>& states) const;
     void captureEffectStates(const std::vector<EffectState>& states,
                              QVector<MixerEffect>& target) const;
+    void serviceEffectCallbacks(std::vector<EffectState>& states);
     StereoSample processEffectChain(std::vector<EffectState>& states, StereoSample input);
 
     std::shared_ptr<const ProjectData> project;

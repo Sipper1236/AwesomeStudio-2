@@ -890,6 +890,17 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
                     static_cast<size_t>(state.lv2Effect->parameterCount()),
                     std::numeric_limits<float>::quiet_NaN());
         }
+        else if (effect.enabled && effect.wet > 0.0f &&
+                 effect.type == MixerEffectType::ClapPlugin && !effect.pluginUri.isEmpty())
+        {
+            state.clapEffect = std::make_unique<ClapAudioEffectInstance>(
+                effect.pluginUri, sampleRate, effect.pluginParameterValues,
+                effect.pluginState);
+            if (state.clapEffect != nullptr)
+                state.liveParameterOverrides.assign(
+                    static_cast<size_t>(state.clapEffect->parameterCount()),
+                    std::numeric_limits<float>::quiet_NaN());
+        }
         states.push_back(std::move(state));
     }
 }
@@ -1079,6 +1090,39 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
                 state.tailFramesRemaining = std::max(state.tailFramesRemaining,
                     static_cast<qint64>(std::ceil(5.0 * sampleRate)));
         }
+        else if (effect.type == MixerEffectType::ClapPlugin &&
+                 state.clapEffect != nullptr && state.clapEffect->isValid())
+        {
+            for (qsizetype parameterIndex = 0;
+                 parameterIndex < effect.pluginParameterAutomation.size(); ++parameterIndex)
+            {
+                const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
+                    ? effect.pluginParameterValues[parameterIndex] : 0.0f;
+                float value = automationValue(
+                    effect.pluginParameterAutomation[parameterIndex], currentBeat, defaultValue);
+                if (static_cast<size_t>(parameterIndex) < state.liveParameterOverrides.size() &&
+                    std::isfinite(state.liveParameterOverrides[static_cast<size_t>(parameterIndex)]))
+                    value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
+                state.clapEffect->setParameter(parameterIndex, value);
+            }
+            for (qsizetype parameterIndex = effect.pluginParameterAutomation.size();
+                 parameterIndex < static_cast<qsizetype>(state.liveParameterOverrides.size());
+                 ++parameterIndex)
+            {
+                const float value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
+                if (std::isfinite(value))
+                    state.clapEffect->setParameter(parameterIndex, value);
+            }
+            if (!state.clapEffect->process(wet.left, wet.right))
+                wet = dry;
+            if (!std::isfinite(wet.left) || !std::isfinite(wet.right))
+                wet = dry;
+            tailLevel = std::max(std::abs(wet.left), std::abs(wet.right));
+            if (std::max(std::abs(dry.left), std::abs(dry.right)) > 1.0e-5f ||
+                tailLevel > 1.0e-5f)
+                state.tailFramesRemaining = std::max(state.tailFramesRemaining,
+                    static_cast<qint64>(std::ceil(5.0 * sampleRate)));
+        }
 
         if (state.tailFramesRemaining > 0)
             --state.tailFramesRemaining;
@@ -1146,10 +1190,12 @@ double SynthRenderer::effectTailSeconds() const
                 seconds += std::min(4.0,
                     7.0 * effect.resonance / (3.14159265358979323846 * cutoff));
             }
-            else if (effect.type == MixerEffectType::Lv2Plugin &&
+            else if (isPluginEffect(effect.type) &&
                      static_cast<size_t>(index) < states.size() &&
-                     states[static_cast<size_t>(index)].lv2Effect != nullptr &&
-                     states[static_cast<size_t>(index)].lv2Effect->isValid())
+                     ((states[static_cast<size_t>(index)].lv2Effect != nullptr &&
+                       states[static_cast<size_t>(index)].lv2Effect->isValid()) ||
+                      (states[static_cast<size_t>(index)].clapEffect != nullptr &&
+                       states[static_cast<size_t>(index)].clapEffect->isValid())))
                 seconds += 5.0;
         }
         return seconds;
@@ -1200,8 +1246,8 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
         liveTrackMixOverrides[trackIndex].pan = value;
 }
 
-void SynthRenderer::setLiveLv2ParameterOverride(size_t trackIndex, qsizetype effectIndex,
-                                                qsizetype parameterIndex, float value)
+void SynthRenderer::setLivePluginParameterOverride(size_t trackIndex, qsizetype effectIndex,
+                                                   qsizetype parameterIndex, float value)
 {
     if (trackIndex >= trackEffectStates.size() || effectIndex < 0 ||
         effectIndex >= static_cast<qsizetype>(trackEffectStates[trackIndex].size()))
@@ -1221,19 +1267,21 @@ void SynthRenderer::captureEffectStates(const std::vector<EffectState>& states,
     {
         const EffectState& state = states[index];
         MixerEffect& effect = target[static_cast<qsizetype>(index)];
-        if (effect.type != MixerEffectType::Lv2Plugin ||
-            state.settings.type != MixerEffectType::Lv2Plugin ||
-            effect.pluginUri != state.settings.pluginUri || state.lv2Effect == nullptr ||
-            !state.lv2Effect->isValid())
+        if (!isPluginEffect(effect.type) || effect.type != state.settings.type ||
+            effect.pluginUri != state.settings.pluginUri)
             continue;
 
         QString savedState;
-        if (state.lv2Effect->saveState(savedState))
+        const bool saved = state.lv2Effect != nullptr && state.lv2Effect->isValid()
+            ? state.lv2Effect->saveState(savedState)
+            : state.clapEffect != nullptr && state.clapEffect->isValid()
+                ? state.clapEffect->saveState(savedState) : false;
+        if (saved)
             effect.pluginState = std::move(savedState);
     }
 }
 
-void SynthRenderer::captureLv2PluginStates(ProjectData& target) const
+void SynthRenderer::capturePluginStates(ProjectData& target) const
 {
     const size_t trackCount = std::min(trackEffectStates.size(),
                                        static_cast<size_t>(target.tracks.size()));
@@ -1246,6 +1294,37 @@ void SynthRenderer::captureLv2PluginStates(ProjectData& target) const
         captureEffectStates(busEffectStates[index], target.buses[static_cast<qsizetype>(index)].effects);
 
     captureEffectStates(masterEffectStates, target.masterEffects);
+}
+
+void SynthRenderer::serviceEffectCallbacks(std::vector<EffectState>& states)
+{
+    for (EffectState& state : states)
+        if (state.clapEffect != nullptr)
+            state.clapEffect->serviceMainThread();
+}
+
+void SynthRenderer::servicePluginCallbacks()
+{
+    for (std::vector<EffectState>& states : trackEffectStates)
+        serviceEffectCallbacks(states);
+    for (std::vector<EffectState>& states : busEffectStates)
+        serviceEffectCallbacks(states);
+    serviceEffectCallbacks(masterEffectStates);
+}
+
+void SynthRenderer::stopClapProcessing()
+{
+    const auto stopEffectProcessing = [](std::vector<EffectState>& states)
+    {
+        for (EffectState& state : states)
+            if (state.clapEffect != nullptr)
+                state.clapEffect->stopProcessing();
+    };
+    for (std::vector<EffectState>& states : trackEffectStates)
+        stopEffectProcessing(states);
+    for (std::vector<EffectState>& states : busEffectStates)
+        stopEffectProcessing(states);
+    stopEffectProcessing(masterEffectStates);
 }
 
 void SynthRenderer::resetTrackPeakLevels()

@@ -441,7 +441,7 @@ bool Lv2AudioEffectInstance::saveState(QString& pluginState) const
 
     const size_t serializedSize = std::strlen(serialized);
     if (serializedSize == 0 || serializedSize >
-        static_cast<size_t>(maximumLv2PluginStateBytes))
+        static_cast<size_t>(maximumPluginStateBytes))
     {
         lilv_free(serialized);
         return false;

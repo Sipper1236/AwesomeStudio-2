@@ -64,7 +64,7 @@ void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBud
     for (MixerEffect& effect : effects)
     {
         effect.type = static_cast<MixerEffectType>(
-            std::clamp(static_cast<int>(effect.type), 0, 4));
+            std::clamp(static_cast<int>(effect.type), 0, 5));
         if (!std::isfinite(effect.wet)) effect.wet = 0.25f;
         if (!std::isfinite(effect.delayMs)) effect.delayMs = 250.0f;
         if (!std::isfinite(effect.feedback)) effect.feedback = 0.3f;
@@ -106,7 +106,7 @@ MixerEffect defaultMixerEffect(MixerEffectType type)
     MixerEffect effect;
     effect.type = type;
     if (type == MixerEffectType::Compressor || type == MixerEffectType::LowPass ||
-        type == MixerEffectType::Lv2Plugin)
+        isPluginEffect(type))
         effect.wet = 1.0f;
     return effect;
 }

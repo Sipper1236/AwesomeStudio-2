@@ -863,7 +863,7 @@ private:
         if (effectIndex >= track.effects.size())
             return empty;
         const MixerEffect& effect = track.effects[effectIndex];
-        if (effect.type != MixerEffectType::Lv2Plugin || effect.pluginUri != automationPluginUri ||
+        if (!isPluginEffect(effect.type) || effect.pluginUri != automationPluginUri ||
             parameterIndex >= effect.pluginParameterAutomation.size())
             return empty;
         return effect.pluginParameterAutomation[parameterIndex];
@@ -883,7 +883,7 @@ private:
         if (effectIndex >= track.effects.size())
             return automationDefaultValue;
         const MixerEffect& effect = track.effects[effectIndex];
-        if (effect.type != MixerEffectType::Lv2Plugin || effect.pluginUri != automationPluginUri)
+        if (!isPluginEffect(effect.type) || effect.pluginUri != automationPluginUri)
             return automationDefaultValue;
         return parameterIndex < effect.pluginParameterValues.size()
             ? effect.pluginParameterValues[parameterIndex] : automationDefaultValue;
@@ -904,7 +904,7 @@ private:
         if (effectIndex >= track.effects.size())
             return invalid;
         MixerEffect& effect = track.effects[effectIndex];
-        if (effect.type != MixerEffectType::Lv2Plugin || effect.pluginUri != automationPluginUri)
+        if (!isPluginEffect(effect.type) || effect.pluginUri != automationPluginUri)
             return invalid;
         while (effect.pluginParameterAutomation.size() <= parameterIndex)
             effect.pluginParameterAutomation.push_back({});
@@ -922,7 +922,7 @@ private:
         if (effectIndex >= track.effects.size())
             return false;
         const MixerEffect& effect = track.effects[effectIndex];
-        return effect.type == MixerEffectType::Lv2Plugin && effect.pluginUri == automationPluginUri;
+        return isPluginEffect(effect.type) && effect.pluginUri == automationPluginUri;
     }
 
     int trackIndexForId(quint64 trackId) const
