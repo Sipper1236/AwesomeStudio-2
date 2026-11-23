@@ -6,7 +6,7 @@ Build a pattern-first digital audio workstation with a fast MIDI workflow and a 
 
 ## Shipped foundation
 
-The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, three-band EQ and volume/pan keyframe automation, mixer submix buses with track routing, one auxiliary send per track, and per-bus controls, per-clip piano rolls, waveform display, audio edge trimming and linear fades, a 16-step drum sequencer with four assignable sample pads, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
+The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, three-band EQ and volume/pan keyframe automation, mixer submix buses with track routing, one auxiliary send per track, and per-bus controls, per-clip piano rolls, waveform display, audio edge trimming and selectable linear, smooth, and equal-power fades, a 16-step drum sequencer with four assignable sample pads, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
 
 ## Roadmap
 
@@ -32,7 +32,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Standard MIDI File import/export (formats 0/1, PPQN)
 - [x] Count-in and metronome
 - [x] WAV audio import, Playlist playback, waveform display, and WAV render integration
-- [x] Basic audio region edge trimming and linear fades
+- [x] Basic audio region edge trimming and selectable linear, smooth, and equal-power fades
 - [x] One WAV sample assignment per drum rack pad with synthesized fallback
 - [x] Per-track Synth ADSR envelope controls in live playback and render
 - [x] Undoable per-track volume and pan keyframes with linear interpolation in live playback and WAV render
@@ -44,9 +44,9 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 ### 2. Arrangement and mixing
 
 - [x] Basic left/right edge trimming for WAV audio regions
-- [x] Undoable linear crossfades between overlapping audio regions
+- [x] Undoable equal-power crossfades between overlapping audio regions
 - [x] Named arrangement markers with ruler seeking and undoable editing
-- [ ] Curved fade envelopes, comping, and portable media packaging
+- [ ] Custom fade shapes, comping, and portable media packaging
 - [x] Mixer submix buses with track assignment, level/pan, mute/solo, and metering
 - [x] One post-track auxiliary send per track to a mixer bus
 - [ ] Multiple sends, nested routing, group buses, and effect inserts

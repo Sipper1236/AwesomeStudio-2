@@ -22,6 +22,13 @@ enum class InstrumentType
     Audio
 };
 
+enum class AudioFadeCurve
+{
+    Linear,
+    Smooth,
+    EqualPower
+};
+
 struct AudioAsset
 {
     static constexpr qint64 waveformBlockFrames = 256;
@@ -62,9 +69,13 @@ struct MidiClip
     qint64 audioStartFrame = 0;
     double audioFadeInBeats = 0.0;
     double audioFadeOutBeats = 0.0;
+    AudioFadeCurve audioFadeInCurve = AudioFadeCurve::Linear;
+    AudioFadeCurve audioFadeOutCurve = AudioFadeCurve::Linear;
 
     bool isAudioRegion() const { return !audioSourcePath.isEmpty(); }
 };
+
+float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress);
 
 struct DrumPadSample
 {

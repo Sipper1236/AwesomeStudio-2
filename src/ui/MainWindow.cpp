@@ -1154,6 +1154,18 @@ void MainWindow::createDocks()
     }
     audioFadeForm->addRow(tr("Fade in"), audioFadeInControl);
     audioFadeForm->addRow(tr("Fade out"), audioFadeOutControl);
+    const auto makeFadeCurveControl = [this]
+    {
+        auto* control = new QComboBox(audioRegionControls);
+        control->addItem(QObject::tr("Linear"), static_cast<int>(AudioFadeCurve::Linear));
+        control->addItem(QObject::tr("Smooth"), static_cast<int>(AudioFadeCurve::Smooth));
+        control->addItem(QObject::tr("Equal power"), static_cast<int>(AudioFadeCurve::EqualPower));
+        return control;
+    };
+    audioFadeInCurveControl = makeFadeCurveControl();
+    audioFadeOutCurveControl = makeFadeCurveControl();
+    audioFadeForm->addRow(tr("Fade-in curve"), audioFadeInCurveControl);
+    audioFadeForm->addRow(tr("Fade-out curve"), audioFadeOutCurveControl);
     audioCrossfadeButton = new QPushButton(tr("Create crossfade with overlapping region"), audioRegionControls);
     audioFadeForm->addRow(audioCrossfadeButton);
     browserLayout->addWidget(audioRegionControls);
@@ -1162,6 +1174,18 @@ void MainWindow::createDocks()
             [this](double beats) { setSelectedAudioFade(true, beats); });
     connect(audioFadeOutControl, &QDoubleSpinBox::valueChanged, this,
             [this](double beats) { setSelectedAudioFade(false, beats); });
+    connect(audioFadeInCurveControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index)
+    {
+        if (index >= 0)
+            setSelectedAudioFadeCurve(true, audioFadeInCurveControl->currentData().toInt());
+    });
+    connect(audioFadeOutCurveControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index)
+    {
+        if (index >= 0)
+            setSelectedAudioFadeCurve(false, audioFadeOutCurveControl->currentData().toInt());
+    });
     connect(audioCrossfadeButton, &QPushButton::clicked,
             this, &MainWindow::createSelectedAudioCrossfade);
 
@@ -1467,14 +1491,22 @@ void MainWindow::refreshProjectUi()
     const MidiClip* clip = selectedClip();
     const QSignalBlocker audioFadeInBlocker(audioFadeInControl);
     const QSignalBlocker audioFadeOutBlocker(audioFadeOutControl);
+    const QSignalBlocker audioFadeInCurveBlocker(audioFadeInCurveControl);
+    const QSignalBlocker audioFadeOutCurveBlocker(audioFadeOutCurveControl);
     const bool audioRegionSelected = clip != nullptr && clip->isAudioRegion();
     audioRegionControls->setVisible(audioRegionSelected);
     audioFadeInControl->setMaximum(audioRegionSelected ? clip->lengthBeats : 0.0);
     audioFadeOutControl->setMaximum(audioRegionSelected ? clip->lengthBeats : 0.0);
     audioFadeInControl->setValue(audioRegionSelected ? clip->audioFadeInBeats : 0.0);
     audioFadeOutControl->setValue(audioRegionSelected ? clip->audioFadeOutBeats : 0.0);
+    audioFadeInCurveControl->setCurrentIndex(audioRegionSelected
+        ? audioFadeInCurveControl->findData(static_cast<int>(clip->audioFadeInCurve)) : 0);
+    audioFadeOutCurveControl->setCurrentIndex(audioRegionSelected
+        ? audioFadeOutCurveControl->findData(static_cast<int>(clip->audioFadeOutCurve)) : 0);
     audioFadeInControl->setEnabled(audioRegionSelected);
     audioFadeOutControl->setEnabled(audioRegionSelected);
+    audioFadeInCurveControl->setEnabled(audioRegionSelected);
+    audioFadeOutCurveControl->setEnabled(audioRegionSelected);
     audioCrossfadeButton->setEnabled(audioRegionSelected && track != nullptr &&
         !overlappingAudioRegions(project, *track, *clip).isEmpty());
     const bool drumRackSelected = track != nullptr && track->instrumentType == InstrumentType::DrumRack;
@@ -2260,6 +2292,23 @@ void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
     refreshDirtyState();
 }
 
+void MainWindow::setSelectedAudioFadeCurve(bool fadeIn, int curve)
+{
+    MidiClip* clip = selectedClip();
+    if (clip == nullptr || !clip->isAudioRegion() || curve < 0 || curve > 2)
+        return;
+    const auto fadeCurve = static_cast<AudioFadeCurve>(curve);
+    AudioFadeCurve& current = fadeIn ? clip->audioFadeInCurve : clip->audioFadeOutCurve;
+    if (current == fadeCurve)
+        return;
+    current = fadeCurve;
+    audioEngine.setProject(project);
+    arrangementEditor->setProject(project);
+    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
 void MainWindow::createSelectedAudioCrossfade()
 {
     InstrumentTrack* track = selectedTrack();
@@ -2307,14 +2356,18 @@ void MainWindow::createSelectedAudioCrossfade()
     const MidiClip* outgoing = selected->startBeat < partner->startBeat ? selected : partner;
     const MidiClip* incoming = outgoing == selected ? partner : selected;
     QVector<AudioFadeState> before{
-        {outgoing->id, outgoing->audioFadeInBeats, outgoing->audioFadeOutBeats},
-        {incoming->id, incoming->audioFadeInBeats, incoming->audioFadeOutBeats}
+        {outgoing->id, outgoing->audioFadeInBeats, outgoing->audioFadeOutBeats,
+         outgoing->audioFadeInCurve, outgoing->audioFadeOutCurve},
+        {incoming->id, incoming->audioFadeInBeats, incoming->audioFadeOutBeats,
+         incoming->audioFadeInCurve, incoming->audioFadeOutCurve}
     };
     QVector<AudioFadeState> after = before;
     after[0].fadeOutBeats = overlapBeats;
     after[1].fadeInBeats = overlapBeats;
+    after[0].fadeOutCurve = AudioFadeCurve::EqualPower;
+    after[1].fadeInCurve = AudioFadeCurve::EqualPower;
     undoStack.push(new AudioFadeEditCommand(this, track->id, before, after));
-    statusBar()->showMessage(tr("Created a linear crossfade over %1 beats")
+    statusBar()->showMessage(tr("Created an equal-power crossfade over %1 beats")
                                  .arg(overlapBeats, 0, 'f', 2), 2500);
 }
 
@@ -2330,6 +2383,8 @@ void MainWindow::applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeS
             continue;
         clip->audioFadeInBeats = fade.fadeInBeats;
         clip->audioFadeOutBeats = fade.fadeOutBeats;
+        clip->audioFadeInCurve = fade.fadeInCurve;
+        clip->audioFadeOutCurve = fade.fadeOutCurve;
     }
     project.normalize();
     audioEngine.setProject(project);

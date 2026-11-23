@@ -54,6 +54,8 @@ private:
         qint64 sourceStartFrame = 0;
         qint64 fadeInFrames = 0;
         qint64 fadeOutFrames = 0;
+        AudioFadeCurve fadeInCurve = AudioFadeCurve::Linear;
+        AudioFadeCurve fadeOutCurve = AudioFadeCurve::Linear;
         size_t trackIndex = 0;
         float sourceGain = 1.0f;
         std::shared_ptr<const AudioAsset> source;

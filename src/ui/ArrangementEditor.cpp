@@ -275,15 +275,31 @@ protected:
                             {
                                 const double fadeWidth = std::min(waveBounds.width(),
                                     clip.audioFadeInBeats / clip.lengthBeats * waveBounds.width());
-                                painter.drawLine(QPointF(waveBounds.left(), centerY),
-                                                 QPointF(waveBounds.left() + fadeWidth, waveBounds.top() + 1));
+                                QPainterPath fadePath;
+                                fadePath.moveTo(waveBounds.left(), centerY);
+                                for (int step = 1; step <= 24; ++step)
+                                {
+                                    const double progress = static_cast<double>(step) / 24.0;
+                                    const float gain = audioFadeEnvelope(clip.audioFadeInCurve, true, progress);
+                                    const double y = centerY - gain * (centerY - waveBounds.top() - 1.0);
+                                    fadePath.lineTo(waveBounds.left() + fadeWidth * progress, y);
+                                }
+                                painter.drawPath(fadePath);
                             }
                             if (clip.audioFadeOutBeats > 0.0)
                             {
                                 const double fadeWidth = std::min(waveBounds.width(),
                                     clip.audioFadeOutBeats / clip.lengthBeats * waveBounds.width());
-                                painter.drawLine(QPointF(waveBounds.right() - fadeWidth, waveBounds.top() + 1),
-                                                 QPointF(waveBounds.right(), centerY));
+                                QPainterPath fadePath;
+                                fadePath.moveTo(waveBounds.right() - fadeWidth, waveBounds.top() + 1);
+                                for (int step = 1; step <= 24; ++step)
+                                {
+                                    const double progress = static_cast<double>(step) / 24.0;
+                                    const float gain = audioFadeEnvelope(clip.audioFadeOutCurve, false, progress);
+                                    const double y = centerY - gain * (centerY - waveBounds.top() - 1.0);
+                                    fadePath.lineTo(waveBounds.right() - fadeWidth + fadeWidth * progress, y);
+                                }
+                                painter.drawPath(fadePath);
                             }
                         }
                     }

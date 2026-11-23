@@ -40,6 +40,26 @@ void normalizeAutomation(QVector<AutomationPoint>& points, float minimum, float 
 }
 }
 
+float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress)
+{
+    const double position = std::clamp(progress, 0.0, 1.0);
+    switch (curve)
+    {
+        case AudioFadeCurve::Smooth:
+        {
+            const double smooth = position * position * (3.0 - 2.0 * position);
+            return static_cast<float>(fadeIn ? smooth : 1.0 - smooth);
+        }
+        case AudioFadeCurve::EqualPower:
+            return static_cast<float>(fadeIn
+                ? std::sin(position * 1.5707963267948966)
+                : std::cos(position * 1.5707963267948966));
+        case AudioFadeCurve::Linear:
+        default:
+            return static_cast<float>(fadeIn ? position : 1.0 - position);
+    }
+}
+
 bool MidiNote::operator==(const MidiNote& other) const
 {
     return id == other.id && pitch == other.pitch && velocity == other.velocity &&
@@ -287,6 +307,10 @@ void ProjectData::normalize()
                 clip.audioFadeOutBeats = 0.0;
             clip.audioFadeInBeats = std::clamp(clip.audioFadeInBeats, 0.0, clip.lengthBeats);
             clip.audioFadeOutBeats = std::clamp(clip.audioFadeOutBeats, 0.0, clip.lengthBeats);
+            clip.audioFadeInCurve = static_cast<AudioFadeCurve>(std::clamp(
+                static_cast<int>(clip.audioFadeInCurve), 0, 2));
+            clip.audioFadeOutCurve = static_cast<AudioFadeCurve>(std::clamp(
+                static_cast<int>(clip.audioFadeOutCurve), 0, 2));
             if (clip.audioSource != nullptr)
             {
                 if (clip.audioSourcePath.isEmpty())
