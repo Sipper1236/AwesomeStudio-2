@@ -66,6 +66,110 @@ namespace
 {
 constexpr double automationWritePointSpacingBeats = 0.04;
 
+struct FactorySynthPreset
+{
+    const char* name;
+    SynthWaveform waveform;
+    bool secondOscillatorEnabled;
+    SynthWaveform secondOscillatorWaveform;
+    float secondOscillatorDetuneCents;
+    float secondOscillatorMix;
+    float attackSeconds;
+    float decaySeconds;
+    float sustainLevel;
+    float releaseSeconds;
+    bool filterEnabled;
+    SynthFilterType filterType;
+    float filterCutoffHz;
+    float filterResonance;
+    bool filterEnvelopeEnabled;
+    float filterEnvelopeAmountSemitones;
+    float filterEnvelopeAttackSeconds;
+    float filterEnvelopeDecaySeconds;
+    float filterEnvelopeSustainLevel;
+    float filterEnvelopeReleaseSeconds;
+};
+
+constexpr std::array<FactorySynthPreset, 7> factorySynthPresets = {{
+    {"Deep Sub", SynthWaveform::Sine, false, SynthWaveform::Saw, 0.0f, 0.5f,
+     0.008f, 0.08f, 0.85f, 0.1f, true, SynthFilterType::LowPass, 360.0f, 0.707f,
+     false, 24.0f, 0.008f, 0.2f, 0.0f, 0.2f},
+    {"Rubber Bass", SynthWaveform::Triangle, true, SynthWaveform::Square, -7.0f, 0.22f,
+     0.004f, 0.18f, 0.62f, 0.1f, true, SynthFilterType::LowPass, 900.0f, 1.4f,
+     true, -16.0f, 0.005f, 0.15f, 0.18f, 0.12f},
+    {"Bright Lead", SynthWaveform::Saw, true, SynthWaveform::Square, 7.0f, 0.32f,
+     0.006f, 0.13f, 0.72f, 0.15f, true, SynthFilterType::LowPass, 5200.0f, 0.8f,
+     true, 18.0f, 0.012f, 0.2f, 0.32f, 0.14f},
+    {"Warm Pad", SynthWaveform::Triangle, true, SynthWaveform::Sine, -5.0f, 0.3f,
+     0.55f, 0.9f, 0.76f, 1.3f, true, SynthFilterType::LowPass, 2300.0f, 0.71f,
+     true, 9.0f, 0.5f, 0.8f, 0.3f, 0.8f},
+    {"Glass Keys", SynthWaveform::Sine, true, SynthWaveform::Triangle, 3.0f, 0.22f,
+     0.002f, 0.4f, 0.18f, 0.55f, true, SynthFilterType::LowPass, 8500.0f, 0.72f,
+     true, -6.0f, 0.001f, 0.4f, 0.05f, 0.4f},
+    {"Pluck", SynthWaveform::Saw, true, SynthWaveform::Triangle, 11.0f, 0.18f,
+     0.001f, 0.3f, 0.04f, 0.18f, true, SynthFilterType::LowPass, 1900.0f, 1.2f,
+     true, 30.0f, 0.001f, 0.25f, 0.0f, 0.15f},
+    {"Organ", SynthWaveform::Square, true, SynthWaveform::Sine, 0.0f, 0.28f,
+     0.005f, 0.05f, 0.95f, 0.08f, false, SynthFilterType::LowPass, 20000.0f, 0.707f,
+     false, 24.0f, 0.008f, 0.2f, 0.0f, 0.2f}
+}};
+
+bool samePresetFloat(float left, float right)
+{
+    return std::abs(left - right) < 0.001f;
+}
+
+bool matchesFactorySynthPreset(const InstrumentTrack& track, const FactorySynthPreset& preset)
+{
+    return track.waveform == preset.waveform &&
+        track.secondOscillatorEnabled == preset.secondOscillatorEnabled &&
+        track.secondOscillatorWaveform == preset.secondOscillatorWaveform &&
+        samePresetFloat(track.secondOscillatorDetuneCents, preset.secondOscillatorDetuneCents) &&
+        samePresetFloat(track.secondOscillatorMix, preset.secondOscillatorMix) &&
+        samePresetFloat(track.attackSeconds, preset.attackSeconds) &&
+        samePresetFloat(track.decaySeconds, preset.decaySeconds) &&
+        samePresetFloat(track.sustainLevel, preset.sustainLevel) &&
+        samePresetFloat(track.releaseSeconds, preset.releaseSeconds) &&
+        track.synthFilterEnabled == preset.filterEnabled &&
+        track.synthFilterType == preset.filterType &&
+        samePresetFloat(track.synthFilterCutoffHz, preset.filterCutoffHz) &&
+        samePresetFloat(track.synthFilterResonance, preset.filterResonance) &&
+        track.synthFilterEnvelopeEnabled == preset.filterEnvelopeEnabled &&
+        samePresetFloat(track.synthFilterEnvelopeAmountSemitones,
+                        preset.filterEnvelopeAmountSemitones) &&
+        samePresetFloat(track.synthFilterEnvelopeAttackSeconds,
+                        preset.filterEnvelopeAttackSeconds) &&
+        samePresetFloat(track.synthFilterEnvelopeDecaySeconds,
+                        preset.filterEnvelopeDecaySeconds) &&
+        samePresetFloat(track.synthFilterEnvelopeSustainLevel,
+                        preset.filterEnvelopeSustainLevel) &&
+        samePresetFloat(track.synthFilterEnvelopeReleaseSeconds,
+                        preset.filterEnvelopeReleaseSeconds);
+}
+
+void applyFactorySynthPreset(InstrumentTrack& track, const FactorySynthPreset& preset)
+{
+    track.waveform = preset.waveform;
+    track.secondOscillatorEnabled = preset.secondOscillatorEnabled;
+    track.secondOscillatorWaveform = preset.secondOscillatorWaveform;
+    track.secondOscillatorDetuneCents = preset.secondOscillatorDetuneCents;
+    track.secondOscillatorMix = preset.secondOscillatorMix;
+    track.attackSeconds = preset.attackSeconds;
+    track.decaySeconds = preset.decaySeconds;
+    track.sustainLevel = preset.sustainLevel;
+    track.releaseSeconds = preset.releaseSeconds;
+    track.synthFilterEnabled = preset.filterEnabled;
+    track.synthFilterType = preset.filterType;
+    track.synthFilterCutoffHz = preset.filterCutoffHz;
+    track.synthFilterResonance = preset.filterResonance;
+    track.synthFilterEnvelopeEnabled = preset.filterEnvelopeEnabled;
+    track.synthFilterEnvelopeAmountSemitones = preset.filterEnvelopeAmountSemitones;
+    track.synthFilterEnvelopeAttackSeconds = preset.filterEnvelopeAttackSeconds;
+    track.synthFilterEnvelopeDecaySeconds = preset.filterEnvelopeDecaySeconds;
+    track.synthFilterEnvelopeSustainLevel = preset.filterEnvelopeSustainLevel;
+    track.synthFilterEnvelopeReleaseSeconds = preset.filterEnvelopeReleaseSeconds;
+}
+
 float automationValueAt(const QVector<AutomationPoint>& points, double beat, float defaultValue)
 {
     if (points.isEmpty())
@@ -2043,6 +2147,26 @@ void MainWindow::createDocks()
     connect(clapInstrumentControlsButton, &QPushButton::clicked,
             this, &MainWindow::editSelectedClapInstrument);
     browserLayout->addWidget(clapInstrumentControlsButton);
+    synthPresetPanel = new QWidget(browser);
+    auto* synthPresetRow = new QHBoxLayout(synthPresetPanel);
+    synthPresetRow->setContentsMargins(0, 0, 0, 0);
+    auto* synthPresetLabel = new QLabel(tr("Preset"), synthPresetPanel);
+    synthPresetControl = new QComboBox(synthPresetPanel);
+    synthPresetControl->setPlaceholderText(tr("Custom"));
+    synthPresetControl->setToolTip(
+        tr("Factory presets set oscillator, amplitude, and filter settings. Editing them makes a custom sound."));
+    for (size_t index = 0; index < factorySynthPresets.size(); ++index)
+        synthPresetControl->addItem(tr(factorySynthPresets[index].name),
+                                    static_cast<int>(index));
+    synthPresetRow->addWidget(synthPresetLabel);
+    synthPresetRow->addWidget(synthPresetControl, 1);
+    connect(synthPresetControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index)
+    {
+        if (index >= 0)
+            applySelectedSynthPreset(synthPresetControl->itemData(index).toInt());
+    });
+    browserLayout->addWidget(synthPresetPanel);
     auto* oscillatorGroup = new QGroupBox(tr("OSCILLATORS"), browser);
     oscillatorPanel = oscillatorGroup;
     auto* oscillatorForm = new QFormLayout(oscillatorGroup);
@@ -2056,6 +2180,7 @@ void MainWindow::createDocks()
     {
         InstrumentTrack* track = selectedTrack();
         if (track == nullptr) return;
+        synthPresetControl->setCurrentIndex(-1);
         track->waveform = static_cast<SynthWaveform>(waveformControl->itemData(index).toInt());
         audioEngine.setProject(project);
         settingsDirty = true;
@@ -2803,6 +2928,7 @@ void MainWindow::refreshProjectUi()
     const QSignalBlocker secondOscillatorWaveformBlocker(secondOscillatorWaveformControl);
     const QSignalBlocker secondOscillatorDetuneBlocker(secondOscillatorDetuneControl);
     const QSignalBlocker secondOscillatorMixBlocker(secondOscillatorMixControl);
+    const QSignalBlocker synthPresetBlocker(synthPresetControl);
     const QSignalBlocker synthFilterEnabledBlocker(synthFilterEnabledControl);
     const QSignalBlocker synthFilterTypeBlocker(synthFilterTypeControl);
     const QSignalBlocker synthFilterCutoffBlocker(synthFilterCutoffControl);
@@ -2817,6 +2943,21 @@ void MainWindow::refreshProjectUi()
         waveformControl->findData(static_cast<int>(track->waveform));
     waveformControl->setCurrentIndex(std::max(0, waveformIndex));
     const bool synthTrackSelected = track != nullptr && track->instrumentType == InstrumentType::Synth;
+    synthPresetPanel->setVisible(synthTrackSelected);
+    synthPresetControl->setEnabled(synthTrackSelected);
+    int matchingPresetIndex = -1;
+    if (synthTrackSelected)
+    {
+        for (size_t index = 0; index < factorySynthPresets.size(); ++index)
+        {
+            if (matchesFactorySynthPreset(*track, factorySynthPresets[index]))
+            {
+                matchingPresetIndex = static_cast<int>(index);
+                break;
+            }
+        }
+    }
+    synthPresetControl->setCurrentIndex(matchingPresetIndex);
     waveformControl->setEnabled(synthTrackSelected);
     oscillatorPanel->setVisible(synthTrackSelected);
     const bool secondOscillatorEnabled = synthTrackSelected && track->secondOscillatorEnabled;
@@ -4991,6 +5132,8 @@ void MainWindow::setSelectedSynthEnvelope(int parameter, double value)
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::Synth)
         return;
+    if (synthPresetControl != nullptr)
+        synthPresetControl->setCurrentIndex(-1);
     switch (parameter)
     {
         case 0: track->attackSeconds = static_cast<float>(value); break;
@@ -5009,6 +5152,8 @@ void MainWindow::setSelectedSynthOscillator(int parameter, double value)
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::Synth)
         return;
+    if (synthPresetControl != nullptr)
+        synthPresetControl->setCurrentIndex(-1);
     switch (parameter)
     {
         case 0: track->secondOscillatorEnabled = value >= 0.5; break;
@@ -5030,6 +5175,8 @@ void MainWindow::setSelectedSynthFilter(int parameter, double value)
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::Synth)
         return;
+    if (synthPresetControl != nullptr)
+        synthPresetControl->setCurrentIndex(-1);
     switch (parameter)
     {
         case 0: track->synthFilterEnabled = value >= 0.5; break;
@@ -5049,6 +5196,8 @@ void MainWindow::setSelectedSynthFilterEnvelope(int parameter, double value)
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::Synth)
         return;
+    if (synthPresetControl != nullptr)
+        synthPresetControl->setCurrentIndex(-1);
     switch (parameter)
     {
         case 0: track->synthFilterEnvelopeEnabled = value >= 0.5; break;
@@ -5066,6 +5215,20 @@ void MainWindow::setSelectedSynthFilterEnvelope(int parameter, double value)
     }
     audioEngine.setProject(project);
     settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::applySelectedSynthPreset(int presetIndex)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::Synth ||
+        presetIndex < 0 || presetIndex >= static_cast<int>(factorySynthPresets.size()))
+        return;
+
+    applyFactorySynthPreset(*track, factorySynthPresets[static_cast<size_t>(presetIndex)]);
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshProjectUi();
     refreshDirtyState();
 }
 

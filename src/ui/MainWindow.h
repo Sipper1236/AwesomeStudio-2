@@ -107,6 +107,7 @@ private:
     void setSelectedSynthOscillator(int parameter, double value);
     void setSelectedSynthFilter(int parameter, double value);
     void setSelectedSynthFilterEnvelope(int parameter, double value);
+    void applySelectedSynthPreset(int presetIndex);
     void setSelectedTrackEqualizer(int band, double gainDb);
     void refreshAutomationEditor();
     void refreshArrangementAutomationView();
@@ -210,6 +211,7 @@ private:
     QComboBox* secondOscillatorWaveformControl = nullptr;
     QDoubleSpinBox* secondOscillatorDetuneControl = nullptr;
     QDoubleSpinBox* secondOscillatorMixControl = nullptr;
+    QComboBox* synthPresetControl = nullptr;
     QCheckBox* synthFilterEnabledControl = nullptr;
     QComboBox* synthFilterTypeControl = nullptr;
     QDoubleSpinBox* synthFilterCutoffControl = nullptr;
@@ -222,6 +224,7 @@ private:
     QSlider* masterControl = nullptr;
     QWidget* audioRegionControls = nullptr;
     QWidget* oscillatorPanel = nullptr;
+    QWidget* synthPresetPanel = nullptr;
     QWidget* synthFilterPanel = nullptr;
     QWidget* synthFilterEnvelopePanel = nullptr;
     QWidget* synthEnvelopePanel = nullptr;

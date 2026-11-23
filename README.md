@@ -7,7 +7,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 ## Current workflow
 
 - Add instrument tracks and patterns from the Browser or toolbar. Click an empty Playlist row to add a clip; drag clips in time or between tracks, and double-click a clip to open its piano roll.
-- On synth tracks, use the Browser to shape oscillator ADSR, choose a low-pass, high-pass, band-pass, or notch filter, and modulate its cutoff with a bipolar semitone ADSR envelope.
+- Choose one of seven factory synth presets in the Browser, then shape oscillator ADSR, pick a low-pass, high-pass, band-pass, or notch filter, and modulate its cutoff with a bipolar semitone ADSR envelope.
 - Draw, move, resize, select, and delete notes across the full 128-note MIDI range in a scrollable piano roll. Shift-click to select notes for group movement.
 - Double-click a note or choose **Edit → Note properties…** to enter exact pitch, start, length, velocity, and MIDI channel values. With several notes selected, the dialog can transpose them, shift their starts, or apply a shared length, velocity, or MIDI channel.
 - Quantize selected note starts to the current piano-roll grid; when nothing is selected, quantize the whole clip. Quantize edits can be undone.
