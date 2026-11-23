@@ -459,7 +459,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             source->channelCount > 0 && source->frameCount() > 0)
                         {
                             AudioRegion region;
-                            region.startFrame = static_cast<qint64>(std::llround(
+                            const qint64 noteStartFrame = static_cast<qint64>(std::llround(
                                 (clip.startBeat + note.startBeat) * sampleRate * 60.0 / project->tempoBpm));
                             region.source = source;
                             region.trackIndex = trackIndex;
@@ -473,69 +473,84 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                 padSample.startPositionPercent / 100.0));
                             region.playbackRate = std::pow(2.0,
                                 static_cast<double>(padSample.tuningSemitones) / 12.0);
-                            qint64 duration = 0;
-                            if (region.drumSampleLoop)
-                            {
-                                duration = static_cast<qint64>(std::llround(
-                                    note.lengthBeats * sampleRate * 60.0 / project->tempoBpm));
-                                region.fadeOutFrames = std::min<qint64>(
-                                    std::max<qint64>(1, duration),
-                                    std::max<qint64>(1, static_cast<qint64>(std::llround(sampleRate * 0.008))));
-                            }
-                            else
-                            {
-                                const qint64 remainingSourceFrames = source->frameCount() - region.sourceStartFrame;
-                                duration = static_cast<qint64>(std::ceil(
-                                    static_cast<double>(remainingSourceFrames) * sampleRate /
-                                    (source->sampleRate * region.playbackRate)));
-                            }
-                            region.endFrame = region.startFrame + std::max<qint64>(1, duration);
                             const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
                             region.sourceGain = velocityGain;
-                            audioRegions.push_back(std::move(region));
+                            const qint64 noteDurationFrames = std::max<qint64>(1,
+                                static_cast<qint64>(std::llround(
+                                    note.lengthBeats * sampleRate * 60.0 / project->tempoBpm)));
+                            const int ratchetCount = std::clamp(note.ratchetCount, 1, 8);
+                            const qint64 remainingSourceFrames = source->frameCount() - region.sourceStartFrame;
+                            const qint64 oneShotDurationFrames = static_cast<qint64>(std::ceil(
+                                static_cast<double>(remainingSourceFrames) * sampleRate /
+                                (source->sampleRate * region.playbackRate)));
+                            for (int hit = 0; hit < ratchetCount; ++hit)
+                            {
+                                AudioRegion hitRegion = region;
+                                const qint64 hitStartOffset = noteDurationFrames * hit / ratchetCount;
+                                const qint64 hitEndOffset = noteDurationFrames * (hit + 1) / ratchetCount;
+                                hitRegion.startFrame = noteStartFrame + hitStartOffset;
+                                const qint64 duration = region.drumSampleLoop
+                                    ? std::max<qint64>(1, hitEndOffset - hitStartOffset)
+                                    : std::max<qint64>(1, oneShotDurationFrames);
+                                if (region.drumSampleLoop)
+                                    hitRegion.fadeOutFrames = std::min<qint64>(duration,
+                                        std::max<qint64>(1, static_cast<qint64>(
+                                            std::llround(sampleRate * 0.008))));
+                                hitRegion.endFrame = hitRegion.startFrame + duration;
+                                audioRegions.push_back(std::move(hitRegion));
+                            }
                         }
                         continue;
                     }
                 }
 
-                VoiceNote voice;
                 const double startBeat = clip.startBeat + note.startBeat;
-                voice.startFrame = static_cast<qint64>(std::llround(startBeat * sampleRate * 60.0 /
-                                                                    project->tempoBpm));
-                const qint64 duration = static_cast<qint64>(std::llround(note.lengthBeats * sampleRate * 60.0 /
-                                                                          project->tempoBpm));
-                voice.endFrame = voice.startFrame + std::max<qint64>(duration, 1);
-                voice.attackFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
-                    track.attackSeconds * sampleRate)));
-                voice.decayFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
-                    track.decaySeconds * sampleRate)));
-                voice.releaseFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
-                    track.releaseSeconds * sampleRate)));
-                voice.trackIndex = trackIndex;
-                voice.sustainLevel = track.sustainLevel;
-                voice.baseFrequency = 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0);
-                voice.frequency = voice.baseFrequency;
-                voice.amplitude = (track.instrumentType == InstrumentType::DrumRack ? 0.48f : 0.22f) *
-                                  static_cast<float>(note.velocity) / 127.0f;
-                voice.waveform = track.waveform;
-                voice.secondOscillatorWaveform = track.secondOscillatorWaveform;
-                voice.secondOscillatorDetuneCents = track.secondOscillatorDetuneCents;
-                voice.secondOscillatorMix = track.secondOscillatorMix;
-                voice.secondOscillatorEnabled = track.instrumentType == InstrumentType::Synth &&
-                                                track.secondOscillatorEnabled;
-                voice.midiPitch = note.pitch;
-                voice.midiChannel = note.channel >= 0 ? note.channel : trackMidiChannel;
-                voice.probabilityPercent = note.probabilityPercent;
-                voice.probabilitySeed = probabilitySeed;
-                voice.percussion = track.instrumentType == InstrumentType::DrumRack;
-                if (voice.percussion)
+                const qint64 noteStartFrame = static_cast<qint64>(std::llround(
+                    startBeat * sampleRate * 60.0 / project->tempoBpm));
+                const qint64 noteDurationFrames = std::max<qint64>(1,
+                    static_cast<qint64>(std::llround(
+                        note.lengthBeats * sampleRate * 60.0 / project->tempoBpm)));
+                const int ratchetCount = track.instrumentType == InstrumentType::DrumRack
+                    ? std::clamp(note.ratchetCount, 1, 8) : 1;
+                for (int hit = 0; hit < ratchetCount; ++hit)
                 {
-                    const double decaySeconds = note.pitch == 46 ? 0.72 :
-                        (note.pitch == 35 || note.pitch == 36 ? 0.48 :
-                         (note.pitch == 42 || note.pitch == 44 ? 0.22 : 0.36));
-                    voice.endFrame = voice.startFrame + static_cast<qint64>(sampleRate * decaySeconds);
+                    VoiceNote voice;
+                    voice.startFrame = noteStartFrame + noteDurationFrames * hit / ratchetCount;
+                    const qint64 hitEndOffset = noteDurationFrames * (hit + 1) / ratchetCount;
+                    voice.endFrame = voice.startFrame + std::max<qint64>(
+                        1, hitEndOffset - noteDurationFrames * hit / ratchetCount);
+                    voice.attackFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+                        track.attackSeconds * sampleRate)));
+                    voice.decayFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
+                        track.decaySeconds * sampleRate)));
+                    voice.releaseFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+                        track.releaseSeconds * sampleRate)));
+                    voice.trackIndex = trackIndex;
+                    voice.sustainLevel = track.sustainLevel;
+                    voice.baseFrequency = 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0);
+                    voice.frequency = voice.baseFrequency;
+                    voice.amplitude = (track.instrumentType == InstrumentType::DrumRack ? 0.48f : 0.22f) *
+                                      static_cast<float>(note.velocity) / 127.0f;
+                    voice.waveform = track.waveform;
+                    voice.secondOscillatorWaveform = track.secondOscillatorWaveform;
+                    voice.secondOscillatorDetuneCents = track.secondOscillatorDetuneCents;
+                    voice.secondOscillatorMix = track.secondOscillatorMix;
+                    voice.secondOscillatorEnabled = track.instrumentType == InstrumentType::Synth &&
+                                                    track.secondOscillatorEnabled;
+                    voice.midiPitch = note.pitch;
+                    voice.midiChannel = note.channel >= 0 ? note.channel : trackMidiChannel;
+                    voice.probabilityPercent = note.probabilityPercent;
+                    voice.probabilitySeed = probabilitySeed;
+                    voice.percussion = track.instrumentType == InstrumentType::DrumRack;
+                    if (voice.percussion)
+                    {
+                        const double decaySeconds = note.pitch == 46 ? 0.72 :
+                            (note.pitch == 35 || note.pitch == 36 ? 0.48 :
+                             (note.pitch == 42 || note.pitch == 44 ? 0.22 : 0.36));
+                        voice.endFrame = voice.startFrame + static_cast<qint64>(sampleRate * decaySeconds);
+                    }
+                    notes.push_back(voice);
                 }
-                notes.push_back(voice);
             }
         }
     }

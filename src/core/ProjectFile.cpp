@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 28;
+constexpr int currentProjectVersion = 29;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -85,6 +85,7 @@ QJsonArray saveNotes(const QVector<MidiNote>& notes)
             {QStringLiteral("pitch"), note.pitch},
             {QStringLiteral("velocity"), note.velocity},
             {QStringLiteral("probabilityPercent"), note.probabilityPercent},
+            {QStringLiteral("ratchetCount"), note.ratchetCount},
             {QStringLiteral("startBeat"), note.startBeat},
             {QStringLiteral("lengthBeats"), note.lengthBeats},
             {QStringLiteral("channel"), note.channel}
@@ -286,11 +287,14 @@ bool loadNotes(const QJsonValue& value, QVector<MidiNote>& notes, int version, Q
         note.velocity = object.value(QStringLiteral("velocity")).toInt(-1);
         if (version >= 28)
             note.probabilityPercent = object.value(QStringLiteral("probabilityPercent")).toInt(-1);
+        if (version >= 29)
+            note.ratchetCount = object.value(QStringLiteral("ratchetCount")).toInt(-1);
         note.startBeat = object.value(QStringLiteral("startBeat")).toDouble(-1.0);
         note.lengthBeats = object.value(QStringLiteral("lengthBeats")).toDouble(-1.0);
         note.channel = object.value(QStringLiteral("channel")).toInt(-1);
         if (note.pitch < 0 || note.pitch > 127 || note.velocity < 1 || note.velocity > 127 ||
             note.probabilityPercent < 0 || note.probabilityPercent > 100 ||
+            note.ratchetCount < 1 || note.ratchetCount > 8 ||
             note.startBeat < 0.0 || note.lengthBeats <= 0.0 || note.channel < -1 || note.channel > 15)
         {
             setError(error, QStringLiteral("The project contains an out-of-range MIDI note."));

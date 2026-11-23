@@ -30,6 +30,7 @@ private:
     void refreshPads();
     void toggleStep(int row, int column, bool enabled);
     void setStepProbability(int row, int column, int probabilityPercent);
+    void setStepRatchetCount(int row, int column, int ratchetCount);
 
     QSpinBox* barControl = nullptr;
     QComboBox* divisionControl = nullptr;

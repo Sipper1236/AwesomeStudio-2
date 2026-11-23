@@ -54,6 +54,7 @@ struct MidiNote
     double lengthBeats = 1.0;
     int channel = -1;
     int probabilityPercent = 100;
+    int ratchetCount = 1;
 
     bool operator==(const MidiNote& other) const;
 };

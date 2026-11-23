@@ -122,7 +122,7 @@ float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress)
 bool MidiNote::operator==(const MidiNote& other) const
 {
     return id == other.id && pitch == other.pitch && velocity == other.velocity &&
-           probabilityPercent == other.probabilityPercent &&
+           probabilityPercent == other.probabilityPercent && ratchetCount == other.ratchetCount &&
            std::abs(startBeat - other.startBeat) < 1.0e-9 &&
            std::abs(lengthBeats - other.lengthBeats) < 1.0e-9 && channel == other.channel;
 }
@@ -510,6 +510,7 @@ void ProjectData::normalize()
                 note.pitch = std::clamp(note.pitch, 0, 127);
                 note.velocity = std::clamp(note.velocity, 1, 127);
                 note.probabilityPercent = std::clamp(note.probabilityPercent, 0, 100);
+                note.ratchetCount = std::clamp(note.ratchetCount, 1, 8);
                 note.channel = std::clamp(note.channel, -1, 15);
                 const double minimumLength = 1.0 / 64.0;
                 note.startBeat = std::clamp(note.startBeat, 0.0,
