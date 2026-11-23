@@ -144,8 +144,16 @@ struct ParsedTrack
     QString name;
     QVector<RawNote> notes;
     QVector<RawPitchBend> pitchBends;
+    QVector<TempoChange> tempoChanges;
+    double tempoBpm = 120.0;
+    int beatsPerBar = 4;
+    int beatUnit = 4;
     double pitchBendRangeSemitones = -1.0;
     qint64 lastTick = 0;
+    bool foundTempo = false;
+    bool foundTimeSignature = false;
+    bool inconsistentTimeSignature = false;
+    bool hasTimeSignatureChanges = false;
     bool percussion = false;
 };
 
@@ -249,15 +257,25 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                         tempoChanges.push_back({beat, bpm});
                 }
             }
-            else if (type == 0x58 && payload.size() >= 2 && !foundTimeSignature)
+            else if (type == 0x58 && payload.size() >= 2)
             {
                 const int numerator = static_cast<quint8>(payload[0]);
                 const int exponent = static_cast<quint8>(payload[1]);
                 if (numerator >= 1 && numerator <= 12 && exponent <= 4)
                 {
-                    beatsPerBar = numerator;
-                    beatUnit = 1 << exponent;
-                    foundTimeSignature = true;
+                    const int denominator = 1 << exponent;
+                    if (absoluteTick > 0)
+                        track.hasTimeSignatureChanges = true;
+                    if (!foundTimeSignature)
+                    {
+                        beatsPerBar = numerator;
+                        beatUnit = denominator;
+                        foundTimeSignature = true;
+                    }
+                    else if (beatsPerBar != numerator || beatUnit != denominator)
+                    {
+                        track.inconsistentTimeSignature = true;
+                    }
                 }
             }
             if (type == 0x2f)
@@ -577,10 +595,10 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     const quint16 format = readBigEndian16(bytes, 8);
     const quint16 trackCount = readBigEndian16(bytes, 10);
     const quint16 division = readBigEndian16(bytes, 12);
-    if (format > 1 || trackCount == 0 || trackCount > 256 ||
+    if (format > 2 || trackCount == 0 || trackCount > 256 ||
         (format == 0 && trackCount != 1) || (division & 0x8000) != 0 || division == 0)
     {
-        setError(error, QStringLiteral("Only format 0 or 1 MIDI files with PPQN timing are supported."));
+        setError(error, QStringLiteral("Only format 0, 1, or 2 MIDI files with PPQN timing are supported."));
         return false;
     }
 
@@ -588,13 +606,6 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     int offset = static_cast<int>(8 + headerLength);
     QVector<ParsedTrack> parsedTracks;
     parsedTracks.reserve(trackCount);
-    double tempo = 120.0;
-    int beatsPerBar = 4;
-    int beatUnit = 4;
-    bool foundTempo = false;
-    bool foundTimeSignature = false;
-    QVector<TempoChange> tempoChanges;
-    tempoChanges.reserve(32);
     for (quint16 index = 0; index < trackCount; ++index)
     {
         if (!validChunk(bytes, offset, "MTrk"))
@@ -610,12 +621,129 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             return false;
         }
         ParsedTrack track;
+        double trackTempo = 120.0;
+        int trackBeatsPerBar = 4;
+        int trackBeatUnit = 4;
+        bool foundTrackTempo = false;
+        bool foundTrackTimeSignature = false;
+        QVector<TempoChange> trackTempoChanges;
         if (!parseTrack(bytes, offset + 8, static_cast<int>(length), ppqn, track,
-                        tempo, beatsPerBar, beatUnit, foundTempo, foundTimeSignature,
-                        tempoChanges, error))
+                        trackTempo, trackBeatsPerBar, trackBeatUnit,
+                        foundTrackTempo, foundTrackTimeSignature, trackTempoChanges, error))
             return false;
+        track.tempoBpm = trackTempo;
+        track.beatsPerBar = trackBeatsPerBar;
+        track.beatUnit = trackBeatUnit;
+        track.foundTempo = foundTrackTempo;
+        track.foundTimeSignature = foundTrackTimeSignature;
+        track.tempoChanges = std::move(trackTempoChanges);
         parsedTracks.push_back(std::move(track));
         offset = static_cast<int>(trackEnd);
+    }
+
+    double tempo = 120.0;
+    int beatsPerBar = 4;
+    int beatUnit = 4;
+    bool foundTempo = false;
+    bool foundTimeSignature = false;
+    QVector<TempoChange> tempoChanges;
+    tempoChanges.reserve(32);
+    if (format != 2)
+    {
+        for (const ParsedTrack& track : parsedTracks)
+        {
+            if (!foundTempo && track.foundTempo)
+            {
+                tempo = track.tempoBpm;
+                foundTempo = true;
+            }
+            if (!foundTimeSignature && track.foundTimeSignature)
+            {
+                beatsPerBar = track.beatsPerBar;
+                beatUnit = track.beatUnit;
+                foundTimeSignature = true;
+            }
+            if (tempoChanges.size() + track.tempoChanges.size() > 1000)
+            {
+                setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
+                return false;
+            }
+            tempoChanges += track.tempoChanges;
+        }
+    }
+    else
+    {
+        tempo = parsedTracks.first().tempoBpm;
+        beatsPerBar = parsedTracks.first().foundTimeSignature
+            ? parsedTracks.first().beatsPerBar : 4;
+        beatUnit = parsedTracks.first().foundTimeSignature
+            ? parsedTracks.first().beatUnit : 4;
+        for (const ParsedTrack& track : parsedTracks)
+        {
+            const int sequenceBeatsPerBar = track.foundTimeSignature ? track.beatsPerBar : 4;
+            const int sequenceBeatUnit = track.foundTimeSignature ? track.beatUnit : 4;
+            if (track.hasTimeSignatureChanges)
+            {
+                setError(error, QStringLiteral(
+                    "Format 2 sequences with time-signature changes cannot be combined in one arrangement."));
+                return false;
+            }
+            if (track.inconsistentTimeSignature || sequenceBeatsPerBar != beatsPerBar ||
+                sequenceBeatUnit != beatUnit)
+            {
+                setError(error, QStringLiteral(
+                    "Format 2 sequences with different time signatures cannot be combined in one arrangement."));
+                return false;
+            }
+        }
+    }
+
+    QVector<double> sequenceStartBeats(parsedTracks.size(), 0.0);
+    double sequenceEndBeat = 0.0;
+    if (format == 2)
+    {
+        const double barLength = static_cast<double>(beatsPerBar) * 4.0 / beatUnit;
+        for (qsizetype trackIndex = 0; trackIndex < parsedTracks.size(); ++trackIndex)
+        {
+            const ParsedTrack& track = parsedTracks[trackIndex];
+            if (trackIndex > 0 && sequenceEndBeat >= maximumSongBeats)
+            {
+                setError(error, QStringLiteral("The MIDI sequences exceed the 16,384 beat limit."));
+                return false;
+            }
+            sequenceStartBeats[trackIndex] = sequenceEndBeat;
+            if (trackIndex > 0)
+                tempoChanges.push_back({sequenceEndBeat, track.tempoBpm});
+            for (const TempoChange& change : track.tempoChanges)
+            {
+                const double beat = sequenceEndBeat + change.beat;
+                if (beat > maximumSongBeats || tempoChanges.size() >= 1000)
+                {
+                    setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
+                    return false;
+                }
+                tempoChanges.push_back({beat, change.bpm});
+            }
+
+            double localEndBeat = static_cast<double>(track.lastTick) / ppqn;
+            for (const RawNote& note : track.notes)
+                localEndBeat = std::max(localEndBeat, static_cast<double>(note.endTick) / ppqn);
+            for (const RawPitchBend& bend : track.pitchBends)
+                localEndBeat = std::max(localEndBeat, static_cast<double>(bend.tick) / ppqn);
+            const double sequenceLength = std::max(barLength,
+                std::ceil(localEndBeat / barLength) * barLength);
+            if (!std::isfinite(sequenceLength) || sequenceEndBeat + sequenceLength > maximumSongBeats)
+            {
+                setError(error, QStringLiteral("The MIDI sequences exceed the 16,384 beat limit."));
+                return false;
+            }
+            sequenceEndBeat += sequenceLength;
+        }
+        if (tempoChanges.size() > 1000)
+        {
+            setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
+            return false;
+        }
     }
 
     ProjectData loaded;
@@ -635,20 +763,27 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             break;
         }
     }
-    double longestBeat = 0.0;
-    for (const ParsedTrack& sourceTrack : parsedTracks)
+    double longestBeat = format == 2 ? sequenceEndBeat : 0.0;
+    for (qsizetype sourceTrackIndex = 0; sourceTrackIndex < parsedTracks.size(); ++sourceTrackIndex)
     {
+        const ParsedTrack& sourceTrack = parsedTracks[sourceTrackIndex];
         if (sourceTrack.notes.isEmpty() && sourceTrack.pitchBends.isEmpty())
             continue;
+        const double trackStartBeat = format == 2 ? sequenceStartBeats[sourceTrackIndex] : 0.0;
         InstrumentTrack instrument;
         instrument.id = loaded.nextTrackId();
         instrument.name = sourceTrack.name.isEmpty()
-            ? QStringLiteral("MIDI %1").arg(instrument.id) : sourceTrack.name;
+            ? format == 2 ? QStringLiteral("Sequence %1").arg(sourceTrackIndex + 1)
+                          : QStringLiteral("MIDI %1").arg(instrument.id)
+            : sourceTrack.name;
         instrument.instrumentType = sourceTrack.percussion ? InstrumentType::DrumRack : InstrumentType::Synth;
         instrument.gain = 0.8f;
         MidiClip clip;
         clip.id = loaded.nextClipId();
-        clip.name = QStringLiteral("Imported pattern");
+        clip.name = format == 2 ? QStringLiteral("Imported sequence")
+                                : QStringLiteral("Imported pattern");
+        clip.startBeat = trackStartBeat;
+        double trackEndBeat = static_cast<double>(sourceTrack.lastTick) / ppqn;
         for (const RawNote& sourceNote : sourceTrack.notes)
         {
             const double startBeat = static_cast<double>(sourceNote.startTick) / ppqn;
@@ -666,7 +801,8 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             note.startBeat = startBeat;
             note.lengthBeats = std::max(1.0 / 64.0, endBeat - startBeat);
             clip.notes.push_back(note);
-            longestBeat = std::max(longestBeat, endBeat);
+            trackEndBeat = std::max(trackEndBeat, endBeat);
+            longestBeat = std::max(longestBeat, trackStartBeat + endBeat);
         }
         for (const RawPitchBend& sourceBend : sourceTrack.pitchBends)
         {
@@ -677,10 +813,11 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
                 return false;
             }
             clip.pitchBends.push_back({sourceBend.channel, sourceBend.value, bendBeat});
-            longestBeat = std::max(longestBeat, bendBeat);
+            trackEndBeat = std::max(trackEndBeat, bendBeat);
+            longestBeat = std::max(longestBeat, trackStartBeat + bendBeat);
         }
         const double barLength = loaded.quarterNotesPerBar();
-        clip.lengthBeats = std::clamp(std::ceil(longestBeat / barLength) * barLength,
+        clip.lengthBeats = std::clamp(std::ceil(trackEndBeat / barLength) * barLength,
                                       std::max(0.25, barLength), maximumSongBeats);
         instrument.clips.push_back(std::move(clip));
         loaded.tracks.push_back(std::move(instrument));
