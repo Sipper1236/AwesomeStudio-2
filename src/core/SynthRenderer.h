@@ -21,7 +21,9 @@ public:
     void resetTransport();
     void beginMixerFrame();
     StereoSample addLiveTrackSample(size_t trackIndex, StereoSample input);
-    StereoSample finishLiveMixerFrame();
+    StereoSample finishMixerFrame();
+    StereoSample processMasterEffects(StereoSample input);
+    double effectTailSeconds() const;
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
@@ -102,11 +104,28 @@ private:
         float gain = 0.0f;
     };
 
+    struct EffectState
+    {
+        MixerEffect settings;
+        std::vector<float> delayLeft;
+        std::vector<float> delayRight;
+        size_t delayIndex = 0;
+        std::array<std::vector<float>, 8> reverbLines;
+        std::array<size_t, 8> reverbIndices{};
+        std::array<float, 8> reverbDamped{};
+        float compressorEnvelope = 0.0f;
+        qint64 tailFramesRemaining = 0;
+    };
+
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
     void addTrackSample(size_t trackIndex, float left, float right);
     void addBusFrameSample(size_t busIndex, StereoSample input);
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
     void resetTrackEqualizers();
+    void prepareEffectChain(const QVector<MixerEffect>& settings, std::vector<EffectState>& states);
+    void resetEffectChain(std::vector<EffectState>& states);
+    bool effectChainHasTail(const std::vector<EffectState>& states) const;
+    StereoSample processEffectChain(std::vector<EffectState>& states, StereoSample input);
 
     std::shared_ptr<const ProjectData> project;
     std::vector<TrackMixAutomation> trackMixAutomations;
@@ -114,11 +133,15 @@ private:
     std::vector<LiveTrackMixOverride> liveTrackMixOverrides;
     std::vector<std::array<float, 3>> trackEqualizerGains;
     std::vector<TrackEqualizerState> trackEqualizerStates;
+    std::vector<std::vector<EffectState>> trackEffectStates;
+    std::vector<unsigned char> trackEffectHasTail;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;
     std::vector<std::vector<TrackSendMix>> trackSends;
     std::vector<unsigned char> trackAudible;
     std::vector<BusMixState> busMixStates;
+    std::vector<std::vector<EffectState>> busEffectStates;
+    std::vector<unsigned char> busEffectHasTail;
     std::vector<std::vector<TrackSendMix>> busSends;
     std::vector<int> busOutputIndices;
     std::vector<unsigned char> busInputAudible;
@@ -127,7 +150,6 @@ private:
     std::vector<size_t> busRouteOrder;
     std::vector<StereoSample> busFrameSamples;
     std::vector<StereoSample> lastBusOutputSamples;
-    std::vector<StereoSample> liveBusFrameSamples;
     std::vector<unsigned char> busFrameTouched;
     std::vector<size_t> touchedBusIndices;
     std::vector<float> busPeakLevels;
@@ -135,6 +157,7 @@ private:
     std::vector<unsigned char> trackFrameTouched;
     std::vector<size_t> touchedTrackIndices;
     std::vector<float> trackPeakLevels;
+    std::vector<EffectState> masterEffectStates;
     std::vector<VoiceNote> notes;
     std::vector<size_t> activeNotes;
     std::vector<AudioRegion> audioRegions;

@@ -103,12 +103,38 @@ struct MixerSend
     float gain = 0.0f;
 };
 
+enum class MixerEffectType
+{
+    Delay,
+    Reverb,
+    Compressor
+};
+
+struct MixerEffect
+{
+    MixerEffectType type = MixerEffectType::Delay;
+    bool enabled = true;
+    float wet = 0.25f;
+    float delayMs = 250.0f;
+    float feedback = 0.3f;
+    float roomSize = 0.6f;
+    float damping = 0.5f;
+    float thresholdDb = -18.0f;
+    float ratio = 4.0f;
+    float attackMs = 10.0f;
+    float releaseMs = 100.0f;
+    float makeupDb = 0.0f;
+};
+
+MixerEffect defaultMixerEffect(MixerEffectType type);
+
 struct MixerBus
 {
     quint64 id = 0;
     QString name = QStringLiteral("Bus");
     quint64 outputBusId = 0;
     QVector<MixerSend> sends;
+    QVector<MixerEffect> effects;
     float gain = 1.0f;
     float pan = 0.0f;
     bool muted = false;
@@ -132,6 +158,7 @@ struct InstrumentTrack
     float eqHighDb = 0.0f;
     quint64 outputBusId = 0;
     QVector<MixerSend> sends;
+    QVector<MixerEffect> effects;
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
     bool muted = false;
@@ -153,6 +180,7 @@ struct ProjectData
     bool metronomeEnabled = false;
     int countInBars = 0;
     float masterGain = 0.8f;
+    QVector<MixerEffect> masterEffects;
     QVector<TimelineMarker> markers;
     QVector<MixerBus> buses;
     QVector<InstrumentTrack> tracks;

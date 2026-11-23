@@ -427,7 +427,7 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     target->sample = event.sample;
 }
 
-void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
+void AudioEngine::renderLiveMidiVoices(qint64 frame)
 {
     liveMidiTouchedTrackCount = 0;
     const auto addTrackFrameSample = [this](size_t trackIndex, float left, float right)
@@ -532,9 +532,7 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
     {
         const size_t trackIndex = liveMidiTouchedTracks[index];
         const StereoSample& trackSample = liveMidiTrackFrameSamples[trackIndex];
-        const StereoSample directMasterSample = renderer.addLiveTrackSample(trackIndex, trackSample);
-        mixed.left += directMasterSample.left;
-        mixed.right += directMasterSample.right;
+        renderer.addLiveTrackSample(trackIndex, trackSample);
         liveMidiBlockPeaks[trackIndex] = std::max(liveMidiBlockPeaks[trackIndex],
             std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
         liveMidiTrackFrameSamples[trackIndex] = {};
@@ -680,10 +678,10 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         renderer.beginMixerFrame();
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;
-        renderLiveMidiVoices(mixed, clockFrame);
-        const StereoSample liveBusMix = renderer.finishLiveMixerFrame();
-        mixed.left += liveBusMix.left;
-        mixed.right += liveBusMix.right;
+        renderLiveMidiVoices(clockFrame);
+        const StereoSample mixerOutput = renderer.finishMixerFrame();
+        mixed.left += mixerOutput.left;
+        mixed.right += mixerOutput.right;
         const int preview = previewPitch.load(std::memory_order_acquire);
         const qint64 previewStart = previewStartFrame.load(std::memory_order_acquire);
         const qint64 previewEnd = previewEndFrame.load(std::memory_order_acquire);
@@ -744,6 +742,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             }
         }
 
+        mixed = renderer.processMasterEffects(mixed);
         const float gain = masterGain.load(std::memory_order_relaxed);
         mixed.left = std::tanh(mixed.left * gain);
         mixed.right = std::tanh(mixed.right * gain);

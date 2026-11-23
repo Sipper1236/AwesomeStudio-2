@@ -51,6 +51,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -1592,6 +1593,136 @@ void MainWindow::refreshMixer()
             "stop:0 #39c98c, stop:0.72 #c9c45b, stop:0.9 #ed8c4a, stop:1 #e75c5c); }"));
         return meter;
     };
+    const auto effectCount = [this]
+    {
+        qsizetype count = project.masterEffects.size();
+        for (const MixerBus& bus : project.buses)
+            count += bus.effects.size();
+        for (const InstrumentTrack& track : project.tracks)
+            count += track.effects.size();
+        return count;
+    };
+    const auto createEffectControls = [this](QFormLayout* form, QWidget* parent,
+        const QVector<MixerEffect>& effects,
+        const std::function<void(qsizetype, const std::function<void(MixerEffect&)>&)>& updateEffect,
+        const std::function<void(MixerEffectType)>& appendEffect,
+        const std::function<void(qsizetype)>& removeEffect,
+        bool canAddEffect)
+    {
+        auto* chain = new QGroupBox(tr("Effect inserts"), parent);
+        auto* chainLayout = new QVBoxLayout(chain);
+        chainLayout->setContentsMargins(6, 6, 6, 6);
+        const auto addFloatControl = [this](QFormLayout* effectForm, const QString& label,
+            float value, float minimum, float maximum, float step, int decimals,
+            const QString& suffix, qsizetype effectIndex,
+            const std::function<void(qsizetype, const std::function<void(MixerEffect&)>&)>& update,
+            const std::function<void(MixerEffect&, float)>& assign)
+        {
+            auto* control = new QDoubleSpinBox(effectForm->parentWidget());
+            control->setRange(minimum, maximum);
+            control->setSingleStep(step);
+            control->setDecimals(decimals);
+            control->setSuffix(suffix);
+            control->setValue(value);
+            effectForm->addRow(label, control);
+            connect(control, &QDoubleSpinBox::editingFinished, this,
+                    [control, effectIndex, update, assign]
+            {
+                const float value = static_cast<float>(control->value());
+                update(effectIndex, [assign, value](MixerEffect& effect) { assign(effect, value); });
+            });
+        };
+        for (qsizetype index = 0; index < effects.size(); ++index)
+        {
+            const MixerEffect effect = effects[index];
+            const QString effectName = effect.type == MixerEffectType::Delay ? tr("Delay") :
+                effect.type == MixerEffectType::Reverb ? tr("Reverb") : tr("Compressor");
+            auto* effectBox = new QGroupBox(tr("%1. %2").arg(index + 1).arg(effectName), chain);
+            auto* effectForm = new QFormLayout(effectBox);
+            auto* stateRow = new QWidget(effectBox);
+            auto* stateLayout = new QHBoxLayout(stateRow);
+            stateLayout->setContentsMargins(0, 0, 0, 0);
+            auto* enabled = new QCheckBox(tr("Enabled"), stateRow);
+            enabled->setChecked(effect.enabled);
+            auto* remove = new QPushButton(tr("Remove"), stateRow);
+            stateLayout->addWidget(enabled);
+            stateLayout->addStretch(1);
+            stateLayout->addWidget(remove);
+            effectForm->addRow(stateRow);
+            connect(enabled, &QCheckBox::toggled, this,
+                    [index, updateEffect](bool checked)
+            {
+                updateEffect(index, [checked](MixerEffect& effect) { effect.enabled = checked; });
+            });
+            connect(remove, &QPushButton::clicked, this, [removeEffect, index]
+            {
+                removeEffect(index);
+            });
+            addFloatControl(effectForm, tr("Wet"), effect.wet * 100.0f, 0.0f, 100.0f,
+                            1.0f, 0, QStringLiteral("%"), index, updateEffect,
+                            [](MixerEffect& target, float value) { target.wet = value / 100.0f; });
+            if (effect.type == MixerEffectType::Delay)
+            {
+                addFloatControl(effectForm, tr("Time"), effect.delayMs, 1.0f, 2000.0f,
+                                1.0f, 0, tr(" ms"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.delayMs = value; });
+                addFloatControl(effectForm, tr("Feedback"), effect.feedback * 100.0f, 0.0f, 95.0f,
+                                1.0f, 0, QStringLiteral("%"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.feedback = value / 100.0f; });
+            }
+            else if (effect.type == MixerEffectType::Reverb)
+            {
+                addFloatControl(effectForm, tr("Room size"), effect.roomSize * 100.0f, 0.0f, 100.0f,
+                                1.0f, 0, QStringLiteral("%"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.roomSize = value / 100.0f; });
+                addFloatControl(effectForm, tr("Damping"), effect.damping * 100.0f, 0.0f, 100.0f,
+                                1.0f, 0, QStringLiteral("%"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.damping = value / 100.0f; });
+            }
+            else
+            {
+                addFloatControl(effectForm, tr("Threshold"), effect.thresholdDb, -60.0f, 0.0f,
+                                0.5f, 1, tr(" dB"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.thresholdDb = value; });
+                addFloatControl(effectForm, tr("Ratio"), effect.ratio, 1.0f, 20.0f,
+                                0.1f, 1, QString(), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.ratio = value; });
+                addFloatControl(effectForm, tr("Attack"), effect.attackMs, 0.1f, 200.0f,
+                                0.1f, 1, tr(" ms"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.attackMs = value; });
+                addFloatControl(effectForm, tr("Release"), effect.releaseMs, 1.0f, 2000.0f,
+                                1.0f, 0, tr(" ms"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.releaseMs = value; });
+                addFloatControl(effectForm, tr("Makeup"), effect.makeupDb, -12.0f, 24.0f,
+                                0.5f, 1, tr(" dB"), index, updateEffect,
+                                [](MixerEffect& target, float value) { target.makeupDb = value; });
+            }
+            chainLayout->addWidget(effectBox);
+        }
+        auto* addRow = new QWidget(chain);
+        auto* addLayout = new QHBoxLayout(addRow);
+        addLayout->setContentsMargins(0, 0, 0, 0);
+        auto* type = new QComboBox(addRow);
+        type->addItem(tr("Delay"), static_cast<int>(MixerEffectType::Delay));
+        type->addItem(tr("Reverb"), static_cast<int>(MixerEffectType::Reverb));
+        type->addItem(tr("Compressor"), static_cast<int>(MixerEffectType::Compressor));
+        auto* add = new QPushButton(tr("Add effect"), addRow);
+        add->setEnabled(canAddEffect && effects.size() < 8);
+        addLayout->addWidget(type, 1);
+        addLayout->addWidget(add);
+        chainLayout->addWidget(addRow);
+        connect(add, &QPushButton::clicked, this, [type, appendEffect]
+        {
+            appendEffect(static_cast<MixerEffectType>(type->currentData().toInt()));
+        });
+        form->addRow(chain);
+    };
+    const auto commitEffectChange = [this]
+    {
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+    };
 
     auto* masterBox = new QGroupBox(tr("Master"), content);
     auto* masterForm = new QFormLayout(masterBox);
@@ -1609,6 +1740,40 @@ void MainWindow::refreshMixer()
     masterPeakMeter->setObjectName(QStringLiteral("masterPeakMeter"));
     masterPeakMeter->setToolTip(tr("Master output peak level"));
     masterForm->addRow(tr("Peak"), masterPeakMeter);
+    createEffectControls(masterForm, masterBox, project.masterEffects,
+        [this, commitEffectChange](qsizetype index,
+                                   const std::function<void(MixerEffect&)>& editEffect)
+        {
+            if (index < 0 || index >= project.masterEffects.size()) return;
+            editEffect(project.masterEffects[index]);
+            commitEffectChange();
+        },
+        [this, commitEffectChange](MixerEffectType type)
+        {
+            QTimer::singleShot(0, this, [this, commitEffectChange, type]
+            {
+                if (project.masterEffects.size() >= 8 || [&]
+                    {
+                        qsizetype count = project.masterEffects.size();
+                        for (const MixerBus& bus : project.buses) count += bus.effects.size();
+                        for (const InstrumentTrack& track : project.tracks) count += track.effects.size();
+                        return count >= 48;
+                    }()) return;
+                project.masterEffects.push_back(defaultMixerEffect(type));
+                commitEffectChange();
+                refreshMixer();
+            });
+        },
+        [this, commitEffectChange](qsizetype index)
+        {
+            QTimer::singleShot(0, this, [this, commitEffectChange, index]
+            {
+                if (index < 0 || index >= project.masterEffects.size()) return;
+                project.masterEffects.removeAt(index);
+                commitEffectChange();
+                refreshMixer();
+            });
+        }, effectCount() < 48);
     auto* addBusButton = new QPushButton(tr("Add mixer bus"), masterBox);
     addBusButton->setEnabled(project.buses.size() < 64);
     masterForm->addRow(addBusButton);
@@ -1712,7 +1877,7 @@ void MainWindow::refreshMixer()
 
         auto* peakMeter = createPeakMeter(group);
         peakMeter->setObjectName(QStringLiteral("mixerBusPeakMeter"));
-        peakMeter->setToolTip(tr("Bus peak after bus level and pan"));
+        peakMeter->setToolTip(tr("Bus peak after bus level, pan, and inserts"));
         mixerBusMeters.push_back({static_cast<size_t>(busIndex), peakMeter});
         form->addRow(tr("Peak"), peakMeter);
 
@@ -1784,6 +1949,48 @@ void MainWindow::refreshMixer()
         {
             QTimer::singleShot(0, this, [this, busId] { addMixerBusSend(busId); });
         });
+
+        createEffectControls(form, group, item.effects,
+            [this, commitEffectChange, busId](qsizetype index,
+                const std::function<void(MixerEffect&)>& editEffect)
+            {
+                for (MixerBus& bus : project.buses)
+                {
+                    if (bus.id != busId || index < 0 || index >= bus.effects.size()) continue;
+                    editEffect(bus.effects[index]);
+                    commitEffectChange();
+                    return;
+                }
+            },
+            [this, commitEffectChange, effectCount, busId](MixerEffectType type)
+            {
+                QTimer::singleShot(0, this, [this, commitEffectChange, effectCount, busId, type]
+                {
+                    for (MixerBus& bus : project.buses)
+                    {
+                        if (bus.id != busId) continue;
+                        if (bus.effects.size() >= 8 || effectCount() >= 48) return;
+                        bus.effects.push_back(defaultMixerEffect(type));
+                        commitEffectChange();
+                        refreshMixer();
+                        return;
+                    }
+                });
+            },
+            [this, commitEffectChange, busId](qsizetype index)
+            {
+                QTimer::singleShot(0, this, [this, commitEffectChange, busId, index]
+                {
+                    for (MixerBus& bus : project.buses)
+                    {
+                        if (bus.id != busId || index < 0 || index >= bus.effects.size()) continue;
+                        bus.effects.removeAt(index);
+                        commitEffectChange();
+                        refreshMixer();
+                        return;
+                    }
+                });
+            }, effectCount() < 48);
 
         auto* removeBusButton = new QPushButton(tr("Remove bus"), group);
         form->addRow(removeBusButton);
@@ -1941,6 +2148,38 @@ void MainWindow::refreshMixer()
             QTimer::singleShot(0, this, [this, trackId] { addTrackSend(trackId); });
         });
 
+        createEffectControls(form, group, item.effects,
+            [this, commitEffectChange, trackId](qsizetype index,
+                const std::function<void(MixerEffect&)>& editEffect)
+            {
+                InstrumentTrack* track = project.findTrack(trackId);
+                if (track == nullptr || index < 0 || index >= track->effects.size()) return;
+                editEffect(track->effects[index]);
+                commitEffectChange();
+            },
+            [this, commitEffectChange, effectCount, trackId](MixerEffectType type)
+            {
+                QTimer::singleShot(0, this, [this, commitEffectChange, effectCount, trackId, type]
+                {
+                    InstrumentTrack* track = project.findTrack(trackId);
+                    if (track == nullptr || track->effects.size() >= 8 || effectCount() >= 48) return;
+                    track->effects.push_back(defaultMixerEffect(type));
+                    commitEffectChange();
+                    refreshMixer();
+                });
+            },
+            [this, commitEffectChange, trackId](qsizetype index)
+            {
+                QTimer::singleShot(0, this, [this, commitEffectChange, trackId, index]
+                {
+                    InstrumentTrack* track = project.findTrack(trackId);
+                    if (track == nullptr || index < 0 || index >= track->effects.size()) return;
+                    track->effects.removeAt(index);
+                    commitEffectChange();
+                    refreshMixer();
+                });
+            }, effectCount() < 48);
+
         auto* volume = new QSlider(Qt::Horizontal, group);
         volume->setObjectName(QStringLiteral("mixerTrackVolume_%1").arg(item.id));
         volume->setRange(0, 100);
@@ -1967,7 +2206,7 @@ void MainWindow::refreshMixer()
         form->addRow(tr("Pan"), panRow);
         auto* peakMeter = createPeakMeter(group);
         peakMeter->setObjectName(QStringLiteral("trackPeakMeter"));
-        peakMeter->setToolTip(tr("Track peak after level, pan, and EQ; before bus processing"));
+        peakMeter->setToolTip(tr("Track peak after level, pan, EQ, and inserts; before bus processing"));
         mixerTrackMeters.push_back({trackId, peakMeter});
         form->addRow(tr("Peak"), peakMeter);
         layout->addWidget(group);

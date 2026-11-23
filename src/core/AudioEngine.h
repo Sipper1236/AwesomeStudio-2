@@ -96,7 +96,7 @@ private:
     void prepareNotes(const std::shared_ptr<const ProjectData>& project);
     bool enqueueLiveMidiEvent(const LiveMidiEvent& event);
     void applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame);
-    void renderLiveMidiVoices(StereoSample& mixed, qint64 frame);
+    void renderLiveMidiVoices(qint64 frame);
     void clearLiveMidiVoices();
 
     std::shared_ptr<const ProjectData> projectSnapshot;

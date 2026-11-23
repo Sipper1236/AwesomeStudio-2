@@ -40,6 +40,47 @@ void normalizeAutomation(QVector<AutomationPoint>& points, float minimum, float 
     }
     points = std::move(uniquePoints);
 }
+
+void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBudget)
+{
+    const qsizetype acceptedCount = std::min<qsizetype>({effects.size(), 8, remainingBudget});
+    effects.resize(acceptedCount);
+    remainingBudget -= acceptedCount;
+    for (MixerEffect& effect : effects)
+    {
+        effect.type = static_cast<MixerEffectType>(
+            std::clamp(static_cast<int>(effect.type), 0, 2));
+        if (!std::isfinite(effect.wet)) effect.wet = 0.25f;
+        if (!std::isfinite(effect.delayMs)) effect.delayMs = 250.0f;
+        if (!std::isfinite(effect.feedback)) effect.feedback = 0.3f;
+        if (!std::isfinite(effect.roomSize)) effect.roomSize = 0.6f;
+        if (!std::isfinite(effect.damping)) effect.damping = 0.5f;
+        if (!std::isfinite(effect.thresholdDb)) effect.thresholdDb = -18.0f;
+        if (!std::isfinite(effect.ratio)) effect.ratio = 4.0f;
+        if (!std::isfinite(effect.attackMs)) effect.attackMs = 10.0f;
+        if (!std::isfinite(effect.releaseMs)) effect.releaseMs = 100.0f;
+        if (!std::isfinite(effect.makeupDb)) effect.makeupDb = 0.0f;
+        effect.wet = std::clamp(effect.wet, 0.0f, 1.0f);
+        effect.delayMs = std::clamp(effect.delayMs, 1.0f, 2000.0f);
+        effect.feedback = std::clamp(effect.feedback, 0.0f, 0.95f);
+        effect.roomSize = std::clamp(effect.roomSize, 0.0f, 1.0f);
+        effect.damping = std::clamp(effect.damping, 0.0f, 1.0f);
+        effect.thresholdDb = std::clamp(effect.thresholdDb, -60.0f, 0.0f);
+        effect.ratio = std::clamp(effect.ratio, 1.0f, 20.0f);
+        effect.attackMs = std::clamp(effect.attackMs, 0.1f, 200.0f);
+        effect.releaseMs = std::clamp(effect.releaseMs, 1.0f, 2000.0f);
+        effect.makeupDb = std::clamp(effect.makeupDb, -12.0f, 24.0f);
+    }
+}
+}
+
+MixerEffect defaultMixerEffect(MixerEffectType type)
+{
+    MixerEffect effect;
+    effect.type = type;
+    if (type == MixerEffectType::Compressor)
+        effect.wet = 1.0f;
+    return effect;
 }
 
 float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress)
@@ -184,6 +225,8 @@ void ProjectData::normalize()
     bars = std::clamp(bars, 1, 64);
     countInBars = std::clamp(countInBars, 0, 4);
     masterGain = std::clamp(masterGain, 0.0f, 1.0f);
+    qsizetype effectBudget = 48;
+    normalizeEffectChain(masterEffects, effectBudget);
     if (markers.size() > 1000)
         markers.resize(1000);
     QVector<TimelineMarker> validMarkers;
@@ -229,6 +272,7 @@ void ProjectData::normalize()
         bus.name = bus.name.trimmed().left(80);
         if (bus.name.isEmpty())
             bus.name = QStringLiteral("Bus %1").arg(bus.id);
+        normalizeEffectChain(bus.effects, effectBudget);
         if (!std::isfinite(bus.gain)) bus.gain = 1.0f;
         if (!std::isfinite(bus.pan)) bus.pan = 0.0f;
         bus.gain = std::clamp(bus.gain, 0.0f, 2.0f);
@@ -342,6 +386,7 @@ void ProjectData::normalize()
             validSends.push_back(send);
         }
         track.sends = std::move(validSends);
+        normalizeEffectChain(track.effects, effectBudget);
         track.instrumentType = static_cast<InstrumentType>(
             std::clamp(static_cast<int>(track.instrumentType), 0, 2));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);

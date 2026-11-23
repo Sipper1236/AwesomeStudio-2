@@ -65,11 +65,16 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     ProjectData safeProject = project;
     safeProject.normalize();
 
+    auto snapshot = std::make_shared<const ProjectData>(safeProject);
+    SynthRenderer renderer;
+    renderer.setProject(snapshot, sampleRate);
+
     const qint64 beatUnitFrames = static_cast<qint64>(std::llround(
         sampleRate * 60.0 / safeProject.tempoBpm * 4.0 / safeProject.beatUnit));
     const qint64 countInFrames = static_cast<qint64>(safeProject.countInBars) *
                                  safeProject.beatsPerBar * beatUnitFrames;
-    const double durationSeconds = safeProject.songLengthBeats() * 60.0 / safeProject.tempoBpm + 0.1;
+    const double durationSeconds = safeProject.songLengthBeats() * 60.0 / safeProject.tempoBpm +
+                                   renderer.effectTailSeconds() + 0.1;
     const qint64 frameCount = countInFrames + static_cast<qint64>(std::ceil(durationSeconds * sampleRate));
     const quint64 dataSize = static_cast<quint64>(frameCount) * bytesPerSampleFrame;
     if (dataSize > std::numeric_limits<quint32>::max() - 36)
@@ -104,10 +109,6 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         return false;
     }
 
-    auto snapshot = std::make_shared<const ProjectData>(safeProject);
-    SynthRenderer renderer;
-    renderer.setProject(snapshot, sampleRate);
-
     constexpr int framesPerChunk = 2048;
     QByteArray audio(framesPerChunk * bytesPerSampleFrame, Qt::Uninitialized);
     qint64 writtenFrames = 0;
@@ -117,7 +118,11 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         for (int index = 0; index < frames; ++index)
         {
             renderer.beginMixerFrame();
-            const StereoSample rendered = renderer.renderSample(writtenFrames + index - countInFrames);
+            StereoSample rendered = renderer.renderSample(writtenFrames + index - countInFrames);
+            const StereoSample mixerOutput = renderer.finishMixerFrame();
+            rendered.left += mixerOutput.left;
+            rendered.right += mixerOutput.right;
+            rendered = renderer.processMasterEffects(rendered);
             const qint16 left = static_cast<qint16>(std::lrint(std::clamp(
                 std::tanh(rendered.left * safeProject.masterGain), -1.0f, 1.0f) * 32767.0f));
             const qint16 right = static_cast<qint16>(std::lrint(std::clamp(

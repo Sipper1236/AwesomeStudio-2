@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 18;
+constexpr int currentProjectVersion = 19;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -103,6 +103,96 @@ QJsonArray saveAutomation(const QVector<AutomationPoint>& points)
         });
     }
     return result;
+}
+
+QJsonArray saveEffects(const QVector<MixerEffect>& effects)
+{
+    QJsonArray result;
+    for (const MixerEffect& effect : effects)
+    {
+        result.push_back(QJsonObject{
+            {QStringLiteral("type"), static_cast<int>(effect.type)},
+            {QStringLiteral("enabled"), effect.enabled},
+            {QStringLiteral("wet"), effect.wet},
+            {QStringLiteral("delayMs"), effect.delayMs},
+            {QStringLiteral("feedback"), effect.feedback},
+            {QStringLiteral("roomSize"), effect.roomSize},
+            {QStringLiteral("damping"), effect.damping},
+            {QStringLiteral("thresholdDb"), effect.thresholdDb},
+            {QStringLiteral("ratio"), effect.ratio},
+            {QStringLiteral("attackMs"), effect.attackMs},
+            {QStringLiteral("releaseMs"), effect.releaseMs},
+            {QStringLiteral("makeupDb"), effect.makeupDb}
+        });
+    }
+    return result;
+}
+
+bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
+                 const QString& ownerName, QString* error)
+{
+    if (!value.isArray() || value.toArray().size() > 8)
+    {
+        setError(error, QStringLiteral("The %1 has invalid or excessive effect data.").arg(ownerName));
+        return false;
+    }
+    for (const QJsonValue& effectValue : value.toArray())
+    {
+        if (!effectValue.isObject())
+        {
+            setError(error, QStringLiteral("The %1 contains an invalid effect.").arg(ownerName));
+            return false;
+        }
+        const QJsonObject object = effectValue.toObject();
+        const int type = object.value(QStringLiteral("type")).toInt(-1);
+        if (type < 0 || type > 2)
+        {
+            setError(error, QStringLiteral("The %1 contains an unsupported effect type.").arg(ownerName));
+            return false;
+        }
+        MixerEffect effect = defaultMixerEffect(static_cast<MixerEffectType>(type));
+        effect.enabled = object.value(QStringLiteral("enabled")).toBool(true);
+        const double wet = object.value(QStringLiteral("wet")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double delayMs = object.value(QStringLiteral("delayMs")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double feedback = object.value(QStringLiteral("feedback")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double roomSize = object.value(QStringLiteral("roomSize")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double damping = object.value(QStringLiteral("damping")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double thresholdDb = object.value(QStringLiteral("thresholdDb")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double ratio = object.value(QStringLiteral("ratio")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double attackMs = object.value(QStringLiteral("attackMs")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double releaseMs = object.value(QStringLiteral("releaseMs")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        const double makeupDb = object.value(QStringLiteral("makeupDb")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        if (!std::isfinite(wet) || !std::isfinite(delayMs) || !std::isfinite(feedback) ||
+            !std::isfinite(roomSize) || !std::isfinite(damping) || !std::isfinite(thresholdDb) ||
+            !std::isfinite(ratio) || !std::isfinite(attackMs) || !std::isfinite(releaseMs) ||
+            !std::isfinite(makeupDb))
+        {
+            setError(error, QStringLiteral("The %1 contains invalid effect settings.").arg(ownerName));
+            return false;
+        }
+        effect.wet = static_cast<float>(wet);
+        effect.delayMs = static_cast<float>(delayMs);
+        effect.feedback = static_cast<float>(feedback);
+        effect.roomSize = static_cast<float>(roomSize);
+        effect.damping = static_cast<float>(damping);
+        effect.thresholdDb = static_cast<float>(thresholdDb);
+        effect.ratio = static_cast<float>(ratio);
+        effect.attackMs = static_cast<float>(attackMs);
+        effect.releaseMs = static_cast<float>(releaseMs);
+        effect.makeupDb = static_cast<float>(makeupDb);
+        effects.push_back(effect);
+    }
+    return true;
 }
 
 bool loadAutomation(const QJsonValue& value, QVector<AutomationPoint>& points,
@@ -225,6 +315,7 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("eqMidDb"), track.eqMidDb},
         {QStringLiteral("eqHighDb"), track.eqHighDb},
         {QStringLiteral("outputBusId"), static_cast<qint64>(track.outputBusId)},
+        {QStringLiteral("effects"), saveEffects(track.effects)},
         {QStringLiteral("sends"), [&track]
          {
              QJsonArray sends;
@@ -384,6 +475,10 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         if (sendBusId != 0)
             track.sends.push_back({sendBusId, static_cast<float>(sendGain)});
     }
+    if (version >= 19 &&
+        !loadEffects(object.value(QStringLiteral("effects")), track.effects,
+                     QStringLiteral("track"), error))
+        return false;
     if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
                         QStringLiteral("volume"), error) ||
         !loadAutomation(object.value(QStringLiteral("panAutomation")), track.panAutomation,
@@ -464,6 +559,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
                      });
                  return sends;
              }()},
+            {QStringLiteral("effects"), saveEffects(bus.effects)},
             {QStringLiteral("gain"), bus.gain},
             {QStringLiteral("pan"), bus.pan},
             {QStringLiteral("muted"), bus.muted},
@@ -482,6 +578,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("metronomeEnabled"), safeProject.metronomeEnabled},
         {QStringLiteral("countInBars"), safeProject.countInBars},
         {QStringLiteral("masterGain"), safeProject.masterGain},
+        {QStringLiteral("masterEffects"), saveEffects(safeProject.masterEffects)},
         {QStringLiteral("markers"), markers},
         {QStringLiteral("buses"), buses},
         {QStringLiteral("tracks"), tracks}
@@ -551,6 +648,10 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     loaded.metronomeEnabled = version >= 5 ? root.value(QStringLiteral("metronomeEnabled")).toBool(false) : false;
     loaded.countInBars = version >= 5 ? root.value(QStringLiteral("countInBars")).toInt(0) : 0;
     loaded.masterGain = static_cast<float>(root.value(QStringLiteral("masterGain")).toDouble(0.8));
+    if (version >= 19 &&
+        !loadEffects(root.value(QStringLiteral("masterEffects")), loaded.masterEffects,
+                     QStringLiteral("Master channel"), error))
+        return false;
     if (version >= 12)
     {
         const QJsonValue markerValue = root.value(QStringLiteral("markers"));
@@ -631,6 +732,10 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
                     bus.sends.push_back(send);
                 }
             }
+            if (version >= 19 &&
+                !loadEffects(busObject.value(QStringLiteral("effects")), bus.effects,
+                             QStringLiteral("mixer bus"), error))
+                return false;
             bus.name = busObject.value(QStringLiteral("name")).toString().trimmed();
             const double gain = busObject.value(QStringLiteral("gain")).toDouble(
                 std::numeric_limits<double>::quiet_NaN());
