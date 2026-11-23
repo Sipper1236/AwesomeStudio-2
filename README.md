@@ -11,6 +11,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Quantize selected note starts to the current piano-roll grid; when nothing is selected, quantize the whole clip. Quantize edits can be undone.
 - Choose a root key and scale to highlight in-scale pitches; enable **Scale snap** to constrain newly drawn notes and keyboard auditions. Existing notes are left as they are.
 - Select one or more piano-roll root notes, then use **Edit → Build chord from selection** to add major, minor, diminished, augmented, suspended, or seventh chords. Added notes copy the root notes' timing, velocity, and MIDI channel and can be undone.
+- Toggle **Ghost notes** in the piano-roll toolbar to see faint, non-editable notes from other MIDI clips on the same track while editing the selected clip.
 - Set the grid to quarter, eighth, sixteenth, or thirty-second notes, edit velocity, and undo or redo note edits.
 - Play and loop the full arrangement at 20–300 BPM.
 - Enable an accented metronome and set a 1, 2, or 4 bar count-in. Count-in is included in WAV renders.

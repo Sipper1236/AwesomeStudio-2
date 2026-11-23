@@ -111,6 +111,18 @@ public:
         update();
     }
 
+    void setGhostNotes(const QVector<MidiNote>& newGhostNotes)
+    {
+        ghostNotes = newGhostNotes;
+        update();
+    }
+
+    void setGhostNotesEnabled(bool enabled)
+    {
+        ghostNotesEnabled = enabled;
+        update();
+    }
+
     void quantizeNotesToGrid()
     {
         if (notes.isEmpty())
@@ -274,6 +286,21 @@ protected:
                                        static_cast<int>(std::round(pixelsPerBeat * quarterNotesPerBar)) - 12,
                                        rulerHeight), Qt::AlignVCenter, QString::number(bar + 1));
             }
+        }
+
+        if (ghostNotesEnabled && !ghostNotes.isEmpty())
+        {
+            painter.save();
+            painter.setClipRect(QRect(sidebarWidth, gridTop, gridWidth, pitchCount * rowHeight));
+            painter.setBrush(QColor(148, 132, 224, 62));
+            painter.setPen(QPen(QColor(176, 163, 244, 150), 1.0));
+            for (const MidiNote& note : ghostNotes)
+            {
+                if (note.pitch < lowestPitch || note.pitch > highestPitch)
+                    continue;
+                painter.drawRoundedRect(noteBounds(note), 3.0, 3.0);
+            }
+            painter.restore();
         }
 
         painter.setPen(QColor(QStringLiteral("#75818e")));
@@ -610,6 +637,7 @@ private:
 
     MidiEditor* owner;
     QVector<MidiNote> notes;
+    QVector<MidiNote> ghostNotes;
     QVector<MidiNote> beforeEdit;
     QVector<MidiNote> originalNotes;
     QVector<int> scaleIntervals{0, 2, 4, 5, 7, 9, 11};
@@ -624,6 +652,7 @@ private:
     int pixelsPerBeat = 84;
     int rootPitchClass = 0;
     bool snapNewNotesToScale = false;
+    bool ghostNotesEnabled = true;
 };
 
 MidiEditor::MidiEditor(QWidget* parent) : QScrollArea(parent)
@@ -661,6 +690,16 @@ void MidiEditor::setSnap(double beatStep)
 void MidiEditor::setScale(int rootPitchClass, const QVector<int>& intervals, bool snapNewNotes)
 {
     canvas->setScale(rootPitchClass, intervals, snapNewNotes);
+}
+
+void MidiEditor::setGhostNotes(const QVector<MidiNote>& notes)
+{
+    canvas->setGhostNotes(notes);
+}
+
+void MidiEditor::setGhostNotesEnabled(bool enabled)
+{
+    canvas->setGhostNotesEnabled(enabled);
 }
 
 void MidiEditor::quantizeNotesToGrid()

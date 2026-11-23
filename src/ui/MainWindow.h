@@ -51,6 +51,7 @@ private:
     void createMenus();
     void setProject(const ProjectData& project, const QString& path = QString());
     void refreshProjectUi();
+    void refreshPianoRollGhostNotes();
     void refreshMixer();
     void refreshMixerMeters();
     void selectTrack(quint64 trackId);
@@ -172,6 +173,7 @@ private:
     QComboBox* pianoRollKeyControl = nullptr;
     QComboBox* pianoRollScaleControl = nullptr;
     QAction* pianoRollScaleSnapAction = nullptr;
+    QAction* pianoRollGhostNotesAction = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
     std::unique_ptr<MidiInput> midiInput;
     QComboBox* midiInputControl = nullptr;

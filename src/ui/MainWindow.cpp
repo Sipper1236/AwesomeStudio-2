@@ -853,6 +853,13 @@ void MainWindow::createToolBars()
     connect(pianoRollScaleSnapAction, &QAction::toggled,
             this, [applyPianoRollScale](bool) { applyPianoRollScale(); });
     applyPianoRollScale();
+    pianoRollGhostNotesAction = new QAction(tr("Ghost notes"), this);
+    pianoRollGhostNotesAction->setCheckable(true);
+    pianoRollGhostNotesAction->setChecked(true);
+    pianoRollGhostNotesAction->setToolTip(tr("Show notes from other MIDI clips on the selected track as non-editable guides"));
+    connect(pianoRollGhostNotesAction, &QAction::toggled,
+            midiEditor, &MidiEditor::setGhostNotesEnabled);
+    editorBar->addAction(pianoRollGhostNotesAction);
     editorBar->addSeparator();
     editorBar->addWidget(new QLabel(tr("ZOOM"), editorBar));
     zoomControl = new QSlider(Qt::Horizontal, editorBar);
@@ -1164,6 +1171,22 @@ MidiClip* MainWindow::selectedClip()
     return project.findClip(selectedTrackId, selectedClipId);
 }
 
+void MainWindow::refreshPianoRollGhostNotes()
+{
+    QVector<MidiNote> ghostNotes;
+    const InstrumentTrack* track = project.findTrack(selectedTrackId);
+    if (track != nullptr && track->instrumentType != InstrumentType::Audio)
+    {
+        for (const MidiClip& clip : track->clips)
+        {
+            if (clip.id == selectedClipId || clip.isAudioRegion())
+                continue;
+            ghostNotes += clip.notes;
+        }
+    }
+    midiEditor->setGhostNotes(ghostNotes);
+}
+
 void MainWindow::refreshProjectUi()
 {
     if (automationWriteSession.active)
@@ -1244,6 +1267,7 @@ void MainWindow::refreshProjectUi()
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     midiEditor->setNotes(clip == nullptr ? QVector<MidiNote>{} : clip->notes);
+    refreshPianoRollGhostNotes();
     const bool drumTrack = track != nullptr && track->instrumentType == InstrumentType::DrumRack;
     editorTabs->setTabEnabled(editorTabs->indexOf(stepSequencer), drumTrack);
     stepSequencer->setEnabled(drumTrack);
@@ -2082,6 +2106,7 @@ void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector
     {
         clip->lengthBeats = std::clamp(clipLengthBeats, 0.25, 16384.0);
     }
+    refreshPianoRollGhostNotes();
     const MidiClip* currentClip = selectedClip();
     stepSequencer->setPattern(currentClip == nullptr ? QVector<MidiNote>{} : currentClip->notes,
                               currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,

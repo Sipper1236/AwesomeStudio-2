@@ -16,6 +16,8 @@ public:
     void setTimeSignature(int beatsPerBar, int beatUnit);
     void setSnap(double beatStep);
     void setScale(int rootPitchClass, const QVector<int>& intervals, bool snapNewNotes);
+    void setGhostNotes(const QVector<MidiNote>& notes);
+    void setGhostNotesEnabled(bool enabled);
     void quantizeNotesToGrid();
     bool addChordToSelection(const QVector<int>& semitoneIntervals);
     void setPixelsPerBeat(int pixels);
