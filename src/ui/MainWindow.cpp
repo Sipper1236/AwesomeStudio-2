@@ -1513,7 +1513,7 @@ void MainWindow::createToolBars()
     arrangementBar->addWidget(automationWriteModeControl);
     automationWriteAction = new QAction(tr("Write automation"), this);
     automationWriteAction->setCheckable(true);
-    automationWriteAction->setToolTip(tr("Record the selected volume or pan control while the transport plays"));
+    automationWriteAction->setToolTip(tr("Record the selected track volume, pan, or LV2 control while the transport plays"));
     arrangementBar->addAction(automationWriteAction);
     automationWriteIdleTimer = new QTimer(this);
     automationWriteIdleTimer->setSingleShot(true);
@@ -1532,10 +1532,10 @@ void MainWindow::createToolBars()
         {
             const int mode = automationWriteModeControl->currentData().toInt();
             statusBar()->showMessage(mode == 1
-                ? tr("Latch is armed. Move a selected Mixer control; its last value keeps writing until playback stops or Write is disarmed.")
+                ? tr("Latch is armed. Move the selected Mixer control; its last value keeps writing until playback stops or Write is disarmed.")
                 : mode == 2
-                    ? tr("Trim is armed. Move a selected track control to add an offset to its existing volume or pan automation.")
-                    : tr("Touch is armed. Start playback and move the selected track control in the Mixer."), 6000);
+                    ? tr("Trim is armed. Move the selected Mixer control to add an offset to its existing automation.")
+                    : tr("Touch is armed. Start playback and move the selected Mixer control."), 6000);
         }
         else
             finishAutomationWrite();
@@ -1549,10 +1549,10 @@ void MainWindow::createToolBars()
         {
             const int mode = automationWriteModeControl->currentData().toInt();
             statusBar()->showMessage(mode == 1
-                ? tr("Latch is armed. Move a selected Mixer control; its last value keeps writing until playback stops or Write is disarmed.")
+                ? tr("Latch is armed. Move the selected Mixer control; its last value keeps writing until playback stops or Write is disarmed.")
                 : mode == 2
-                    ? tr("Trim is armed. Move a selected track control to add an offset to its existing volume or pan automation.")
-                    : tr("Touch is armed. Start playback and move the selected track control in the Mixer."), 5000);
+                    ? tr("Trim is armed. Move the selected Mixer control to add an offset to its existing automation.")
+                    : tr("Touch is armed. Start playback and move the selected Mixer control."), 5000);
         }
     });
     connect(automationLaneParameterControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -2708,7 +2708,7 @@ void MainWindow::refreshMixer()
         const std::function<void(MixerEffectType)>& appendEffect,
         const std::function<void(qsizetype)>& removeEffect,
         const std::function<void(qsizetype, qsizetype)>& moveEffect,
-        bool canAddEffect)
+        bool canAddEffect, quint64 automationTrackId)
     {
         auto* chain = new QGroupBox(tr("Effect inserts"), parent);
         auto* chainLayout = new QVBoxLayout(chain);
@@ -2732,6 +2732,7 @@ void MainWindow::refreshMixer()
                 const float value = static_cast<float>(control->value());
                 update(effectIndex, [assign, value](MixerEffect& effect) { assign(effect, value); });
             });
+            return control;
         };
         for (qsizetype index = 0; index < effects.size(); ++index)
         {
@@ -2836,7 +2837,7 @@ void MainWindow::refreshMixer()
                             std::max(0.001f, (parameter.maximum - parameter.minimum) / 1000.0f);
                         const int decimals = parameter.toggled || parameter.integer ? 0 :
                             parameter.maximum - parameter.minimum > 100.0f ? 2 : 3;
-                        addFloatControl(effectForm, parameter.name,
+                        QDoubleSpinBox* parameterControl = addFloatControl(effectForm, parameter.name,
                             std::clamp(value, parameter.minimum, parameter.maximum),
                             parameter.minimum, parameter.maximum, step, decimals, QString(),
                             index, updateEffect,
@@ -2847,6 +2848,53 @@ void MainWindow::refreshMixer()
                                 target.pluginParameterValues.push_back(defaultValue);
                             target.pluginParameterValues[parameterIndex] = newValue;
                         });
+                        if (automationTrackId != 0)
+                        {
+                            const int automationTarget = pluginAutomationTarget(index, parameterIndex);
+                            const QString targetUri = effect.pluginUri;
+                            connect(parameterControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                                    [this, automationTrackId, index, parameterIndex, automationTarget,
+                                     targetUri, parameter](double newValue)
+                            {
+                                const float recordedValue = static_cast<float>(newValue);
+                                if (automationWriteSession.active &&
+                                    automationWriteSession.trackId == automationTrackId &&
+                                    automationWriteSession.parameter == automationTarget &&
+                                    automationWriteSession.pluginUri == targetUri)
+                                {
+                                    recordAutomationValue(automationTrackId, automationTarget, recordedValue);
+                                    if (automationWriteModeControl->currentData().toInt() != 1)
+                                        automationWriteIdleTimer->start(250);
+                                    return;
+                                }
+                                if (automationWriteAction == nullptr || !automationWriteAction->isChecked() ||
+                                    !audioEngine.isPlaying() || automationLaneParameterControl == nullptr ||
+                                    automationLaneParameterControl->currentData().toInt() != automationTarget)
+                                    return;
+                                InstrumentTrack* track = project.findTrack(automationTrackId);
+                                if (track == nullptr || index < 0 || index >= track->effects.size())
+                                    return;
+                                const MixerEffect& currentEffect = track->effects[index];
+                                if (currentEffect.type != MixerEffectType::Lv2Plugin ||
+                                    currentEffect.pluginUri != targetUri)
+                                    return;
+                                const float baseValue = parameterIndex < currentEffect.pluginParameterValues.size()
+                                    ? currentEffect.pluginParameterValues[parameterIndex]
+                                    : parameter.defaultValue;
+                                beginAutomationWrite(automationTrackId, automationTarget, baseValue,
+                                    targetUri, index, parameterIndex, parameter.minimum, parameter.maximum,
+                                    parameter.name);
+                                if (automationWriteSession.active &&
+                                    automationWriteSession.trackId == automationTrackId &&
+                                    automationWriteSession.parameter == automationTarget &&
+                                    automationWriteSession.pluginUri == targetUri)
+                                {
+                                    recordAutomationValue(automationTrackId, automationTarget, recordedValue);
+                                    if (automationWriteModeControl->currentData().toInt() != 1)
+                                        automationWriteIdleTimer->start(250);
+                                }
+                            });
+                        }
                         QVector<AutomationPoint> curve =
                             parameterIndex < effect.pluginParameterAutomation.size()
                                 ? effect.pluginParameterAutomation[parameterIndex]
@@ -2918,6 +2966,13 @@ void MainWindow::refreshMixer()
         audioEngine.setProject(project);
         settingsDirty = true;
         refreshDirtyState();
+        refreshAutomationEditor();
+    };
+    const auto finishTrackPluginAutomation = [this](quint64 trackId)
+    {
+        if (automationWriteSession.active && automationWriteSession.trackId == trackId &&
+            !automationWriteSession.pluginUri.isEmpty())
+            finishAutomationWrite();
     };
 
     auto* masterBox = new QGroupBox(tr("Master"), content);
@@ -2988,7 +3043,7 @@ void MainWindow::refreshMixer()
                 commitEffectChange();
                 refreshMixer();
             });
-        }, effectCount() < 48);
+        }, effectCount() < 48, 0);
     auto* addBusButton = new QPushButton(tr("Add mixer bus"), masterBox);
     addBusButton->setEnabled(project.buses.size() < 64);
     masterForm->addRow(addBusButton);
@@ -3228,7 +3283,7 @@ void MainWindow::refreshMixer()
                         return;
                     }
                 });
-            }, effectCount() < 48);
+            }, effectCount() < 48, 0);
 
         auto* removeBusButton = new QPushButton(tr("Remove bus"), group);
         form->addRow(removeBusButton);
@@ -3395,12 +3450,15 @@ void MainWindow::refreshMixer()
                 editEffect(track->effects[index]);
                 commitEffectChange();
             },
-            [this, commitEffectChange, effectCount, trackId](MixerEffectType type)
+            [this, commitEffectChange, effectCount, finishTrackPluginAutomation, trackId]
+            (MixerEffectType type)
             {
-                QTimer::singleShot(0, this, [this, commitEffectChange, effectCount, trackId, type]
+                QTimer::singleShot(0, this,
+                    [this, commitEffectChange, effectCount, finishTrackPluginAutomation, trackId, type]
                 {
                     InstrumentTrack* track = project.findTrack(trackId);
                     if (track == nullptr || track->effects.size() >= 8 || effectCount() >= 48) return;
+                    finishTrackPluginAutomation(trackId);
                     MixerEffect effect;
                     QString pluginError;
                     if (!chooseMixerEffect(this, type, effect, pluginError))
@@ -3414,29 +3472,34 @@ void MainWindow::refreshMixer()
                     refreshMixer();
                 });
             },
-            [this, commitEffectChange, trackId](qsizetype index)
+            [this, commitEffectChange, finishTrackPluginAutomation, trackId](qsizetype index)
             {
-                QTimer::singleShot(0, this, [this, commitEffectChange, trackId, index]
+                QTimer::singleShot(0, this,
+                    [this, commitEffectChange, finishTrackPluginAutomation, trackId, index]
                 {
                     InstrumentTrack* track = project.findTrack(trackId);
                     if (track == nullptr || index < 0 || index >= track->effects.size()) return;
+                    finishTrackPluginAutomation(trackId);
                     track->effects.removeAt(index);
                     commitEffectChange();
                     refreshMixer();
                 });
             },
-            [this, commitEffectChange, trackId](qsizetype from, qsizetype to)
+            [this, commitEffectChange, finishTrackPluginAutomation, trackId]
+            (qsizetype from, qsizetype to)
             {
-                QTimer::singleShot(0, this, [this, commitEffectChange, trackId, from, to]
+                QTimer::singleShot(0, this,
+                    [this, commitEffectChange, finishTrackPluginAutomation, trackId, from, to]
                 {
                     InstrumentTrack* track = project.findTrack(trackId);
                     if (track == nullptr || from < 0 || from >= track->effects.size() ||
                         to < 0 || to >= track->effects.size()) return;
+                    finishTrackPluginAutomation(trackId);
                     track->effects.move(from, to);
                     commitEffectChange();
                     refreshMixer();
                 });
-            }, effectCount() < 48);
+            }, effectCount() < 48, trackId);
 
         auto* volume = new QSlider(Qt::Horizontal, group);
         volume->setObjectName(QStringLiteral("mixerTrackVolume_%1").arg(item.id));
@@ -4438,13 +4501,13 @@ void MainWindow::refreshArrangementAutomationView()
     const float maximum = automationLaneParameterControl->itemData(index, Qt::UserRole + 2).toFloat();
     const float defaultValue = automationLaneParameterControl->itemData(index, Qt::UserRole + 3).toFloat();
     const QString pluginUri = automationLaneParameterControl->itemData(index, Qt::UserRole + 4).toString();
-    const bool mixAutomationTarget = target == 0 || target == 1;
-    if (!mixAutomationTarget && automationWriteAction != nullptr && automationWriteAction->isChecked())
+    const bool writeAutomationTarget = target == 0 || target == 1 || !pluginUri.isEmpty();
+    if (!writeAutomationTarget && automationWriteAction != nullptr && automationWriteAction->isChecked())
         automationWriteAction->setChecked(false);
     if (automationWriteAction != nullptr)
-        automationWriteAction->setEnabled(mixAutomationTarget);
+        automationWriteAction->setEnabled(writeAutomationTarget);
     if (automationWriteModeControl != nullptr)
-        automationWriteModeControl->setEnabled(mixAutomationTarget);
+        automationWriteModeControl->setEnabled(writeAutomationTarget);
     arrangementEditor->setAutomationView(automationViewAction != nullptr &&
                                           automationViewAction->isChecked(),
                                           target, minimum, maximum, defaultValue, pluginUri,
@@ -4551,7 +4614,10 @@ void MainWindow::setSelectedAutomationCurve(int curveValue)
     undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after, pluginUri));
 }
 
-void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float value)
+void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float value,
+                                     const QString& pluginUri, qsizetype effectIndex,
+                                     qsizetype parameterIndex, float minimum, float maximum,
+                                     const QString& parameterName)
 {
     if (automationWriteSession.active || automationWriteAction == nullptr ||
         !automationWriteAction->isChecked() || !audioEngine.isPlaying() ||
@@ -4561,29 +4627,53 @@ void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float valu
     const double beat = audioEngine.positionBeats();
     if (track == nullptr || beat < 0.0)
         return;
+    QVector<AutomationPoint>* points = automationCurve(*track, parameter, pluginUri);
+    if (points == nullptr)
+        return;
+    if (parameter == 0)
+    {
+        minimum = 0.0f;
+        maximum = 1.0f;
+    }
+    else if (parameter == 1)
+    {
+        minimum = -1.0f;
+        maximum = 1.0f;
+    }
+    if (!std::isfinite(minimum) || !std::isfinite(maximum) || maximum <= minimum)
+        return;
 
-    QVector<AutomationPoint>& points = parameter == 0 ? track->volumeAutomation : track->panAutomation;
     automationWriteSession.active = true;
     automationWriteSession.changed = false;
     automationWriteSession.trackId = trackId;
     automationWriteSession.parameter = parameter;
+    automationWriteSession.pluginUri = pluginUri;
+    automationWriteSession.effectIndex = effectIndex;
+    automationWriteSession.parameterIndex = parameterIndex;
+    automationWriteSession.minimum = minimum;
+    automationWriteSession.maximum = maximum;
+    automationWriteSession.parameterName = parameterName;
     automationWriteSession.initialValue = value;
-    automationWriteSession.baseValue = parameter == 0 ? track->gain : track->pan;
+    automationWriteSession.baseValue = parameter == 0 ? track->gain :
+        parameter == 1 ? track->pan : value;
     automationWriteSession.lastValue = value;
     automationWriteSession.lastSampleBeat = beat;
     automationWriteSession.lastPointBeat = beat;
-    automationWriteSession.before = points;
+    automationWriteSession.before = *points;
     const bool trimMode = automationWriteModeControl->currentData().toInt() == 2;
     const float initialAutomationValue = automationValueAt(
-        points, beat, automationWriteSession.baseValue);
+        *points, beat, automationWriteSession.baseValue);
     const float initialWriteValue = trimMode ? initialAutomationValue : value;
-    if (!upsertAutomationPoint(points, beat, initialWriteValue))
+    if (!upsertAutomationPoint(*points, beat, initialWriteValue))
     {
         automationWriteSession = {};
         statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
         return;
     }
-    audioEngine.setLiveTrackMixOverride(trackId, parameter, initialWriteValue);
+    if (pluginUri.isEmpty())
+        audioEngine.setLiveTrackMixOverride(trackId, parameter, initialWriteValue);
+    else
+        audioEngine.setLiveLv2ParameterOverride(trackId, effectIndex, parameterIndex, initialWriteValue);
 }
 
 void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float value)
@@ -4597,13 +4687,17 @@ void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float val
     InstrumentTrack* track = project.findTrack(trackId);
     if (track == nullptr)
         return;
+    QVector<AutomationPoint>* points = automationCurve(*track, parameter,
+                                                        automationWriteSession.pluginUri);
+    if (points == nullptr)
+        return;
 
     const bool trimMode = automationWriteModeControl->currentData().toInt() == 2;
     const float underlyingValue = automationValueAt(
         automationWriteSession.before, beat, automationWriteSession.baseValue);
     const float writeValue = trimMode
         ? std::clamp(underlyingValue + value - automationWriteSession.initialValue,
-                     parameter == 0 ? 0.0f : -1.0f, 1.0f)
+                     automationWriteSession.minimum, automationWriteSession.maximum)
         : value;
 
     if (beat + 1.0e-6 < automationWriteSession.lastSampleBeat)
@@ -4618,8 +4712,7 @@ void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float val
     if (coalesce)
         writeBeat = automationWriteSession.lastPointBeat;
 
-    QVector<AutomationPoint>& points = parameter == 0 ? track->volumeAutomation : track->panAutomation;
-    if (!upsertAutomationPoint(points, writeBeat, writeValue))
+    if (!upsertAutomationPoint(*points, writeBeat, writeValue))
         statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
     else if (!coalesce)
         automationWriteSession.lastPointBeat = writeBeat;
@@ -4628,7 +4721,11 @@ void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float val
                                      (trimMode ? std::abs(writeValue - underlyingValue)
                                       : std::abs(value - automationWriteSession.initialValue)) > 1.0e-6f;
     automationWriteSession.lastValue = value;
-    audioEngine.setLiveTrackMixOverride(trackId, parameter, writeValue);
+    if (automationWriteSession.pluginUri.isEmpty())
+        audioEngine.setLiveTrackMixOverride(trackId, parameter, writeValue);
+    else
+        audioEngine.setLiveLv2ParameterOverride(trackId, automationWriteSession.effectIndex,
+                                                automationWriteSession.parameterIndex, writeValue);
 }
 
 void MainWindow::finishAutomationWrite()
@@ -4638,29 +4735,32 @@ void MainWindow::finishAutomationWrite()
     automationWriteIdleTimer->stop();
     AutomationWriteSession session = automationWriteSession;
     automationWriteSession = {};
-    audioEngine.clearLiveTrackMixOverride(session.trackId, session.parameter);
+    if (session.pluginUri.isEmpty())
+        audioEngine.clearLiveTrackMixOverride(session.trackId, session.parameter);
+    else
+        audioEngine.clearLiveLv2ParameterOverride(session.trackId, session.effectIndex,
+                                                  session.parameterIndex);
 
     InstrumentTrack* track = project.findTrack(session.trackId);
     if (track == nullptr)
         return;
-    const QVector<AutomationPoint>& current = session.parameter == 0
-        ? track->volumeAutomation : track->panAutomation;
-    if (!session.changed || sameAutomationPoints(session.before, current))
+    QVector<AutomationPoint>* current = automationCurve(*track, session.parameter, session.pluginUri);
+    if (current == nullptr)
+        return;
+    if (!session.changed || sameAutomationPoints(session.before, *current))
     {
-        if (session.parameter == 0)
-            track->volumeAutomation = session.before;
-        else
-            track->panAutomation = session.before;
+        *current = session.before;
         audioEngine.setProject(project);
         return;
     }
 
-    const QVector<AutomationPoint> after = current;
+    const QVector<AutomationPoint> after = *current;
     undoStack.push(new AutomationEditCommand(this, session.trackId, session.parameter,
-                                             session.before, after));
+                                             session.before, after, session.pluginUri));
+    const QString parameterName = session.parameterName.isEmpty()
+        ? session.parameter == 0 ? tr("volume") : tr("pan") : session.parameterName;
     statusBar()->showMessage(tr("Recorded %1 automation for %2")
-                                 .arg(session.parameter == 0 ? tr("volume") : tr("pan"))
-                                 .arg(track->name), 2500);
+                                 .arg(parameterName, track->name), 2500);
 }
 
 void MainWindow::applyAutomationHistory(quint64 trackId, int parameter, const QString& pluginUri,

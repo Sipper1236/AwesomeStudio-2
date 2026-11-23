@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace
@@ -311,6 +312,35 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
             liveTrackPans[index].store(2.0f, std::memory_order_release);
         return;
     }
+}
+
+void AudioEngine::setLiveLv2ParameterOverride(quint64 trackId, qsizetype effectIndex,
+                                             qsizetype parameterIndex, float value)
+{
+    if (trackId == 0 || effectIndex < 0 || effectIndex >= 8 ||
+        parameterIndex < 0 || parameterIndex >= 256 || !std::isfinite(value))
+        return;
+    const bool sameTarget = liveLv2TrackId.load(std::memory_order_acquire) == trackId &&
+        liveLv2EffectIndex.load(std::memory_order_relaxed) == effectIndex &&
+        liveLv2ParameterIndex.load(std::memory_order_relaxed) == parameterIndex;
+    if (!sameTarget)
+    {
+        liveLv2ParameterOverrideActive.store(false, std::memory_order_release);
+        liveLv2TrackId.store(trackId, std::memory_order_relaxed);
+        liveLv2EffectIndex.store(effectIndex, std::memory_order_relaxed);
+        liveLv2ParameterIndex.store(parameterIndex, std::memory_order_relaxed);
+    }
+    liveLv2ParameterValue.store(value, std::memory_order_release);
+    liveLv2ParameterOverrideActive.store(true, std::memory_order_release);
+}
+
+void AudioEngine::clearLiveLv2ParameterOverride(quint64 trackId, qsizetype effectIndex,
+                                               qsizetype parameterIndex)
+{
+    if (liveLv2TrackId.load(std::memory_order_acquire) == trackId &&
+        liveLv2EffectIndex.load(std::memory_order_relaxed) == effectIndex &&
+        liveLv2ParameterIndex.load(std::memory_order_relaxed) == parameterIndex)
+        liveLv2ParameterOverrideActive.store(false, std::memory_order_release);
 }
 
 void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity,
@@ -929,6 +959,25 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             liveTrackVolumes[index].load(std::memory_order_acquire));
         renderer.setLiveTrackMixOverride(index, 1,
             liveTrackPans[index].load(std::memory_order_acquire));
+    }
+    const quint64 liveLv2TrackId = this->liveLv2TrackId.load(std::memory_order_acquire);
+    const qsizetype liveLv2EffectIndex = this->liveLv2EffectIndex.load(std::memory_order_relaxed);
+    const qsizetype liveLv2ParameterIndex = this->liveLv2ParameterIndex.load(std::memory_order_relaxed);
+    if (liveLv2TrackId != 0 && liveLv2EffectIndex >= 0 && liveLv2ParameterIndex >= 0)
+    {
+        for (size_t trackIndex = 0;
+             trackIndex < static_cast<size_t>(project->tracks.size()) &&
+                 trackIndex < maximumTrackCount; ++trackIndex)
+        {
+            if (project->tracks[static_cast<qsizetype>(trackIndex)].id != liveLv2TrackId)
+                continue;
+            const float liveValue = liveLv2ParameterOverrideActive.load(std::memory_order_acquire)
+                ? this->liveLv2ParameterValue.load(std::memory_order_acquire)
+                : std::numeric_limits<float>::quiet_NaN();
+            renderer.setLiveLv2ParameterOverride(
+                trackIndex, liveLv2EffectIndex, liveLv2ParameterIndex, liveValue);
+            break;
+        }
     }
     const std::shared_ptr<const AudioAsset> previewSample =
         std::atomic_load_explicit(&previewSampleAsset, std::memory_order_acquire);

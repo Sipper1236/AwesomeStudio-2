@@ -16,12 +16,12 @@ Status describes the executable built by the repository's CMake target. Source f
 | Audio recording | Select an input device, record mono/stereo WAV takes, and add them as new Playlist audio tracks; uses count-in when output is available, works without output, supports standalone or during-take input monitoring to Master, and respects project and WAV size limits | Latency compensation, track-armed monitoring, punch recording, take comping |
 | MIDI input | ALSA input device enumeration, polyphonic live monitoring for synth and sampled drum-rack notes, configurable-range channel pitch bend on live synth voices, note and pitch-bend recording, and channel-specific learnable CC mappings for master level, selected-track level/pan, and tempo on Linux; note on/off, overlapping same-pitch notes, count-in, loop timing, pattern assignment, and undo/redo | Native MIDI backends on other platforms, NRPN, and broader controller targets |
 | Plugins and effects | Built-in per-track three-band EQ and reorderable Delay, Reverb, Compressor, and resonant Low-pass Filter inserts plus Linux LV2 effects that declare hard realtime support; generic control-port editing and beat/value keyframes in the Mixer and graphical Playlist lanes; automation runs in realtime arrangement playback, WAV export, and stems | VST3/CLAP, plugin instruments and editor windows, plugin state beyond control values, custom EQ curves |
-| Automation | Per-track volume, pan, and LV2 control-port keyframes with graphical Playlist lanes, click-to-add and drag-to-edit points, right-click/Delete removal, undo/redo, Linear, Smooth, Ease In, Ease Out, and Hold segments in playback/rendering, touch/latch recording and trim-offset recording from Mixer controls during playback for volume and pan | Plugin-control recording from Mixer controls |
+| Automation | Per-track volume, pan, and LV2 control-port keyframes with graphical Playlist lanes, click-to-add and drag-to-edit points, right-click/Delete removal, undo/redo, Linear, Smooth, Ease In, Ease Out, and Hold segments in playback/rendering, plus audible Touch, Latch, and Trim recording from Mixer controls during playback for volume, pan, and LV2 controls | Automation for other mixer, instrument, and MIDI targets |
 | Collaboration and notation | Not implemented | Score view, collaboration, session interchange |
 
 ## Next slices
 
-1. Expand hosting to VST3/CLAP and instrument plugins; add plugin-control recording from Mixer controls.
+1. Expand hosting to VST3/CLAP and instrument plugins; add plugin editor windows and persistent plugin state.
 2. Add native MIDI input backends for other platforms and broader controller support; add audio monitoring, latency compensation, punch recording, and take comping.
 3. Add freehand/Bezier audio fade drawing, comping, and portable media packaging or relinking.
 4. Add plugin latency compensation and block-based plugin processing.

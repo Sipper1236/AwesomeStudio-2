@@ -27,6 +27,8 @@ public:
     StereoSample processMasterEffects(StereoSample input);
     double effectTailSeconds() const;
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
+    void setLiveLv2ParameterOverride(size_t trackIndex, qsizetype effectIndex,
+                                     qsizetype parameterIndex, float value);
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
     float trackPeakLevel(size_t trackIndex) const;
@@ -147,6 +149,7 @@ private:
         std::array<float, 2> filterX2{};
         std::array<float, 2> filterY1{};
         std::array<float, 2> filterY2{};
+        std::vector<float> liveParameterOverrides;
         std::unique_ptr<Lv2AudioEffectInstance> lv2Effect;
         float filterB0 = 1.0f;
         float filterB1 = 0.0f;

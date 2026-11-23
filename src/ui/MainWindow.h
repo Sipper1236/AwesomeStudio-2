@@ -116,7 +116,11 @@ private:
     void removeTimelineMarker(double beat);
     void seekToTimelineMarker(double beat);
     void applyMarkerHistory(const QVector<TimelineMarker>& markers);
-    void beginAutomationWrite(quint64 trackId, int parameter, float value);
+    void beginAutomationWrite(quint64 trackId, int parameter, float value,
+                              const QString& pluginUri = QString(),
+                              qsizetype effectIndex = -1, qsizetype parameterIndex = -1,
+                              float minimum = 0.0f, float maximum = 1.0f,
+                              const QString& parameterName = QString());
     void recordAutomationValue(quint64 trackId, int parameter, float value);
     void finishAutomationWrite();
     void importDrumSample(int pad);
@@ -329,6 +333,12 @@ private:
         bool changed = false;
         quint64 trackId = 0;
         int parameter = 0;
+        QString pluginUri;
+        qsizetype effectIndex = -1;
+        qsizetype parameterIndex = -1;
+        float minimum = 0.0f;
+        float maximum = 1.0f;
+        QString parameterName;
         float initialValue = 0.0f;
         float baseValue = 0.0f;
         float lastValue = 0.0f;

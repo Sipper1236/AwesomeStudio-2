@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 
 namespace
@@ -886,6 +887,10 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
         {
             state.lv2Effect = std::make_unique<Lv2AudioEffectInstance>(
                 effect.pluginUri, sampleRate, effect.pluginParameterValues);
+            if (state.lv2Effect != nullptr)
+                state.liveParameterOverrides.assign(
+                    static_cast<size_t>(state.lv2Effect->parameterCount()),
+                    std::numeric_limits<float>::quiet_NaN());
         }
         states.push_back(std::move(state));
     }
@@ -1052,9 +1057,20 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
             {
                 const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
                     ? effect.pluginParameterValues[parameterIndex] : 0.0f;
-                const float value = automationValue(
+                float value = automationValue(
                     effect.pluginParameterAutomation[parameterIndex], currentBeat, defaultValue);
+                if (static_cast<size_t>(parameterIndex) < state.liveParameterOverrides.size() &&
+                    std::isfinite(state.liveParameterOverrides[static_cast<size_t>(parameterIndex)]))
+                    value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
                 state.lv2Effect->setParameter(parameterIndex, value);
+            }
+            for (qsizetype parameterIndex = effect.pluginParameterAutomation.size();
+                 parameterIndex < static_cast<qsizetype>(state.liveParameterOverrides.size());
+                 ++parameterIndex)
+            {
+                const float value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
+                if (std::isfinite(value))
+                    state.lv2Effect->setParameter(parameterIndex, value);
             }
             state.lv2Effect->process(wet.left, wet.right);
             if (!std::isfinite(wet.left) || !std::isfinite(wet.right))
@@ -1183,6 +1199,19 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
         liveTrackMixOverrides[trackIndex].volume = value;
     else if (parameter == 1)
         liveTrackMixOverrides[trackIndex].pan = value;
+}
+
+void SynthRenderer::setLiveLv2ParameterOverride(size_t trackIndex, qsizetype effectIndex,
+                                                qsizetype parameterIndex, float value)
+{
+    if (trackIndex >= trackEffectStates.size() || effectIndex < 0 ||
+        effectIndex >= static_cast<qsizetype>(trackEffectStates[trackIndex].size()))
+        return;
+    std::vector<float>& overrides =
+        trackEffectStates[trackIndex][static_cast<size_t>(effectIndex)].liveParameterOverrides;
+    if (parameterIndex < 0 || parameterIndex >= static_cast<qsizetype>(overrides.size()))
+        return;
+    overrides[static_cast<size_t>(parameterIndex)] = value;
 }
 
 void SynthRenderer::resetTrackPeakLevels()

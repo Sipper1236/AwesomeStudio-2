@@ -34,6 +34,10 @@ public:
     float masterPeakLevel() const;
     void setLiveTrackMixOverride(quint64 trackId, int parameter, float value);
     void clearLiveTrackMixOverride(quint64 trackId, int parameter);
+    void setLiveLv2ParameterOverride(quint64 trackId, qsizetype effectIndex,
+                                     qsizetype parameterIndex, float value);
+    void clearLiveLv2ParameterOverride(quint64 trackId, qsizetype effectIndex,
+                                       qsizetype parameterIndex);
     void triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity, const InstrumentTrack& track);
     void triggerLiveMidiNoteOff(int channel, int midiPitch);
     void triggerLiveMidiPitchBend(int channel, int value);
@@ -170,6 +174,11 @@ private:
     std::atomic<float> masterGain{0.8f};
     std::array<std::atomic<float>, maximumTrackCount> liveTrackVolumes;
     std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
+    std::atomic<quint64> liveLv2TrackId{0};
+    std::atomic<qsizetype> liveLv2EffectIndex{-1};
+    std::atomic<qsizetype> liveLv2ParameterIndex{-1};
+    std::atomic<float> liveLv2ParameterValue{0.0f};
+    std::atomic<bool> liveLv2ParameterOverrideActive{false};
     std::array<LiveMidiEvent, liveMidiQueueCapacity> liveMidiEvents;
     std::array<LiveMidiVoice, maximumLiveMidiVoices> liveMidiVoices;
     std::array<float, 16> liveMidiChannelPitchBends{};

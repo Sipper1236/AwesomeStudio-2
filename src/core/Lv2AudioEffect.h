@@ -44,6 +44,7 @@ public:
     Lv2AudioEffectInstance& operator=(const Lv2AudioEffectInstance&) = delete;
 
     bool isValid() const;
+    qsizetype parameterCount() const;
     void setParameter(qsizetype index, float value);
     void process(float& left, float& right);
 
