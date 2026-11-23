@@ -126,6 +126,7 @@ private:
     MidiClip* selectedClip();
     bool maybeSave();
     bool saveToPath(const QString& path);
+    void autosaveProject();
     void updateProjectTitle();
     void refreshDirtyState();
     void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,
@@ -261,6 +262,7 @@ private:
     QAction* redoAction = nullptr;
     QUndoStack undoStack;
     QTimer* uiTimer = nullptr;
+    QTimer* autosaveTimer = nullptr;
     QTimer* automationWriteIdleTimer = nullptr;
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;

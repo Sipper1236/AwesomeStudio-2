@@ -21,6 +21,7 @@
 #include <QDoubleSpinBox>
 #include <QDockWidget>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -59,6 +60,11 @@
 namespace
 {
 constexpr double automationWritePointSpacingBeats = 0.04;
+
+QString projectAutosavePath(const QString& projectPath)
+{
+    return projectPath + QStringLiteral(".autosave");
+}
 
 bool chooseExportRange(QWidget* parent, double songLengthBeats, bool& useRange,
                        double& startBeat, double& endBeat)
@@ -750,6 +756,10 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         refreshMixerMeters();
     });
     uiTimer->start();
+    autosaveTimer = new QTimer(this);
+    autosaveTimer->setInterval(120000);
+    connect(autosaveTimer, &QTimer::timeout, this, &MainWindow::autosaveProject);
+    autosaveTimer->start();
 }
 
 MainWindow::~MainWindow() = default;
@@ -775,14 +785,55 @@ void MainWindow::createActions()
                                                           tr("Awesome Studio project (*.aws)"));
         if (path.isEmpty())
             return;
+        QString loadPath = path;
+        const QFileInfo autosaveInfo(projectAutosavePath(path));
+        const QFileInfo projectInfo(path);
+        bool recoveredAutosave = false;
+        if (autosaveInfo.exists() && autosaveInfo.lastModified() >= projectInfo.lastModified())
+        {
+            const QMessageBox::StandardButton choice = QMessageBox::question(
+                this, tr("Recover autosave"),
+                tr("A newer autosave is available for %1. Recover it?")
+                    .arg(QFileInfo(path).fileName()),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            if (choice == QMessageBox::Yes)
+            {
+                loadPath = autosaveInfo.filePath();
+                recoveredAutosave = true;
+            }
+            else
+            {
+                QFile::remove(autosaveInfo.filePath());
+            }
+        }
         ProjectData loaded;
         QString error;
-        if (!ProjectFile::load(path, loaded, &error))
+        if (!ProjectFile::load(loadPath, loaded, &error) && recoveredAutosave)
+        {
+            QMessageBox::warning(this, tr("Autosave could not be recovered"),
+                                 tr("The original project will be opened instead.\n%1").arg(error));
+            QFile::remove(projectAutosavePath(path));
+            recoveredAutosave = false;
+            error.clear();
+            if (!ProjectFile::load(path, loaded, &error))
+            {
+                QMessageBox::critical(this, tr("Could not open project"), error);
+                return;
+            }
+        }
+        else if (!error.isEmpty())
         {
             QMessageBox::critical(this, tr("Could not open project"), error);
             return;
         }
         setProject(loaded, path);
+        if (recoveredAutosave)
+        {
+            settingsDirty = true;
+            refreshDirtyState();
+            statusBar()->showMessage(tr("Recovered autosave for %1; save the project to keep it.")
+                                         .arg(QFileInfo(path).fileName()), 6000);
+        }
     });
 
     auto* saveAction = new QAction(style()->standardIcon(QStyle::SP_DialogSaveButton), tr("Save"), this);
@@ -3980,7 +4031,13 @@ bool MainWindow::maybeSave()
         }
         return saveToPath(projectPath);
     }
-    return choice == QMessageBox::Discard;
+    if (choice == QMessageBox::Discard)
+    {
+        if (!projectPath.isEmpty())
+            QFile::remove(projectAutosavePath(projectPath));
+        return true;
+    }
+    return false;
 }
 
 void MainWindow::setProject(const ProjectData& incoming, const QString& path)
@@ -4037,12 +4094,24 @@ bool MainWindow::saveToPath(const QString& path)
     }
 
     projectPath = savePath;
+    QFile::remove(projectAutosavePath(savePath));
     settingsDirty = false;
     undoStack.setClean();
     audioEngine.setProject(project);
     updateProjectTitle();
     statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(savePath).fileName()), 2500);
     return true;
+}
+
+void MainWindow::autosaveProject()
+{
+    if (projectPath.isEmpty() || !isWindowModified() || audioRecorder || recordingPending ||
+        midiRecordingActive || midiRecordingPending || automationWriteSession.active)
+        return;
+
+    QString error;
+    if (!ProjectFile::save(projectAutosavePath(projectPath), project, &error))
+        statusBar()->showMessage(tr("Autosave failed: %1").arg(error), 6000);
 }
 
 void MainWindow::updateProjectTitle()
