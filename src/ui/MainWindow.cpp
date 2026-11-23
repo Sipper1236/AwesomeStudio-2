@@ -6720,57 +6720,62 @@ void MainWindow::relinkAudioRegion(quint64 trackId, quint64 clipId)
 
 void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
 {
+    InstrumentTrack* track = selectedTrack();
     MidiClip* clip = selectedClip();
-    if (clip == nullptr || !clip->isAudioRegion())
+    if (track == nullptr || clip == nullptr || !clip->isAudioRegion())
         return;
 
     const double fadeBeats = std::clamp(beats, 0.0, clip->lengthBeats);
+    const AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
+        clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
+        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+    AudioFadeState after = before;
     if (fadeIn)
-        clip->audioFadeInBeats = fadeBeats;
+        after.fadeInBeats = fadeBeats;
     else
-        clip->audioFadeOutBeats = fadeBeats;
-    audioEngine.setProject(project);
-    arrangementEditor->setProject(project);
-    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
-    settingsDirty = true;
-    refreshDirtyState();
+        after.fadeOutBeats = fadeBeats;
+    if (std::abs((fadeIn ? before.fadeInBeats : before.fadeOutBeats) - fadeBeats) < 1.0e-9)
+        return;
+    undoStack.push(new AudioFadeEditCommand(this, track->id, {before}, {after}));
 }
 
 void MainWindow::setSelectedAudioFadeCurve(bool fadeIn, int curve)
 {
+    InstrumentTrack* track = selectedTrack();
     MidiClip* clip = selectedClip();
-    if (clip == nullptr || !clip->isAudioRegion() || curve < 0 || curve > 4)
+    if (track == nullptr || clip == nullptr || !clip->isAudioRegion() || curve < 0 || curve > 4)
         return;
     const auto fadeCurve = static_cast<AudioFadeCurve>(curve);
-    AudioFadeCurve& current = fadeIn ? clip->audioFadeInCurve : clip->audioFadeOutCurve;
-    if (current == fadeCurve)
+    const AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
+        clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
+        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+    AudioFadeState after = before;
+    AudioFadeCurve& nextCurve = fadeIn ? after.fadeInCurve : after.fadeOutCurve;
+    if (nextCurve == fadeCurve)
         return;
-    current = fadeCurve;
-    QVector<float>& points = fadeIn ? clip->audioFadeInCurvePoints : clip->audioFadeOutCurvePoints;
+    nextCurve = fadeCurve;
+    QVector<float>& points = fadeIn ? after.fadeInCurvePoints : after.fadeOutCurvePoints;
     if (fadeCurve == AudioFadeCurve::Drawn && points.isEmpty())
         points = defaultAudioFadeCurvePoints();
-    audioEngine.setProject(project);
-    arrangementEditor->setProject(project);
-    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
-    settingsDirty = true;
-    refreshDirtyState();
+    undoStack.push(new AudioFadeEditCommand(this, track->id, {before}, {after}));
 }
 
 void MainWindow::setSelectedAudioFadeShape(bool fadeIn, double shape)
 {
+    InstrumentTrack* track = selectedTrack();
     MidiClip* clip = selectedClip();
-    if (clip == nullptr || !clip->isAudioRegion() || !std::isfinite(shape))
+    if (track == nullptr || clip == nullptr || !clip->isAudioRegion() || !std::isfinite(shape))
         return;
     const double normalizedShape = std::clamp(shape, 0.25, 4.0);
-    double& current = fadeIn ? clip->audioFadeInShape : clip->audioFadeOutShape;
-    if (std::abs(current - normalizedShape) < 1.0e-6)
+    const AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
+        clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
+        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+    AudioFadeState after = before;
+    double& nextShape = fadeIn ? after.fadeInShape : after.fadeOutShape;
+    if (std::abs(nextShape - normalizedShape) < 1.0e-6)
         return;
-    current = normalizedShape;
-    audioEngine.setProject(project);
-    arrangementEditor->setProject(project);
-    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
-    settingsDirty = true;
-    refreshDirtyState();
+    nextShape = normalizedShape;
+    undoStack.push(new AudioFadeEditCommand(this, track->id, {before}, {after}));
 }
 
 void MainWindow::createSelectedAudioCrossfade()
