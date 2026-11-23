@@ -4,6 +4,7 @@
 #include <QAudioFormat>
 #include <QString>
 
+#include <functional>
 #include <memory>
 
 class QAudioSource;
@@ -13,6 +14,8 @@ class QSaveFile;
 class AudioRecorder
 {
 public:
+    using MonitorCallback = std::function<void(const float*, qsizetype, int, int)>;
+
     AudioRecorder();
     ~AudioRecorder();
 
@@ -26,6 +29,7 @@ public:
     quint64 frameCount() const;
     int sampleRate() const;
     int channelCount() const;
+    void setMonitorCallback(MonitorCallback callback);
 
 private:
     bool chooseFormat(const QAudioDevice& device);
@@ -45,4 +49,5 @@ private:
     int outputChannels = 0;
     bool reachedLimit = false;
     bool active = false;
+    MonitorCallback monitorCallback;
 };

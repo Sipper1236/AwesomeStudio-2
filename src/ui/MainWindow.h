@@ -227,6 +227,7 @@ private:
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;
     QAction* recordAction = nullptr;
+    QAction* audioMonitorAction = nullptr;
     QAction* midiRecordAction = nullptr;
     QAction* midiMonitorAction = nullptr;
     QAction* automationViewAction = nullptr;

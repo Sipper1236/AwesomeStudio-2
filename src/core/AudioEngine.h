@@ -42,12 +42,16 @@ public:
     void triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity = 96,
                               float pan = 0.0f, float gain = 1.0f);
     void setMasterGain(float gain);
+    bool setAudioInputMonitoring(bool enabled);
+    void pushAudioInputMonitorFrames(const float* interleavedSamples, qsizetype frameCount,
+                                     int channelCount, int sampleRate);
 
 private:
     static constexpr size_t maximumTrackCount = 256;
     static constexpr size_t maximumBusCount = 64;
     static constexpr size_t liveMidiQueueCapacity = 1024;
     static constexpr size_t maximumLiveMidiVoices = 128;
+    static constexpr size_t audioMonitorBufferCapacity = 32768;
     class AudioStream;
 
     struct LiveMidiEvent
@@ -92,6 +96,12 @@ private:
         std::shared_ptr<const AudioAsset> sample;
     };
 
+    struct AudioMonitorBufferEntry
+    {
+        StereoSample sample;
+        quint64 generation = 0;
+    };
+
     qint64 renderAudio(char* destination, qint64 maxBytes);
     void prepareNotes(const std::shared_ptr<const ProjectData>& project);
     bool enqueueLiveMidiEvent(const LiveMidiEvent& event);
@@ -126,6 +136,15 @@ private:
     std::array<bool, maximumTrackCount> liveMidiTrackFrameTouched{};
     std::array<size_t, maximumLiveMidiVoices> liveMidiTouchedTracks{};
     std::array<float, maximumTrackCount> liveMidiBlockPeaks{};
+    std::array<AudioMonitorBufferEntry, audioMonitorBufferCapacity> audioMonitorBuffer{};
+    std::atomic<quint64> audioMonitorWriteIndex{0};
+    std::atomic<quint64> audioMonitorReadIndex{0};
+    std::atomic<quint64> audioMonitorGeneration{0};
+    std::atomic<bool> audioInputMonitoring{false};
+    double audioMonitorNextSourceFrame = 0.0;
+    quint64 audioMonitorSourceFrameIndex = 0;
+    StereoSample audioMonitorPreviousSample;
+    bool audioMonitorHasPreviousSample = false;
     size_t liveMidiTouchedTrackCount = 0;
     std::atomic<size_t> liveMidiWriteIndex{0};
     std::atomic<size_t> liveMidiReadIndex{0};

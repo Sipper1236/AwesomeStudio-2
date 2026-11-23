@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 namespace
 {
@@ -286,6 +287,10 @@ void AudioRecorder::consumeAvailable()
         return;
     }
     QByteArray output(static_cast<int>(outputByteCount), Qt::Uninitialized);
+    const MonitorCallback monitor = monitorCallback;
+    QVector<float> monitorSamples;
+    if (monitor)
+        monitorSamples.resize(static_cast<qsizetype>(frames * static_cast<quint64>(outputChannels)));
     const int inputChannels = inputFormat.channelCount();
     const int inputBytesPerSample = inputFormat.bytesPerSample();
     for (quint64 frame = 0; frame < frames; ++frame)
@@ -311,6 +316,8 @@ void AudioRecorder::consumeAvailable()
             const qint16 value = static_cast<qint16>(std::lrint(std::clamp(sample, -1.0f, 1.0f) * 32767.0f));
             const qsizetype outputOffset = static_cast<qsizetype>(frame * outputChannels * 2 + channel * 2);
             write16(output.data() + outputOffset, static_cast<quint16>(value));
+            if (monitor)
+                monitorSamples[static_cast<qsizetype>(frame * outputChannels + channel)] = sample;
         }
     }
 
@@ -321,8 +328,16 @@ void AudioRecorder::consumeAvailable()
     }
     framesWritten += frames;
     pendingBytes.remove(0, static_cast<qsizetype>(frames * inputBytesPerFrame));
+    if (monitor)
+        monitor(monitorSamples.constData(), static_cast<qsizetype>(frames), outputChannels,
+                inputFormat.sampleRate());
     if (framesWritten >= maximumFrames)
         reachedLimit = true;
+}
+
+void AudioRecorder::setMonitorCallback(MonitorCallback callback)
+{
+    monitorCallback = std::move(callback);
 }
 
 bool AudioRecorder::writeHeader(quint32 dataBytes)

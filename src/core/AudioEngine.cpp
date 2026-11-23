@@ -588,6 +588,72 @@ void AudioEngine::setMasterGain(float gain)
     masterGain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_release);
 }
 
+bool AudioEngine::setAudioInputMonitoring(bool enabled)
+{
+    if (enabled && sink == nullptr)
+        return false;
+    audioMonitorGeneration.fetch_add(1, std::memory_order_acq_rel);
+    audioMonitorHasPreviousSample = false;
+    audioMonitorSourceFrameIndex = 0;
+    audioMonitorNextSourceFrame = 0.0;
+    audioInputMonitoring.store(enabled, std::memory_order_release);
+    return true;
+}
+
+void AudioEngine::pushAudioInputMonitorFrames(const float* interleavedSamples, qsizetype frameCount,
+                                             int channelCount, int sampleRate)
+{
+    if (!audioInputMonitoring.load(std::memory_order_acquire) || interleavedSamples == nullptr ||
+        frameCount <= 0 || channelCount < 1 || channelCount > 2 || sampleRate < 8000 ||
+        sampleRate > 192000 || outputSampleRate <= 0.0)
+        return;
+
+    const double sourceFramesPerOutputFrame = sampleRate / outputSampleRate;
+    const quint64 generation = audioMonitorGeneration.load(std::memory_order_acquire);
+    const auto enqueue = [this, generation](StereoSample sample)
+    {
+        const quint64 writeIndex = audioMonitorWriteIndex.load(std::memory_order_relaxed);
+        const quint64 readIndex = audioMonitorReadIndex.load(std::memory_order_acquire);
+        if (writeIndex - readIndex >= audioMonitorBufferCapacity)
+            return;
+        audioMonitorBuffer[writeIndex % audioMonitorBufferCapacity] = {sample, generation};
+        audioMonitorWriteIndex.store(writeIndex + 1, std::memory_order_release);
+    };
+
+    for (qsizetype frame = 0; frame < frameCount; ++frame)
+    {
+        const float rawLeft = interleavedSamples[frame * channelCount];
+        const float left = std::isfinite(rawLeft) ? std::clamp(rawLeft, -1.0f, 1.0f) : 0.0f;
+        const float rawRight = channelCount == 1 ? rawLeft :
+            interleavedSamples[frame * channelCount + 1];
+        const float right = channelCount == 1 ? left :
+            std::isfinite(rawRight) ? std::clamp(rawRight, -1.0f, 1.0f) : 0.0f;
+        const StereoSample current{left, right};
+        if (!audioMonitorHasPreviousSample)
+        {
+            audioMonitorPreviousSample = current;
+            audioMonitorHasPreviousSample = true;
+            audioMonitorSourceFrameIndex = 0;
+            enqueue(current);
+            audioMonitorNextSourceFrame = sourceFramesPerOutputFrame;
+            continue;
+        }
+
+        ++audioMonitorSourceFrameIndex;
+        while (audioMonitorNextSourceFrame <= static_cast<double>(audioMonitorSourceFrameIndex))
+        {
+            const double amount = std::clamp(audioMonitorNextSourceFrame -
+                static_cast<double>(audioMonitorSourceFrameIndex - 1), 0.0, 1.0);
+            enqueue({audioMonitorPreviousSample.left +
+                         (current.left - audioMonitorPreviousSample.left) * static_cast<float>(amount),
+                     audioMonitorPreviousSample.right +
+                         (current.right - audioMonitorPreviousSample.right) * static_cast<float>(amount)});
+            audioMonitorNextSourceFrame += sourceFramesPerOutputFrame;
+        }
+        audioMonitorPreviousSample = current;
+    }
+}
+
 void AudioEngine::prepareNotes(const std::shared_ptr<const ProjectData>& project)
 {
     if (preparedProject.get() == project.get())
@@ -740,6 +806,30 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                 mixed.left += preview * previewLeftGain.load(std::memory_order_relaxed);
                 mixed.right += preview * previewRightGain.load(std::memory_order_relaxed);
             }
+        }
+
+        if (audioInputMonitoring.load(std::memory_order_acquire))
+        {
+            quint64 readIndex = audioMonitorReadIndex.load(std::memory_order_relaxed);
+            const quint64 writeIndex = audioMonitorWriteIndex.load(std::memory_order_acquire);
+            const quint64 generation = audioMonitorGeneration.load(std::memory_order_acquire);
+            while (readIndex < writeIndex)
+            {
+                const AudioMonitorBufferEntry entry =
+                    audioMonitorBuffer[readIndex % audioMonitorBufferCapacity];
+                ++readIndex;
+                audioMonitorReadIndex.store(readIndex, std::memory_order_release);
+                if (entry.generation != generation)
+                    continue;
+                mixed.left += entry.sample.left * 0.7f;
+                mixed.right += entry.sample.right * 0.7f;
+                break;
+            }
+        }
+        else
+        {
+            audioMonitorReadIndex.store(audioMonitorWriteIndex.load(std::memory_order_acquire),
+                                        std::memory_order_release);
         }
 
         mixed = renderer.processMasterEffects(mixed);

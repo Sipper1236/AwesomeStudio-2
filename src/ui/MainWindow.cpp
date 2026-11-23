@@ -641,6 +641,43 @@ void MainWindow::createActions()
             finishAudioRecording(true);
     });
 
+    audioMonitorAction = new QAction(tr("Monitor audio"), this);
+    audioMonitorAction->setCheckable(true);
+    audioMonitorAction->setEnabled(false);
+    audioMonitorAction->setToolTip(tr("Route the selected audio input to the master output during recording"));
+    connect(audioMonitorAction, &QAction::toggled, this, [this](bool enabled)
+    {
+        if (enabled && (!audioRecorder || !audioEngine.isAudioAvailable()))
+        {
+            const QSignalBlocker blocker(audioMonitorAction);
+            audioMonitorAction->setChecked(false);
+            return;
+        }
+        if (enabled)
+        {
+            audioRecorder->setMonitorCallback([this](const float* samples, qsizetype frames,
+                                                      int channels, int sampleRate)
+            {
+                audioEngine.pushAudioInputMonitorFrames(samples, frames, channels, sampleRate);
+            });
+            if (!audioEngine.setAudioInputMonitoring(true))
+            {
+                audioRecorder->setMonitorCallback({});
+                const QSignalBlocker blocker(audioMonitorAction);
+                audioMonitorAction->setChecked(false);
+                statusBar()->showMessage(tr("Audio monitoring needs an available output device."), 4000);
+                return;
+            }
+            statusBar()->showMessage(tr("Monitoring live audio input through the master output"), 3500);
+        }
+        else
+        {
+            audioEngine.setAudioInputMonitoring(false);
+            if (audioRecorder)
+                audioRecorder->setMonitorCallback({});
+        }
+    });
+
     midiRecordAction = new QAction(tr("Record MIDI"), this);
     midiRecordAction->setCheckable(true);
     midiRecordAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
@@ -881,6 +918,7 @@ void MainWindow::createToolBars()
     recordingBar->setObjectName(QStringLiteral("recordingToolbar"));
     recordingBar->setMovable(false);
     recordingBar->addAction(recordAction);
+    recordingBar->addAction(audioMonitorAction);
     recordingBar->addSeparator();
     recordingBar->addWidget(new QLabel(tr("INPUT"), recordingBar));
     audioInputControl = new QComboBox(recordingBar);
@@ -1362,6 +1400,7 @@ void MainWindow::createMenus()
     transportMenu->addAction(playAction);
     transportMenu->addAction(stopAction);
     transportMenu->addAction(recordAction);
+    transportMenu->addAction(audioMonitorAction);
     transportMenu->addAction(midiRecordAction);
     transportMenu->addAction(midiMonitorAction);
     transportMenu->addAction(loopAction);
@@ -3746,6 +3785,7 @@ void MainWindow::refreshAudioInputs()
     }
     audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !recordingPending &&
                                   !midiRecordingActive && !midiRecordingPending);
+    audioMonitorAction->setEnabled(audioRecorder != nullptr && audioEngine.isAudioAvailable());
     recordAction->setEnabled(!midiRecordingActive && !midiRecordingPending &&
                              (audioRecorder || recordingPending || !devices.isEmpty()));
 }
@@ -4201,6 +4241,7 @@ bool MainWindow::startPendingAudioRecording(double playheadBeat)
     pendingRecordingPath.clear();
     pendingRecordingDeviceId.clear();
     recordAction->setEnabled(true);
+    audioMonitorAction->setEnabled(audioEngine.isAudioAvailable());
     statusBar()->showMessage(recordingTransportActive
         ? tr("Recording from %1…").arg(pendingRecordingDeviceName)
         : tr("Recording from %1 without playback…").arg(pendingRecordingDeviceName));
@@ -4212,6 +4253,15 @@ void MainWindow::finishAudioRecording(bool keepTake)
 {
     if (!audioRecorder && !recordingPending)
         return;
+
+    audioEngine.setAudioInputMonitoring(false);
+    if (audioRecorder)
+        audioRecorder->setMonitorCallback({});
+    {
+        const QSignalBlocker blocker(audioMonitorAction);
+        audioMonitorAction->setChecked(false);
+        audioMonitorAction->setEnabled(false);
+    }
 
     const bool wasWaitingForCountIn = recordingPending;
     const QString path = audioRecorder ? audioRecorder->path() : pendingRecordingPath;
