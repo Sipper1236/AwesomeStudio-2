@@ -2967,8 +2967,14 @@ void MainWindow::createToolBars()
     connect(clipLengthControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double length)
     {
         MidiClip* clip = selectedClip();
-        if (clip == nullptr)
+        if (clip == nullptr || clip->isAudioRegion() ||
+            std::abs(clip->lengthBeats - length) < 1.0e-9)
             return;
+        const quint64 trackId = selectedTrackId;
+        const quint64 clipId = selectedClipId;
+        const double beforeLength = clip->lengthBeats;
+        const QVector<MidiNote> beforeNotes = clip->notes;
+        const QVector<MidiPitchBend> beforePitchBends = clip->pitchBends;
         clip->lengthBeats = length;
         project.normalize();
         const MidiClip* updatedClip = selectedClip();
@@ -2983,8 +2989,10 @@ void MainWindow::createToolBars()
         arrangementEditor->setProject(project);
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
         audioEngine.setProject(project);
-        settingsDirty = true;
-        refreshDirtyState();
+        if (updatedClip != nullptr)
+            undoStack.push(new NoteEditCommand(this, trackId, clipId,
+                beforeNotes, updatedClip->notes, beforeLength, updatedClip->lengthBeats,
+                beforePitchBends, updatedClip->pitchBends, true, tr("Change pattern length")));
     });
 
     arrangementBar->addSeparator();
@@ -4783,7 +4791,7 @@ void MainWindow::refreshProjectUi()
     const int countInIndex = countInControl->findData(project.countInBars);
     countInControl->setCurrentIndex(countInIndex < 0 ? 0 : countInIndex);
     metronomeAction->setChecked(project.metronomeEnabled);
-    clipLengthControl->setEnabled(clip != nullptr);
+    clipLengthControl->setEnabled(clip != nullptr && !clip->isAudioRegion());
     clipLengthControl->setValue(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     loopAction->setChecked(project.loopEnabled);
     refreshMixer();
