@@ -36,8 +36,11 @@ enum class AudioFadeCurve
     Linear,
     Smooth,
     EqualPower,
-    Custom
+    Custom,
+    Drawn
 };
+
+constexpr int audioFadeCurvePointCount = 33;
 
 struct AudioAsset
 {
@@ -96,11 +99,16 @@ struct MidiClip
     AudioFadeCurve audioFadeOutCurve = AudioFadeCurve::Linear;
     double audioFadeInShape = 1.0;
     double audioFadeOutShape = 1.0;
+    QVector<float> audioFadeInCurvePoints;
+    QVector<float> audioFadeOutCurvePoints;
 
     bool isAudioRegion() const { return !audioSourcePath.isEmpty(); }
 };
 
-float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape = 1.0);
+QVector<float> defaultAudioFadeCurvePoints();
+void normalizeAudioFadeCurvePoints(QVector<float>& points);
+float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape = 1.0,
+                        const QVector<float>* drawnPoints = nullptr);
 
 struct DrumLayerSettings
 {

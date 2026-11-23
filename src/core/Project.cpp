@@ -142,7 +142,31 @@ MixerEffect defaultMixerEffect(MixerEffectType type)
     return effect;
 }
 
-float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape)
+QVector<float> defaultAudioFadeCurvePoints()
+{
+    QVector<float> points;
+    points.reserve(audioFadeCurvePointCount);
+    for (int index = 0; index < audioFadeCurvePointCount; ++index)
+        points.push_back(static_cast<float>(index) / (audioFadeCurvePointCount - 1));
+    return points;
+}
+
+void normalizeAudioFadeCurvePoints(QVector<float>& points)
+{
+    if (points.size() != audioFadeCurvePointCount)
+        points = defaultAudioFadeCurvePoints();
+    for (int index = 0; index < points.size(); ++index)
+    {
+        if (!std::isfinite(points[index]))
+            points[index] = static_cast<float>(index) / (audioFadeCurvePointCount - 1);
+        points[index] = std::clamp(points[index], 0.0f, 1.0f);
+    }
+    points.front() = 0.0f;
+    points.back() = 1.0f;
+}
+
+float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape,
+                        const QVector<float>* drawnPoints)
 {
     const double position = std::clamp(progress, 0.0, 1.0);
     switch (curve)
@@ -159,6 +183,20 @@ float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, doub
         case AudioFadeCurve::Custom:
         {
             const double shaped = std::pow(position, std::clamp(shape, 0.25, 4.0));
+            return static_cast<float>(fadeIn ? shaped : 1.0 - shaped);
+        }
+        case AudioFadeCurve::Drawn:
+        {
+            double shaped = position;
+            if (drawnPoints != nullptr && drawnPoints->size() == audioFadeCurvePointCount)
+            {
+                const double pointPosition = position * (audioFadeCurvePointCount - 1);
+                const int first = static_cast<int>(pointPosition);
+                const int second = std::min(audioFadeCurvePointCount - 1, first + 1);
+                const double fraction = pointPosition - first;
+                shaped = (*drawnPoints)[first] * (1.0 - fraction) +
+                         (*drawnPoints)[second] * fraction;
+            }
             return static_cast<float>(fadeIn ? shaped : 1.0 - shaped);
         }
         case AudioFadeCurve::Linear:
@@ -769,15 +807,25 @@ void ProjectData::normalize()
             clip.audioFadeInBeats = std::clamp(clip.audioFadeInBeats, 0.0, clip.lengthBeats);
             clip.audioFadeOutBeats = std::clamp(clip.audioFadeOutBeats, 0.0, clip.lengthBeats);
             clip.audioFadeInCurve = static_cast<AudioFadeCurve>(std::clamp(
-                static_cast<int>(clip.audioFadeInCurve), 0, 3));
+                static_cast<int>(clip.audioFadeInCurve), 0, 4));
             clip.audioFadeOutCurve = static_cast<AudioFadeCurve>(std::clamp(
-                static_cast<int>(clip.audioFadeOutCurve), 0, 3));
+                static_cast<int>(clip.audioFadeOutCurve), 0, 4));
             if (!std::isfinite(clip.audioFadeInShape))
                 clip.audioFadeInShape = 1.0;
             if (!std::isfinite(clip.audioFadeOutShape))
                 clip.audioFadeOutShape = 1.0;
             clip.audioFadeInShape = std::clamp(clip.audioFadeInShape, 0.25, 4.0);
             clip.audioFadeOutShape = std::clamp(clip.audioFadeOutShape, 0.25, 4.0);
+            if (!clip.audioFadeInCurvePoints.isEmpty())
+                normalizeAudioFadeCurvePoints(clip.audioFadeInCurvePoints);
+            if (!clip.audioFadeOutCurvePoints.isEmpty())
+                normalizeAudioFadeCurvePoints(clip.audioFadeOutCurvePoints);
+            if (clip.audioFadeInCurve == AudioFadeCurve::Drawn &&
+                clip.audioFadeInCurvePoints.isEmpty())
+                clip.audioFadeInCurvePoints = defaultAudioFadeCurvePoints();
+            if (clip.audioFadeOutCurve == AudioFadeCurve::Drawn &&
+                clip.audioFadeOutCurvePoints.isEmpty())
+                clip.audioFadeOutCurvePoints = defaultAudioFadeCurvePoints();
             if (clip.audioSource != nullptr)
             {
                 if (clip.audioSourcePath.isEmpty())

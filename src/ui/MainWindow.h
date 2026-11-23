@@ -61,6 +61,8 @@ private:
         AudioFadeCurve fadeOutCurve = AudioFadeCurve::Linear;
         double fadeInShape = 1.0;
         double fadeOutShape = 1.0;
+        QVector<float> fadeInCurvePoints;
+        QVector<float> fadeOutCurvePoints;
     };
 
     void createActions();

@@ -6,7 +6,7 @@ Build a pattern-first digital audio workstation with a fast MIDI workflow and a 
 
 ## Shipped foundation
 
-The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, standalone or during-recording live audio input monitoring with per-device manual placement compensation, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, seven factory synth presets, and selectable resonant filters with bipolar cutoff-envelope modulation, three-band EQ with adjustable crossovers, seven parametric bands with a draggable response graph, and volume/pan keyframe automation, Delay/Reverb/Compressor/Low-pass Filter inserts on tracks, buses, and Master, mixer submix buses with nested/group routing and multiple track and bus auxiliary sends, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming and selectable linear, smooth, and equal-power fades, a 16-step drum sequencer with four assignable sample pads, five velocity layers per pad, per-pad waveform start editing, and independent per-layer tuning, loop, and ADSR overrides, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, WAV export, and optional FLAC export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
+The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, standalone or during-recording live audio input monitoring with per-device manual placement compensation, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, seven factory synth presets, and selectable resonant filters with bipolar cutoff-envelope modulation, three-band EQ with adjustable crossovers, seven parametric bands with a draggable response graph, and volume/pan keyframe automation, Delay/Reverb/Compressor/Low-pass Filter inserts on tracks, buses, and Master, mixer submix buses with nested/group routing and multiple track and bus auxiliary sends, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming with selectable linear, smooth, equal-power, custom-power, and drawn fade curves, a 16-step drum sequencer with four assignable sample pads, five velocity layers per pad, per-pad waveform start editing, and independent per-layer tuning, loop, and ADSR overrides, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, WAV export, and optional FLAC export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
 
 ## Roadmap
 
@@ -34,7 +34,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Count-in and metronome
 - [x] Linear tempo ramps between Playlist tempo markers with exact beat/time conversion and WAV rendering
 - [x] WAV audio import, Playlist playback, waveform display, and WAV render integration
-- [x] Basic audio region edge trimming and selectable linear, smooth, and equal-power fades
+- [x] Audio region edge trimming with linear, smooth, equal-power, custom-power, and freehand drawn fades
 - [x] One WAV sample assignment per drum rack pad with synthesized fallback
 - [x] Per-pad sample waveform display with draggable start-position editing
 - [x] Per-track Synth ADSR envelope controls in live playback and render
@@ -49,7 +49,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Basic left/right edge trimming for WAV audio regions
 - [x] Undoable equal-power crossfades between overlapping audio regions
 - [x] Named arrangement markers with ruler seeking and undoable editing
-- [ ] Custom fade shapes, comping, and portable media packaging
+- [x] Custom power and freehand drawn fades, portable media packaging, and WAV relinking
+- [ ] Audio comping and format-2 time-signature changes
 - [x] Mixer submix buses with track assignment, level/pan, mute/solo, parent routing, and metering
 - [x] Multiple post-track auxiliary sends per track to mixer buses
 - [x] Multiple post-fader auxiliary sends from buses to other mixer buses, with cycle prevention

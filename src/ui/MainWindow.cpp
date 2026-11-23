@@ -1681,7 +1681,7 @@ public:
                          QVector<MainWindow::AudioFadeState> after)
         : window(window), trackId(trackId), before(std::move(before)), after(std::move(after))
     {
-        setText(QObject::tr("Create audio crossfade"));
+        setText(QObject::tr("Edit audio fade"));
     }
 
     void undo() override
@@ -1937,6 +1937,29 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(arrangementEditor, &ArrangementEditor::audioRegionTrimmed, this,
             [this](quint64 trackId, quint64 clipId, double startBeat, double lengthBeats, qint64 audioStartFrame)
             { trimAudioRegion(trackId, clipId, startBeat, lengthBeats, audioStartFrame); });
+    connect(arrangementEditor, &ArrangementEditor::audioFadeCurveDrawn, this,
+            [this](quint64 trackId, quint64 clipId, bool fadeIn,
+                   const QVector<float>& beforePoints, const QVector<float>& afterPoints)
+    {
+        const MidiClip* clip = project.findClip(trackId, clipId);
+        if (clip == nullptr || !clip->isAudioRegion() || beforePoints == afterPoints)
+            return;
+        AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
+            clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
+            clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+        AudioFadeState after = before;
+        if (fadeIn)
+        {
+            before.fadeInCurvePoints = beforePoints;
+            after.fadeInCurvePoints = afterPoints;
+        }
+        else
+        {
+            before.fadeOutCurvePoints = beforePoints;
+            after.fadeOutCurvePoints = afterPoints;
+        }
+        undoStack.push(new AudioFadeEditCommand(this, trackId, {before}, {after}));
+    });
     connect(arrangementEditor, &ArrangementEditor::audioRegionRelinkRequested, this,
             &MainWindow::relinkAudioRegion);
     connect(arrangementEditor, &ArrangementEditor::automationChanged, this,
@@ -3182,6 +3205,8 @@ void MainWindow::createDocks()
         control->addItem(QObject::tr("Smooth"), static_cast<int>(AudioFadeCurve::Smooth));
         control->addItem(QObject::tr("Equal power"), static_cast<int>(AudioFadeCurve::EqualPower));
         control->addItem(QObject::tr("Custom power"), static_cast<int>(AudioFadeCurve::Custom));
+        control->addItem(QObject::tr("Drawn (Ctrl+drag)"), static_cast<int>(AudioFadeCurve::Drawn));
+        control->setToolTip(QObject::tr("Choose Drawn, then hold Ctrl and drag through the fade on the Playlist."));
         return control;
     };
     audioFadeInCurveControl = makeFadeCurveControl();
@@ -5954,13 +5979,16 @@ void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
 void MainWindow::setSelectedAudioFadeCurve(bool fadeIn, int curve)
 {
     MidiClip* clip = selectedClip();
-    if (clip == nullptr || !clip->isAudioRegion() || curve < 0 || curve > 3)
+    if (clip == nullptr || !clip->isAudioRegion() || curve < 0 || curve > 4)
         return;
     const auto fadeCurve = static_cast<AudioFadeCurve>(curve);
     AudioFadeCurve& current = fadeIn ? clip->audioFadeInCurve : clip->audioFadeOutCurve;
     if (current == fadeCurve)
         return;
     current = fadeCurve;
+    QVector<float>& points = fadeIn ? clip->audioFadeInCurvePoints : clip->audioFadeOutCurvePoints;
+    if (fadeCurve == AudioFadeCurve::Drawn && points.isEmpty())
+        points = defaultAudioFadeCurvePoints();
     audioEngine.setProject(project);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
@@ -6034,10 +6062,12 @@ void MainWindow::createSelectedAudioCrossfade()
     QVector<AudioFadeState> before{
         {outgoing->id, outgoing->audioFadeInBeats, outgoing->audioFadeOutBeats,
          outgoing->audioFadeInCurve, outgoing->audioFadeOutCurve,
-         outgoing->audioFadeInShape, outgoing->audioFadeOutShape},
+         outgoing->audioFadeInShape, outgoing->audioFadeOutShape,
+         outgoing->audioFadeInCurvePoints, outgoing->audioFadeOutCurvePoints},
         {incoming->id, incoming->audioFadeInBeats, incoming->audioFadeOutBeats,
          incoming->audioFadeInCurve, incoming->audioFadeOutCurve,
-         incoming->audioFadeInShape, incoming->audioFadeOutShape}
+         incoming->audioFadeInShape, incoming->audioFadeOutShape,
+         incoming->audioFadeInCurvePoints, incoming->audioFadeOutCurvePoints}
     };
     QVector<AudioFadeState> after = before;
     after[0].fadeOutBeats = overlapBeats;
@@ -6065,6 +6095,8 @@ void MainWindow::applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeS
         clip->audioFadeOutCurve = fade.fadeOutCurve;
         clip->audioFadeInShape = fade.fadeInShape;
         clip->audioFadeOutShape = fade.fadeOutShape;
+        clip->audioFadeInCurvePoints = fade.fadeInCurvePoints;
+        clip->audioFadeOutCurvePoints = fade.fadeOutCurvePoints;
     }
     project.normalize();
     audioEngine.setProject(project);

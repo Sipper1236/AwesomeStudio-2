@@ -340,12 +340,14 @@ protected:
                                 const double fadeWidth = std::min(waveBounds.width(),
                                     clip.audioFadeInBeats / clip.lengthBeats * waveBounds.width());
                                 QPainterPath fadePath;
-                                fadePath.moveTo(waveBounds.left(), centerY);
+                                fadePath.moveTo(waveBounds.left(), waveBounds.bottom() - 1.0);
                                 for (int step = 1; step <= 24; ++step)
                                 {
                                     const double progress = static_cast<double>(step) / 24.0;
-                                    const float gain = audioFadeEnvelope(clip.audioFadeInCurve, true, progress);
-                                    const double y = centerY - gain * (centerY - waveBounds.top() - 1.0);
+                                    const float gain = audioFadeEnvelope(clip.audioFadeInCurve, true, progress,
+                                        clip.audioFadeInShape, &clip.audioFadeInCurvePoints);
+                                    const double y = waveBounds.bottom() - 1.0 -
+                                        gain * (waveBounds.height() - 2.0);
                                     fadePath.lineTo(waveBounds.left() + fadeWidth * progress, y);
                                 }
                                 painter.drawPath(fadePath);
@@ -359,8 +361,10 @@ protected:
                                 for (int step = 1; step <= 24; ++step)
                                 {
                                     const double progress = static_cast<double>(step) / 24.0;
-                                    const float gain = audioFadeEnvelope(clip.audioFadeOutCurve, false, progress);
-                                    const double y = centerY - gain * (centerY - waveBounds.top() - 1.0);
+                                    const float gain = audioFadeEnvelope(clip.audioFadeOutCurve, false, progress,
+                                        clip.audioFadeOutShape, &clip.audioFadeOutCurvePoints);
+                                    const double y = waveBounds.bottom() - 1.0 -
+                                        gain * (waveBounds.height() - 2.0);
                                     fadePath.lineTo(waveBounds.right() - fadeWidth + fadeWidth * progress, y);
                                 }
                                 painter.drawPath(fadePath);
@@ -605,6 +609,15 @@ protected:
             selectedAutomationPoint = -1;
             const MidiClip& clip = track.clips[hit];
             selectedClipId = clip.id;
+            bool fadeIn = false;
+            if (event->modifiers().testFlag(Qt::ControlModifier) && clip.isAudioRegion() &&
+                drawnFadeAt(clip, row, point, fadeIn))
+            {
+                beginFadeCurveDrawing(track.id, clip, fadeIn, point);
+                emit owner->clipSelected(track.id, clip.id);
+                update();
+                return;
+            }
             sourceTrackId = track.id;
             draggedClipId = clip.id;
             draggedTrackId = track.id;
@@ -638,6 +651,12 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override
     {
         const QPoint point = event->position().toPoint();
+        if (drawingFadeCurve)
+        {
+            updateFadeCurveDrawing(point);
+            update();
+            return;
+        }
         if (draggingAutomationPoint)
         {
             const int trackIndex = trackIndexForId(automationDragTrackId);
@@ -684,6 +703,12 @@ protected:
             {
                 const int row = (point.y() - rulerHeight) / currentRowHeight();
                 const MidiClip& clip = project.tracks[row].clips[hit];
+                bool fadeIn = false;
+                if (clip.isAudioRegion() && drawnFadeAt(clip, row, point, fadeIn))
+                {
+                    setCursor(Qt::CrossCursor);
+                    return;
+                }
                 const QRectF bounds = clipBounds(clip, row);
                 const bool nearLeftEdge = point.x() <= bounds.left() + 8;
                 const bool nearRightEdge = point.x() >= bounds.right() - 8;
@@ -777,6 +802,20 @@ protected:
     {
         if (event->button() != Qt::LeftButton)
             return;
+        if (drawingFadeCurve)
+        {
+            drawingFadeCurve = false;
+            unsetCursor();
+            const MidiClip* clip = project.findClip(drawnFadeTrackId, drawnFadeClipId);
+            const QVector<float> after = clip == nullptr ? drawnFadeBefore :
+                (drawnFadeIn ? clip->audioFadeInCurvePoints : clip->audioFadeOutCurvePoints);
+            if (clip != nullptr && drawnFadeBefore != after)
+                emit owner->audioFadeCurveDrawn(drawnFadeTrackId, drawnFadeClipId, drawnFadeIn,
+                                                drawnFadeBefore, after);
+            drawnFadeBefore.clear();
+            update();
+            return;
+        }
         if (draggingAutomationPoint)
         {
             draggingAutomationPoint = false;
@@ -1154,6 +1193,97 @@ private:
                       std::max(18.0, clip.lengthBeats * pixelsPerBeat - 4), trackHeight - 18);
     }
 
+    QRectF audioWaveBounds(const MidiClip& clip, int trackIndex) const
+    {
+        return clipBounds(clip, trackIndex).adjusted(6, 27, -6, -6);
+    }
+
+    bool drawnFadeAt(const MidiClip& clip, int trackIndex, const QPoint& point,
+                     bool& fadeIn) const
+    {
+        if (!audioWaveBounds(clip, trackIndex).contains(point))
+            return false;
+        const QRectF waveBounds = audioWaveBounds(clip, trackIndex);
+        const double fadeInWidth = std::min(waveBounds.width(),
+            clip.audioFadeInBeats / clip.lengthBeats * waveBounds.width());
+        const double fadeOutWidth = std::min(waveBounds.width(),
+            clip.audioFadeOutBeats / clip.lengthBeats * waveBounds.width());
+        const bool inFadeIn = fadeInWidth >= 2.0 && point.x() <= waveBounds.left() + fadeInWidth;
+        const bool inFadeOut = fadeOutWidth >= 2.0 && point.x() >= waveBounds.right() - fadeOutWidth;
+        if (!inFadeIn && !inFadeOut)
+            return false;
+        if (inFadeIn && inFadeOut)
+        {
+            const bool inCurveDrawn = clip.audioFadeInCurve == AudioFadeCurve::Drawn;
+            const bool outCurveDrawn = clip.audioFadeOutCurve == AudioFadeCurve::Drawn;
+            fadeIn = inCurveDrawn != outCurveDrawn ? inCurveDrawn
+                : point.x() - waveBounds.left() <= waveBounds.right() - point.x();
+        }
+        else
+            fadeIn = inFadeIn;
+        return (fadeIn ? clip.audioFadeInCurve : clip.audioFadeOutCurve) == AudioFadeCurve::Drawn;
+    }
+
+    void beginFadeCurveDrawing(quint64 trackId, const MidiClip& clip, bool fadeIn,
+                               const QPoint& point)
+    {
+        drawingFadeCurve = true;
+        drawnFadeTrackId = trackId;
+        drawnFadeClipId = clip.id;
+        drawnFadeIn = fadeIn;
+        drawnFadeBefore = fadeIn ? clip.audioFadeInCurvePoints : clip.audioFadeOutCurvePoints;
+        if (drawnFadeBefore.size() != audioFadeCurvePointCount)
+            drawnFadeBefore = defaultAudioFadeCurvePoints();
+        if (MidiClip* mutableClip = project.findClip(trackId, clip.id))
+        {
+            QVector<float>& points = fadeIn ? mutableClip->audioFadeInCurvePoints
+                                            : mutableClip->audioFadeOutCurvePoints;
+            points = drawnFadeBefore;
+        }
+        drawingFadeLastIndex = -1;
+        updateFadeCurveDrawing(point);
+        setCursor(Qt::CrossCursor);
+    }
+
+    void updateFadeCurveDrawing(const QPoint& point)
+    {
+        const int trackIndex = trackIndexForId(drawnFadeTrackId);
+        MidiClip* clip = project.findClip(drawnFadeTrackId, drawnFadeClipId);
+        if (trackIndex < 0 || clip == nullptr)
+            return;
+        const QRectF waveBounds = audioWaveBounds(*clip, trackIndex);
+        const double fadeWidth = std::min(waveBounds.width(),
+            (drawnFadeIn ? clip->audioFadeInBeats : clip->audioFadeOutBeats) /
+                clip->lengthBeats * waveBounds.width());
+        if (fadeWidth < 2.0)
+            return;
+        const double startX = drawnFadeIn ? waveBounds.left() : waveBounds.right() - fadeWidth;
+        const double progress = std::clamp((point.x() - startX) / fadeWidth, 0.0, 1.0);
+        const float value = static_cast<float>(std::clamp(
+            (waveBounds.bottom() - 1.0 - point.y()) /
+                std::max(1.0, waveBounds.height() - 2.0), 0.0, 1.0));
+        const int index = static_cast<int>(std::round(progress * (audioFadeCurvePointCount - 1)));
+        QVector<float>& points = drawnFadeIn ? clip->audioFadeInCurvePoints
+                                             : clip->audioFadeOutCurvePoints;
+        if (points.size() != audioFadeCurvePointCount)
+            points = defaultAudioFadeCurvePoints();
+        if (drawingFadeLastIndex >= 0 && drawingFadeLastIndex != index)
+        {
+            const int direction = index > drawingFadeLastIndex ? 1 : -1;
+            const float previousValue = points[drawingFadeLastIndex];
+            const int distance = std::abs(index - drawingFadeLastIndex);
+            for (int step = 1; step < distance; ++step)
+            {
+                const int pointIndex = drawingFadeLastIndex + direction * step;
+                const float amount = static_cast<float>(step) / distance;
+                points[pointIndex] = previousValue + (value - previousValue) * amount;
+            }
+        }
+        points[index] = value;
+        normalizeAudioFadeCurvePoints(points);
+        drawingFadeLastIndex = index;
+    }
+
     int clipAt(const QPoint& point) const
     {
         const int row = (point.y() - rulerHeight) / currentRowHeight();
@@ -1257,6 +1387,12 @@ private:
     bool movingClip = false;
     bool resizingAudioRegion = false;
     bool resizeLeftEdge = false;
+    bool drawingFadeCurve = false;
+    bool drawnFadeIn = false;
+    int drawingFadeLastIndex = -1;
+    quint64 drawnFadeTrackId = 0;
+    quint64 drawnFadeClipId = 0;
+    QVector<float> drawnFadeBefore;
 };
 
 ArrangementEditor::ArrangementEditor(QWidget* parent) : QScrollArea(parent)

@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 50;
+constexpr int currentProjectVersion = 51;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -450,9 +450,46 @@ bool loadPitchBends(const QJsonValue& value, QVector<MidiPitchBend>& pitchBends,
     return true;
 }
 
+QJsonArray saveAudioFadeCurvePoints(const QVector<float>& points)
+{
+    QJsonArray array;
+    for (float point : points)
+        array.push_back(point);
+    return array;
+}
+
+bool loadAudioFadeCurvePoints(const QJsonValue& value, QVector<float>& points,
+                              const QString& label, QString* error)
+{
+    if (!value.isArray() || value.toArray().size() != audioFadeCurvePointCount)
+    {
+        setError(error, QStringLiteral("The audio region contains invalid %1 points.").arg(label));
+        return false;
+    }
+    points.clear();
+    points.reserve(audioFadeCurvePointCount);
+    for (const QJsonValue& item : value.toArray())
+    {
+        const double point = item.toDouble(std::numeric_limits<double>::quiet_NaN());
+        if (!std::isfinite(point) || point < 0.0 || point > 1.0)
+        {
+            setError(error, QStringLiteral("The audio region contains out-of-range %1 points.").arg(label));
+            return false;
+        }
+        points.push_back(static_cast<float>(point));
+    }
+    if (std::abs(points.front()) > 1.0e-6f || std::abs(points.back() - 1.0f) > 1.0e-6f)
+    {
+        setError(error, QStringLiteral("The audio region %1 must start at zero and end at one.").arg(label));
+        return false;
+    }
+    normalizeAudioFadeCurvePoints(points);
+    return true;
+}
+
 QJsonObject saveClip(const MidiClip& clip)
 {
-    return QJsonObject{
+    QJsonObject object{
         {QStringLiteral("id"), static_cast<qint64>(clip.id)},
         {QStringLiteral("name"), clip.name},
         {QStringLiteral("startBeat"), clip.startBeat},
@@ -469,6 +506,13 @@ QJsonObject saveClip(const MidiClip& clip)
         {QStringLiteral("audioFadeInShape"), clip.audioFadeInShape},
         {QStringLiteral("audioFadeOutShape"), clip.audioFadeOutShape}
     };
+    if (clip.audioFadeInCurve == AudioFadeCurve::Drawn)
+        object.insert(QStringLiteral("audioFadeInCurvePoints"),
+                      saveAudioFadeCurvePoints(clip.audioFadeInCurvePoints));
+    if (clip.audioFadeOutCurve == AudioFadeCurve::Drawn)
+        object.insert(QStringLiteral("audioFadeOutCurvePoints"),
+                      saveAudioFadeCurvePoints(clip.audioFadeOutCurvePoints));
+    return object;
 }
 
 QJsonObject saveTrack(const InstrumentTrack& track)
@@ -652,7 +696,7 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
     {
         const int fadeInCurve = object.value(QStringLiteral("audioFadeInCurve")).toInt(-1);
         const int fadeOutCurve = object.value(QStringLiteral("audioFadeOutCurve")).toInt(-1);
-        const int maximumFadeCurve = version >= 33 ? 3 : 2;
+        const int maximumFadeCurve = version >= 51 ? 4 : version >= 33 ? 3 : 2;
         if (fadeInCurve < 0 || fadeInCurve > maximumFadeCurve ||
             fadeOutCurve < 0 || fadeOutCurve > maximumFadeCurve)
         {
@@ -673,6 +717,19 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
             setError(error, QStringLiteral("The audio region contains an invalid custom fade shape."));
             return false;
         }
+    }
+    if (version >= 51)
+    {
+        if (clip.audioFadeInCurve == AudioFadeCurve::Drawn &&
+            !loadAudioFadeCurvePoints(object.value(QStringLiteral("audioFadeInCurvePoints")),
+                                      clip.audioFadeInCurvePoints,
+                                      QStringLiteral("fade-in curve"), error))
+            return false;
+        if (clip.audioFadeOutCurve == AudioFadeCurve::Drawn &&
+            !loadAudioFadeCurvePoints(object.value(QStringLiteral("audioFadeOutCurvePoints")),
+                                      clip.audioFadeOutCurvePoints,
+                                      QStringLiteral("fade-out curve"), error))
+            return false;
     }
     loadAudioReference(clip.audioSourcePath, mediaBaseDir, media, clip.audioSource);
     if (!loadNotes(object.value(QStringLiteral("notes")), clip.notes, version, error))
