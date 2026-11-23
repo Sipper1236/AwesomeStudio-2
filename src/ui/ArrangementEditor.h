@@ -15,7 +15,9 @@ public:
     void setSelection(quint64 trackId, quint64 clipId);
     void setPixelsPerBeat(int pixels);
     void setPlayheadBeat(double beat);
-    void setAutomationView(bool enabled, int parameter);
+    void setAutomationView(bool enabled, int parameter, float minimum = 0.0f,
+                           float maximum = 1.0f, float defaultValue = 0.0f,
+                           const QString& pluginUri = QString());
 
 signals:
     void clipSelected(quint64 trackId, quint64 clipId);
@@ -27,7 +29,7 @@ signals:
                             double lengthBeats, qint64 audioStartFrame);
     void audioRegionRelinkRequested(quint64 trackId, quint64 clipId);
     void trackSelected(quint64 trackId);
-    void automationChanged(quint64 trackId, int parameter,
+    void automationChanged(quint64 trackId, int parameter, const QString& pluginUri,
                            const QVector<AutomationPoint>& before,
                            const QVector<AutomationPoint>& after);
     void automationPointLimitReached();

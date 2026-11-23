@@ -19,6 +19,8 @@ constexpr int trackHeaderWidth = 142;
 constexpr int rulerHeight = 28;
 constexpr int trackHeight = 72;
 constexpr int automationLaneHeight = 50;
+constexpr int pluginAutomationTargetBase = 2;
+constexpr int pluginParametersPerEffect = 256;
 QColor trackColour(int index)
 {
     static const QColor palette[] = {
@@ -91,10 +93,17 @@ public:
         update();
     }
 
-    void setAutomationView(bool enabled, int parameter)
+    void setAutomationView(bool enabled, int parameter, float minimum, float maximum,
+                           float defaultValue, const QString& pluginUri)
     {
         automationViewEnabled = enabled;
-        automationParameter = std::clamp(parameter, 0, 1);
+        automationParameter = std::max(0, parameter);
+        automationMinimum = std::isfinite(minimum) ? minimum : 0.0f;
+        automationMaximum = std::isfinite(maximum) && maximum > automationMinimum
+            ? maximum : automationMinimum + 1.0f;
+        automationDefaultValue = std::isfinite(defaultValue)
+            ? std::clamp(defaultValue, automationMinimum, automationMaximum) : automationMinimum;
+        automationPluginUri = pluginUri;
         selectedAutomationTrackId = 0;
         selectedAutomationPoint = -1;
         updateCanvasSize();
@@ -396,6 +405,8 @@ protected:
         const int rowY = rulerHeight + row * currentRowHeight();
         if (automationViewEnabled && point.y() >= rowY + trackHeight && point.x() >= trackHeaderWidth)
         {
+            if (!hasAutomationTarget(track))
+                return;
             automationNeedsTrackSelection = selectedTrackId != track.id;
             selectedTrackId = track.id;
             selectedAutomationTrackId = track.id;
@@ -410,7 +421,8 @@ protected:
                     after.removeAt(hit);
                     if (automationNeedsTrackSelection)
                         emit owner->trackSelected(trackId);
-                    emit owner->automationChanged(trackId, automationParameter, before, after);
+                    emit owner->automationChanged(trackId, automationParameter, automationPluginUri,
+                                                  before, after);
                     automationNeedsTrackSelection = false;
                     selectedAutomationPoint = -1;
                     update();
@@ -675,7 +687,8 @@ protected:
             if (automationNeedsTrackSelection)
                 emit owner->trackSelected(trackId);
             if (!automationPointsEqual(automationDragBefore, after))
-                emit owner->automationChanged(trackId, automationParameter, automationDragBefore, after);
+                emit owner->automationChanged(trackId, automationParameter, automationPluginUri,
+                                              automationDragBefore, after);
             automationNeedsTrackSelection = false;
             automationDragBefore.clear();
             update();
@@ -731,7 +744,8 @@ protected:
                     const QVector<AutomationPoint> before = automationPoints(*track);
                     QVector<AutomationPoint> after = before;
                     after.removeAt(selectedAutomationPoint);
-                    emit owner->automationChanged(trackId, automationParameter, before, after);
+                    emit owner->automationChanged(trackId, automationParameter, automationPluginUri,
+                                                  before, after);
                     selectedAutomationPoint = -1;
                     update();
                 }
@@ -769,17 +783,79 @@ private:
 
     const QVector<AutomationPoint>& automationPoints(const InstrumentTrack& track) const
     {
-        return automationParameter == 0 ? track.volumeAutomation : track.panAutomation;
+        if (automationParameter == 0)
+            return track.volumeAutomation;
+        if (automationParameter == 1)
+            return track.panAutomation;
+        static const QVector<AutomationPoint> empty;
+        const int encoded = automationParameter - pluginAutomationTargetBase;
+        if (encoded < 0 || automationPluginUri.isEmpty())
+            return empty;
+        const qsizetype effectIndex = encoded / pluginParametersPerEffect;
+        const qsizetype parameterIndex = encoded % pluginParametersPerEffect;
+        if (effectIndex >= track.effects.size())
+            return empty;
+        const MixerEffect& effect = track.effects[effectIndex];
+        if (effect.type != MixerEffectType::Lv2Plugin || effect.pluginUri != automationPluginUri ||
+            parameterIndex >= effect.pluginParameterAutomation.size())
+            return empty;
+        return effect.pluginParameterAutomation[parameterIndex];
     }
 
     float baseAutomationValue(const InstrumentTrack& track) const
     {
-        return automationParameter == 0 ? track.gain : track.pan;
+        if (automationParameter == 0)
+            return track.gain;
+        if (automationParameter == 1)
+            return track.pan;
+        const int encoded = automationParameter - pluginAutomationTargetBase;
+        if (encoded < 0 || automationPluginUri.isEmpty())
+            return automationDefaultValue;
+        const qsizetype effectIndex = encoded / pluginParametersPerEffect;
+        const qsizetype parameterIndex = encoded % pluginParametersPerEffect;
+        if (effectIndex >= track.effects.size())
+            return automationDefaultValue;
+        const MixerEffect& effect = track.effects[effectIndex];
+        if (effect.type != MixerEffectType::Lv2Plugin || effect.pluginUri != automationPluginUri)
+            return automationDefaultValue;
+        return parameterIndex < effect.pluginParameterValues.size()
+            ? effect.pluginParameterValues[parameterIndex] : automationDefaultValue;
     }
 
     QVector<AutomationPoint>& mutableAutomationPoints(InstrumentTrack& track)
     {
-        return automationParameter == 0 ? track.volumeAutomation : track.panAutomation;
+        if (automationParameter == 0)
+            return track.volumeAutomation;
+        if (automationParameter == 1)
+            return track.panAutomation;
+        static QVector<AutomationPoint> invalid;
+        const int encoded = automationParameter - pluginAutomationTargetBase;
+        if (encoded < 0 || automationPluginUri.isEmpty())
+            return invalid;
+        const qsizetype effectIndex = encoded / pluginParametersPerEffect;
+        const qsizetype parameterIndex = encoded % pluginParametersPerEffect;
+        if (effectIndex >= track.effects.size())
+            return invalid;
+        MixerEffect& effect = track.effects[effectIndex];
+        if (effect.type != MixerEffectType::Lv2Plugin || effect.pluginUri != automationPluginUri)
+            return invalid;
+        while (effect.pluginParameterAutomation.size() <= parameterIndex)
+            effect.pluginParameterAutomation.push_back({});
+        return effect.pluginParameterAutomation[parameterIndex];
+    }
+
+    bool hasAutomationTarget(const InstrumentTrack& track) const
+    {
+        if (automationParameter == 0 || automationParameter == 1)
+            return true;
+        const int encoded = automationParameter - pluginAutomationTargetBase;
+        if (encoded < 0 || automationPluginUri.isEmpty())
+            return false;
+        const qsizetype effectIndex = encoded / pluginParametersPerEffect;
+        if (effectIndex >= track.effects.size())
+            return false;
+        const MixerEffect& effect = track.effects[effectIndex];
+        return effect.type == MixerEffectType::Lv2Plugin && effect.pluginUri == automationPluginUri;
     }
 
     int trackIndexForId(quint64 trackId) const
@@ -807,8 +883,8 @@ private:
 
     double normalizedAutomationValue(float value) const
     {
-        return automationParameter == 0 ? std::clamp(static_cast<double>(value), 0.0, 1.0) :
-                                          (std::clamp(static_cast<double>(value), -1.0, 1.0) + 1.0) * 0.5;
+        return std::clamp((static_cast<double>(value) - automationMinimum) /
+                          (automationMaximum - automationMinimum), 0.0, 1.0);
     }
 
     int automationY(int laneY, float value) const
@@ -824,7 +900,8 @@ private:
         const double normalized = std::clamp(
             static_cast<double>(laneY + automationLaneHeight - 7 - y) /
                 static_cast<double>(automationLaneHeight - 14), 0.0, 1.0);
-        return static_cast<float>(automationParameter == 0 ? normalized : normalized * 2.0 - 1.0);
+        return static_cast<float>(automationMinimum + normalized *
+                                  (automationMaximum - automationMinimum));
     }
 
     void drawAutomationLane(QPainter& painter, const InstrumentTrack& track, int trackIndex,
@@ -838,11 +915,17 @@ private:
         painter.setPen(QPen(QColor(QStringLiteral("#333d48")), 1));
         painter.drawLine(trackHeaderWidth, top, trackHeaderWidth + gridWidth, top);
         painter.drawLine(trackHeaderWidth, bottom, trackHeaderWidth + gridWidth, bottom);
-        if (automationParameter == 1)
+        if (!hasAutomationTarget(track))
         {
+            painter.setPen(QColor(QStringLiteral("#78838f")));
+            painter.drawText(laneRect, Qt::AlignCenter, tr("No matching plug-in on this track"));
+            return;
+        }
+        if (automationMinimum < 0.0f && automationMaximum > 0.0f)
+        {
+            const int zeroY = automationY(laneY, 0.0f);
             painter.setPen(QPen(QColor(QStringLiteral("#29323c")), 1, Qt::DashLine));
-            painter.drawLine(trackHeaderWidth, (top + bottom) / 2,
-                             trackHeaderWidth + gridWidth, (top + bottom) / 2);
+            painter.drawLine(trackHeaderWidth, zeroY, trackHeaderWidth + gridWidth, zeroY);
         }
 
         const QVector<AutomationPoint>& points = automationPoints(track);
@@ -955,6 +1038,10 @@ private:
     int pixelsPerBeat = 28;
     double playheadBeat = -1.0;
     int automationParameter = 0;
+    float automationMinimum = 0.0f;
+    float automationMaximum = 1.0f;
+    float automationDefaultValue = 0.0f;
+    QString automationPluginUri;
     int selectedAutomationPoint = -1;
     quint64 selectedAutomationTrackId = 0;
     quint64 automationDragTrackId = 0;
@@ -998,7 +1085,9 @@ void ArrangementEditor::setPlayheadBeat(double beat)
     canvas->setPlayheadBeat(beat);
 }
 
-void ArrangementEditor::setAutomationView(bool enabled, int parameter)
+void ArrangementEditor::setAutomationView(bool enabled, int parameter, float minimum,
+                                          float maximum, float defaultValue,
+                                          const QString& pluginUri)
 {
-    canvas->setAutomationView(enabled, parameter);
+    canvas->setAutomationView(enabled, parameter, minimum, maximum, defaultValue, pluginUri);
 }

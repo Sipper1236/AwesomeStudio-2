@@ -105,9 +105,10 @@ private:
     void setSelectedSynthFilter(int parameter, double value);
     void setSelectedTrackEqualizer(int band, double gainDb);
     void refreshAutomationEditor();
+    void refreshArrangementAutomationView();
     void addAutomationPoint();
     void removeAutomationPoint();
-    void applyAutomationHistory(quint64 trackId, int parameter,
+    void applyAutomationHistory(quint64 trackId, int parameter, const QString& pluginUri,
                                 const QVector<AutomationPoint>& points);
     void addTimelineMarker(double beat);
     void renameTimelineMarker(double beat);

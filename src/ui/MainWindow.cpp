@@ -83,6 +83,126 @@ float automationValueAt(const QVector<AutomationPoint>& points, double beat, flo
     return previous->value + (next->value - previous->value) * amount;
 }
 
+constexpr int pluginAutomationTargetBase = 2;
+constexpr int pluginParametersPerEffect = 256;
+
+int pluginAutomationTarget(qsizetype effectIndex, qsizetype parameterIndex)
+{
+    return pluginAutomationTargetBase + static_cast<int>(effectIndex) * pluginParametersPerEffect +
+           static_cast<int>(parameterIndex);
+}
+
+bool decodePluginAutomationTarget(int target, qsizetype& effectIndex, qsizetype& parameterIndex)
+{
+    if (target < pluginAutomationTargetBase)
+        return false;
+    const int encoded = target - pluginAutomationTargetBase;
+    effectIndex = encoded / pluginParametersPerEffect;
+    parameterIndex = encoded % pluginParametersPerEffect;
+    return true;
+}
+
+const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, int target,
+                                                const QString& pluginUri = QString())
+{
+    if (target == 0)
+        return &track.volumeAutomation;
+    if (target == 1)
+        return &track.panAutomation;
+    qsizetype effectIndex = 0;
+    qsizetype parameterIndex = 0;
+    if (!decodePluginAutomationTarget(target, effectIndex, parameterIndex) ||
+        effectIndex >= track.effects.size())
+        return nullptr;
+    const MixerEffect& effect = track.effects[effectIndex];
+    if (effect.type != MixerEffectType::Lv2Plugin || pluginUri.isEmpty() || effect.pluginUri != pluginUri)
+        return nullptr;
+    static const QVector<AutomationPoint> empty;
+    if (parameterIndex >= effect.pluginParameterAutomation.size())
+        return &empty;
+    return &effect.pluginParameterAutomation[parameterIndex];
+}
+
+QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
+                                          const QString& pluginUri = QString())
+{
+    if (target == 0)
+        return &track.volumeAutomation;
+    if (target == 1)
+        return &track.panAutomation;
+    qsizetype effectIndex = 0;
+    qsizetype parameterIndex = 0;
+    if (!decodePluginAutomationTarget(target, effectIndex, parameterIndex) ||
+        effectIndex >= track.effects.size())
+        return nullptr;
+    MixerEffect& effect = track.effects[effectIndex];
+    if (effect.type != MixerEffectType::Lv2Plugin || pluginUri.isEmpty() || effect.pluginUri != pluginUri)
+        return nullptr;
+    while (effect.pluginParameterAutomation.size() <= parameterIndex)
+        effect.pluginParameterAutomation.push_back({});
+    return &effect.pluginParameterAutomation[parameterIndex];
+}
+
+void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
+{
+    if (control == nullptr)
+        return;
+    const int previousTarget = control->currentData().toInt();
+    const QString previousPluginUri = control->currentData(Qt::UserRole + 4).toString();
+    const QSignalBlocker blocker(control);
+    control->clear();
+    const auto addTarget = [control](const QString& label, int target, float minimum,
+                                     float maximum, float defaultValue, const QString& pluginUri)
+    {
+        const int index = control->count();
+        control->addItem(label, target);
+        control->setItemData(index, minimum, Qt::UserRole + 1);
+        control->setItemData(index, maximum, Qt::UserRole + 2);
+        control->setItemData(index, defaultValue, Qt::UserRole + 3);
+        control->setItemData(index, pluginUri, Qt::UserRole + 4);
+    };
+    addTarget(QObject::tr("Volume"), 0, 0.0f, 1.0f,
+              track == nullptr ? 0.8f : track->gain, QString());
+    addTarget(QObject::tr("Pan"), 1, -1.0f, 1.0f,
+              track == nullptr ? 0.0f : track->pan, QString());
+    if (track != nullptr)
+    {
+        for (qsizetype effectIndex = 0; effectIndex < track->effects.size(); ++effectIndex)
+        {
+            const MixerEffect& effect = track->effects[effectIndex];
+            if (effect.type != MixerEffectType::Lv2Plugin)
+                continue;
+            Lv2EffectDescriptor descriptor;
+            if (!Lv2AudioEffectInstance::describe(effect.pluginUri, descriptor))
+                continue;
+            const QString pluginName = effect.pluginName.isEmpty() ? descriptor.name : effect.pluginName;
+            for (qsizetype parameterIndex = 0;
+                 parameterIndex < descriptor.parameters.size() && parameterIndex < pluginParametersPerEffect;
+                 ++parameterIndex)
+            {
+                const Lv2EffectParameter& parameter = descriptor.parameters[parameterIndex];
+                const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
+                    ? effect.pluginParameterValues[parameterIndex] : parameter.defaultValue;
+                addTarget(QObject::tr("%1 · %2 · %3")
+                              .arg(effectIndex + 1).arg(pluginName, parameter.name),
+                          pluginAutomationTarget(effectIndex, parameterIndex),
+                          parameter.minimum, parameter.maximum, defaultValue, effect.pluginUri);
+            }
+        }
+    }
+    int previousIndex = -1;
+    for (int index = 0; index < control->count(); ++index)
+    {
+        if (control->itemData(index).toInt() == previousTarget &&
+            control->itemData(index, Qt::UserRole + 4).toString() == previousPluginUri)
+        {
+            previousIndex = index;
+            break;
+        }
+    }
+    control->setCurrentIndex(previousIndex >= 0 ? previousIndex : 0);
+}
+
 QString projectAutosavePath(const QString& projectPath)
 {
     return projectPath + QStringLiteral(".autosave");
@@ -655,9 +775,10 @@ class AutomationEditCommand final : public QUndoCommand
 {
 public:
     AutomationEditCommand(MainWindow* window, quint64 trackId, int parameter,
-                          QVector<AutomationPoint> before, QVector<AutomationPoint> after)
+                          QVector<AutomationPoint> before, QVector<AutomationPoint> after,
+                          QString pluginUri = {})
         : window(window), trackId(trackId), parameter(parameter),
-          before(std::move(before)), after(std::move(after))
+          before(std::move(before)), after(std::move(after)), pluginUri(std::move(pluginUri))
     {
         setText(QObject::tr("Edit track automation"));
     }
@@ -665,13 +786,13 @@ public:
     void undo() override
     {
         if (window != nullptr)
-            window->applyAutomationHistory(trackId, parameter, before);
+            window->applyAutomationHistory(trackId, parameter, pluginUri, before);
     }
 
     void redo() override
     {
         if (window != nullptr)
-            window->applyAutomationHistory(trackId, parameter, after);
+            window->applyAutomationHistory(trackId, parameter, pluginUri, after);
     }
 
 private:
@@ -680,6 +801,7 @@ private:
     int parameter;
     QVector<AutomationPoint> before;
     QVector<AutomationPoint> after;
+    QString pluginUri;
 };
 
 class MarkerEditCommand final : public QUndoCommand
@@ -914,12 +1036,13 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(arrangementEditor, &ArrangementEditor::audioRegionRelinkRequested, this,
             &MainWindow::relinkAudioRegion);
     connect(arrangementEditor, &ArrangementEditor::automationChanged, this,
-            [this](quint64 trackId, int parameter, const QVector<AutomationPoint>& before,
+            [this](quint64 trackId, int parameter, const QString& pluginUri,
+                   const QVector<AutomationPoint>& before,
                    const QVector<AutomationPoint>& after)
     {
         if (project.findTrack(trackId) == nullptr)
             return;
-        undoStack.push(new AutomationEditCommand(this, trackId, parameter, before, after));
+        undoStack.push(new AutomationEditCommand(this, trackId, parameter, before, after, pluginUri));
     });
     connect(arrangementEditor, &ArrangementEditor::automationPointLimitReached, this, [this]
     {
@@ -1357,14 +1480,14 @@ void MainWindow::createToolBars()
     arrangementBar->addSeparator();
     automationViewAction = new QAction(tr("Automation lanes"), this);
     automationViewAction->setCheckable(true);
-    automationViewAction->setToolTip(tr("Show and edit volume or pan automation in the Playlist"));
+    automationViewAction->setToolTip(tr("Show and edit volume, pan, or LV2 control automation in the Playlist"));
     arrangementBar->addAction(automationViewAction);
     automationLaneParameterControl = new QComboBox(arrangementBar);
     automationLaneParameterControl->addItem(tr("Volume"), 0);
     automationLaneParameterControl->addItem(tr("Pan"), 1);
-    automationLaneParameterControl->setFixedWidth(88);
+    automationLaneParameterControl->setMinimumWidth(190);
     automationLaneParameterControl->setEnabled(false);
-    automationLaneParameterControl->setToolTip(tr("Automation parameter shown in the Playlist lanes"));
+    automationLaneParameterControl->setToolTip(tr("Volume, pan, or LV2 control shown in the Playlist lanes"));
     arrangementBar->addWidget(automationLaneParameterControl);
     automationWriteModeControl = new QComboBox(arrangementBar);
     automationWriteModeControl->addItem(tr("Touch"), 0);
@@ -1383,8 +1506,7 @@ void MainWindow::createToolBars()
     connect(automationViewAction, &QAction::toggled, this, [this](bool enabled)
     {
         automationLaneParameterControl->setEnabled(enabled || automationWriteAction->isChecked());
-        arrangementEditor->setAutomationView(enabled,
-                                              automationLaneParameterControl->currentData().toInt());
+        refreshArrangementAutomationView();
         if (enabled)
             statusBar()->showMessage(tr("Click a lane to add a point, drag points to edit, and right-click or press Delete to remove one."), 6000);
     });
@@ -1424,8 +1546,7 @@ void MainWindow::createToolBars()
         if (automationWriteSession.active &&
             automationWriteSession.parameter != automationLaneParameterControl->itemData(index).toInt())
             finishAutomationWrite();
-        arrangementEditor->setAutomationView(automationViewAction->isChecked(),
-                                              automationLaneParameterControl->itemData(index).toInt());
+        refreshArrangementAutomationView();
     });
 
     auto* transportBar = addToolBar(tr("Transport"));
@@ -4219,13 +4340,26 @@ void MainWindow::refreshAutomationEditor()
     if (automationPointsList == nullptr)
         return;
     InstrumentTrack* track = selectedTrack();
-    const bool volume = automationParameterControl->currentData().toInt() == 0;
-    QVector<AutomationPoint>* points = track == nullptr ? nullptr :
-        (volume ? &track->volumeAutomation : &track->panAutomation);
+    populateAutomationTargets(automationParameterControl, track);
+    populateAutomationTargets(automationLaneParameterControl, track);
+    const int target = automationParameterControl->currentData().toInt();
+    const bool volume = target == 0;
+    const bool pan = target == 1;
+    const QString pluginUri = automationParameterControl->currentData(Qt::UserRole + 4).toString();
+    const QVector<AutomationPoint>* points = track == nullptr ? nullptr :
+        automationCurve(static_cast<const InstrumentTrack&>(*track), target, pluginUri);
+    const int targetIndex = automationParameterControl->currentIndex();
+    const double minimum = automationParameterControl->itemData(targetIndex, Qt::UserRole + 1).toDouble();
+    const double maximum = automationParameterControl->itemData(targetIndex, Qt::UserRole + 2).toDouble();
     automationEditorPanel->setEnabled(track != nullptr);
-    automationValueLabel->setText(volume ? tr("Volume (%)") : tr("Pan (%)"));
-    automationValueControl->setRange(volume ? 0.0 : -100.0, 100.0);
-    automationValueControl->setSingleStep(volume ? 5.0 : 10.0);
+    automationValueLabel->setText(volume ? tr("Volume (%)") : pan ? tr("Pan (%)") :
+        tr("%1 value").arg(automationParameterControl->currentText()));
+    automationValueControl->setRange(volume || pan ? minimum * 100.0 : minimum,
+                                     volume || pan ? maximum * 100.0 : maximum);
+    automationValueControl->setSingleStep(volume ? 5.0 : pan ? 10.0 :
+        std::max(0.001, (maximum - minimum) / 100.0));
+    automationValueControl->setDecimals(volume || pan ? 0 : 4);
+    automationValueControl->setSuffix(volume || pan ? QStringLiteral("%") : QString());
 
     const QSignalBlocker listBlocker(automationPointsList);
     automationPointsList->clear();
@@ -4234,10 +4368,11 @@ void MainWindow::refreshAutomationEditor()
         for (const AutomationPoint& point : *points)
         {
             auto* item = new QListWidgetItem(automationPointsList);
-            const double displayedValue = point.value * 100.0;
+            const double displayedValue = volume || pan ? point.value * 100.0 : point.value;
             const QString valueText = volume ? tr("%1%").arg(displayedValue, 0, 'f', 0) :
-                displayedValue < -1.0 ? tr("L %1").arg(std::abs(displayedValue), 0, 'f', 0) :
-                displayedValue > 1.0 ? tr("R %1").arg(displayedValue, 0, 'f', 0) : tr("Center");
+                pan ? displayedValue < -1.0 ? tr("L %1").arg(std::abs(displayedValue), 0, 'f', 0) :
+                    displayedValue > 1.0 ? tr("R %1").arg(displayedValue, 0, 'f', 0) : tr("Center") :
+                    QString::number(displayedValue, 'g', 6);
             item->setText(tr("Beat %1  ·  %2").arg(point.beat, 0, 'f', 2).arg(valueText));
             item->setData(Qt::UserRole, point.beat);
             item->setData(Qt::UserRole + 1, displayedValue);
@@ -4246,6 +4381,29 @@ void MainWindow::refreshAutomationEditor()
     automationBeatControl->setEnabled(track != nullptr);
     automationValueControl->setEnabled(track != nullptr);
     removeAutomationPointButton->setEnabled(false);
+    refreshArrangementAutomationView();
+}
+
+void MainWindow::refreshArrangementAutomationView()
+{
+    if (automationLaneParameterControl == nullptr || arrangementEditor == nullptr)
+        return;
+    const int index = automationLaneParameterControl->currentIndex();
+    const int target = automationLaneParameterControl->itemData(index).toInt();
+    const float minimum = automationLaneParameterControl->itemData(index, Qt::UserRole + 1).toFloat();
+    const float maximum = automationLaneParameterControl->itemData(index, Qt::UserRole + 2).toFloat();
+    const float defaultValue = automationLaneParameterControl->itemData(index, Qt::UserRole + 3).toFloat();
+    const QString pluginUri = automationLaneParameterControl->itemData(index, Qt::UserRole + 4).toString();
+    const bool mixAutomationTarget = target == 0 || target == 1;
+    if (!mixAutomationTarget && automationWriteAction != nullptr && automationWriteAction->isChecked())
+        automationWriteAction->setChecked(false);
+    if (automationWriteAction != nullptr)
+        automationWriteAction->setEnabled(mixAutomationTarget);
+    if (automationWriteModeControl != nullptr)
+        automationWriteModeControl->setEnabled(mixAutomationTarget);
+    arrangementEditor->setAutomationView(automationViewAction != nullptr &&
+                                          automationViewAction->isChecked(),
+                                          target, minimum, maximum, defaultValue, pluginUri);
 }
 
 void MainWindow::addAutomationPoint()
@@ -4253,13 +4411,19 @@ void MainWindow::addAutomationPoint()
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr)
         return;
-    const bool volume = automationParameterControl->currentData().toInt() == 0;
-    const int parameter = volume ? 0 : 1;
-    const QVector<AutomationPoint>& currentPoints = volume ? track->volumeAutomation : track->panAutomation;
-    const QVector<AutomationPoint> before = currentPoints;
+    const int parameter = automationParameterControl->currentData().toInt();
+    const QString pluginUri = automationParameterControl->currentData(Qt::UserRole + 4).toString();
+    const QVector<AutomationPoint>* currentPoints = automationCurve(
+        static_cast<const InstrumentTrack&>(*track), parameter, pluginUri);
+    if (currentPoints == nullptr)
+        return;
+    const bool normalizedPercent = parameter == 0 || parameter == 1;
+    const double valueScale = normalizedPercent ? 100.0 : 1.0;
+    const QVector<AutomationPoint>& points = *currentPoints;
+    const QVector<AutomationPoint> before = points;
     QVector<AutomationPoint> after = before;
     const AutomationPoint point{automationBeatControl->value(),
-                                static_cast<float>(automationValueControl->value() / 100.0)};
+                                static_cast<float>(automationValueControl->value() / valueScale)};
     auto position = std::lower_bound(after.begin(), after.end(), point.beat,
         [](const AutomationPoint& current, double beat) { return current.beat < beat; });
     if (position != after.end() && std::abs(position->beat - point.beat) < 1.0e-9)
@@ -4277,7 +4441,7 @@ void MainWindow::addAutomationPoint()
         }
         after.insert(position, point);
     }
-    undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after));
+    undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after, pluginUri));
 }
 
 void MainWindow::removeAutomationPoint()
@@ -4286,10 +4450,13 @@ void MainWindow::removeAutomationPoint()
     const QListWidgetItem* item = automationPointsList->currentItem();
     if (track == nullptr || item == nullptr)
         return;
-    const bool volume = automationParameterControl->currentData().toInt() == 0;
-    const int parameter = volume ? 0 : 1;
-    const QVector<AutomationPoint>& currentPoints = volume ? track->volumeAutomation : track->panAutomation;
-    const QVector<AutomationPoint> before = currentPoints;
+    const int parameter = automationParameterControl->currentData().toInt();
+    const QString pluginUri = automationParameterControl->currentData(Qt::UserRole + 4).toString();
+    const QVector<AutomationPoint>* currentPoints = automationCurve(
+        static_cast<const InstrumentTrack&>(*track), parameter, pluginUri);
+    if (currentPoints == nullptr)
+        return;
+    const QVector<AutomationPoint> before = *currentPoints;
     QVector<AutomationPoint> after = before;
     const double beat = item->data(Qt::UserRole).toDouble();
     after.erase(std::remove_if(after.begin(), after.end(), [beat](const AutomationPoint& point)
@@ -4298,7 +4465,7 @@ void MainWindow::removeAutomationPoint()
     }), after.end());
     if (after.size() == before.size())
         return;
-    undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after));
+    undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after, pluginUri));
 }
 
 void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float value)
@@ -4413,18 +4580,16 @@ void MainWindow::finishAutomationWrite()
                                  .arg(track->name), 2500);
 }
 
-void MainWindow::applyAutomationHistory(quint64 trackId, int parameter,
+void MainWindow::applyAutomationHistory(quint64 trackId, int parameter, const QString& pluginUri,
                                         const QVector<AutomationPoint>& points)
 {
     InstrumentTrack* track = project.findTrack(trackId);
     if (track == nullptr)
         return;
-    if (parameter == 0)
-        track->volumeAutomation = points;
-    else if (parameter == 1)
-        track->panAutomation = points;
-    else
+    QVector<AutomationPoint>* curve = automationCurve(*track, parameter, pluginUri);
+    if (curve == nullptr)
         return;
+    *curve = points;
     audioEngine.setProject(project);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
