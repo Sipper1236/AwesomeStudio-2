@@ -108,6 +108,7 @@ struct MixerBus
     quint64 id = 0;
     QString name = QStringLiteral("Bus");
     quint64 outputBusId = 0;
+    QVector<MixerSend> sends;
     float gain = 1.0f;
     float pan = 0.0f;
     bool muted = false;

@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 17;
+constexpr int currentProjectVersion = 18;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -454,6 +454,16 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
             {QStringLiteral("id"), static_cast<qint64>(bus.id)},
             {QStringLiteral("name"), bus.name},
             {QStringLiteral("outputBusId"), static_cast<qint64>(bus.outputBusId)},
+            {QStringLiteral("sends"), [&bus]
+             {
+                 QJsonArray sends;
+                 for (const MixerSend& send : bus.sends)
+                     sends.push_back(QJsonObject{
+                         {QStringLiteral("busId"), static_cast<qint64>(send.busId)},
+                         {QStringLiteral("gain"), send.gain}
+                     });
+                 return sends;
+             }()},
             {QStringLiteral("gain"), bus.gain},
             {QStringLiteral("pan"), bus.pan},
             {QStringLiteral("muted"), bus.muted},
@@ -591,6 +601,36 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
             if (version >= 17 && !readId(busObject, QStringLiteral("outputBusId"),
                                          bus.outputBusId, error))
                 return false;
+            if (version >= 18)
+            {
+                const QJsonValue sendsValue = busObject.value(QStringLiteral("sends"));
+                if (!sendsValue.isArray() || sendsValue.toArray().size() > 64)
+                {
+                    setError(error, QStringLiteral("The mixer bus has invalid or excessive auxiliary sends."));
+                    return false;
+                }
+                for (const QJsonValue& sendValue : sendsValue.toArray())
+                {
+                    if (!sendValue.isObject())
+                    {
+                        setError(error, QStringLiteral("The mixer bus contains an invalid auxiliary send."));
+                        return false;
+                    }
+                    const QJsonObject sendObject = sendValue.toObject();
+                    MixerSend send;
+                    if (!readId(sendObject, QStringLiteral("busId"), send.busId, error))
+                        return false;
+                    const double sendGain = sendObject.value(QStringLiteral("gain")).toDouble(
+                        std::numeric_limits<double>::quiet_NaN());
+                    if (send.busId == 0 || !std::isfinite(sendGain))
+                    {
+                        setError(error, QStringLiteral("The mixer bus contains an invalid send setting."));
+                        return false;
+                    }
+                    send.gain = static_cast<float>(sendGain);
+                    bus.sends.push_back(send);
+                }
+            }
             bus.name = busObject.value(QStringLiteral("name")).toString().trimmed();
             const double gain = busObject.value(QStringLiteral("gain")).toDouble(
                 std::numeric_limits<double>::quiet_NaN());

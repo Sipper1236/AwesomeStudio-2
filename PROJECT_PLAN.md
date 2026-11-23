@@ -6,7 +6,7 @@ Build a pattern-first digital audio workstation with a fast MIDI workflow and a 
 
 ## Shipped foundation
 
-The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, three-band EQ and volume/pan keyframe automation, mixer submix buses with nested/group routing, multiple auxiliary sends per track, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming and selectable linear, smooth, and equal-power fades, a 16-step drum sequencer with four assignable sample pads, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
+The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, three-band EQ and volume/pan keyframe automation, mixer submix buses with nested/group routing and multiple track and bus auxiliary sends, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming and selectable linear, smooth, and equal-power fades, a 16-step drum sequencer with four assignable sample pads, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
 
 ## Roadmap
 
@@ -49,7 +49,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [ ] Custom fade shapes, comping, and portable media packaging
 - [x] Mixer submix buses with track assignment, level/pan, mute/solo, parent routing, and metering
 - [x] Multiple post-track auxiliary sends per track to mixer buses
-- [ ] Bus-to-bus auxiliary sends and effect inserts
+- [x] Multiple post-fader auxiliary sends from buses to other mixer buses, with cycle prevention
+- [ ] Effect inserts
 - [ ] Bundled delay, compression, reverb, and more configurable EQ in the playback graph
 - [x] Graphical per-track volume/pan automation lanes with undoable point editing
 - [x] Touch recording for volume/pan automation from Mixer controls during playback

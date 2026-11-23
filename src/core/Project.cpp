@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -258,6 +260,53 @@ void ProjectData::normalize()
                 break;
             nextBusId = nextBus->second->outputBusId;
         }
+    }
+    std::unordered_map<quint64, std::vector<quint64>> busRouteGraph;
+    for (const MixerBus& bus : buses)
+    {
+        if (bus.outputBusId != 0)
+            busRouteGraph[bus.id].push_back(bus.outputBusId);
+    }
+    for (MixerBus& bus : buses)
+    {
+        if (bus.sends.size() > 64)
+            bus.sends.resize(64);
+        QVector<MixerSend> validSends;
+        validSends.reserve(bus.sends.size());
+        std::unordered_set<quint64> usedSendBuses;
+        for (MixerSend send : bus.sends)
+        {
+            if (send.busId == 0 || send.busId == bus.id || busById.find(send.busId) == busById.end() ||
+                !usedSendBuses.insert(send.busId).second)
+                continue;
+            if (!std::isfinite(send.gain)) send.gain = 0.0f;
+            send.gain = std::clamp(send.gain, 0.0f, 1.0f);
+
+            bool createsCycle = false;
+            std::vector<quint64> pending{send.busId};
+            std::unordered_set<quint64> visited;
+            while (!pending.empty())
+            {
+                const quint64 routeBusId = pending.back();
+                pending.pop_back();
+                if (routeBusId == bus.id)
+                {
+                    createsCycle = true;
+                    break;
+                }
+                if (!visited.insert(routeBusId).second)
+                    continue;
+                const auto outgoing = busRouteGraph.find(routeBusId);
+                if (outgoing != busRouteGraph.end())
+                    pending.insert(pending.end(), outgoing->second.begin(), outgoing->second.end());
+            }
+            if (createsCycle)
+                continue;
+
+            validSends.push_back(send);
+            busRouteGraph[bus.id].push_back(send.busId);
+        }
+        bus.sends = std::move(validSends);
     }
     if (tracks.size() > 256)
         tracks.resize(256);

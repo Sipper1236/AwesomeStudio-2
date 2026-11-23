@@ -53,6 +53,7 @@
 #include <cmath>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -1715,6 +1716,75 @@ void MainWindow::refreshMixer()
         mixerBusMeters.push_back({static_cast<size_t>(busIndex), peakMeter});
         form->addRow(tr("Peak"), peakMeter);
 
+        auto* sendsGroup = new QGroupBox(tr("Aux sends"), group);
+        auto* sendsLayout = new QVBoxLayout(sendsGroup);
+        sendsLayout->setContentsMargins(6, 6, 6, 6);
+        for (qsizetype sendIndex = 0; sendIndex < item.sends.size(); ++sendIndex)
+        {
+            const MixerSend& send = item.sends[sendIndex];
+            auto* sendRow = new QWidget(sendsGroup);
+            auto* sendLayout = new QHBoxLayout(sendRow);
+            sendLayout->setContentsMargins(0, 0, 0, 0);
+            auto* sendBus = new QComboBox(sendRow);
+            for (const MixerBus& candidate : project.buses)
+            {
+                if (candidate.id == busId)
+                    continue;
+                bool usedByOtherSend = false;
+                for (qsizetype otherIndex = 0; otherIndex < item.sends.size(); ++otherIndex)
+                {
+                    if (otherIndex != sendIndex && item.sends[otherIndex].busId == candidate.id)
+                    {
+                        usedByOtherSend = true;
+                        break;
+                    }
+                }
+                if (!usedByOtherSend)
+                    sendBus->addItem(candidate.name, QVariant::fromValue<qulonglong>(candidate.id));
+            }
+            sendBus->setCurrentIndex(std::max(0, sendBus->findData(
+                QVariant::fromValue<qulonglong>(send.busId))));
+            auto* sendLevel = new QSlider(Qt::Horizontal, sendRow);
+            sendLevel->setRange(0, 100);
+            sendLevel->setValue(static_cast<int>(std::round(send.gain * 100.0f)));
+            auto* sendLevelLabel = new QLabel(tr("%1%").arg(sendLevel->value()), sendRow);
+            auto* removeSend = new QPushButton(tr("×"), sendRow);
+            removeSend->setToolTip(tr("Remove this auxiliary send"));
+            sendLayout->addWidget(sendBus, 2);
+            sendLayout->addWidget(sendLevel, 3);
+            sendLayout->addWidget(sendLevelLabel);
+            sendLayout->addWidget(removeSend);
+            sendsLayout->addWidget(sendRow);
+            connect(sendBus, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                    [this, busId, sendIndex, sendBus, sendLevel](int index)
+            {
+                if (index >= 0)
+                    setMixerBusSend(busId, sendIndex, sendBus->currentData().toULongLong(),
+                                    sendLevel->value() / 100.0f);
+            });
+            connect(sendLevel, &QSlider::valueChanged, this,
+                    [this, busId, sendIndex, sendBus, sendLevelLabel](int value)
+            {
+                sendLevelLabel->setText(tr("%1%").arg(value));
+                setMixerBusSend(busId, sendIndex, sendBus->currentData().toULongLong(), value / 100.0f);
+            });
+            connect(removeSend, &QPushButton::clicked, this, [this, busId, sendIndex]
+            {
+                QTimer::singleShot(0, this, [this, busId, sendIndex]
+                {
+                    removeMixerBusSend(busId, sendIndex);
+                });
+            });
+        }
+        auto* addSendButton = new QPushButton(tr("Add auxiliary send"), sendsGroup);
+        addSendButton->setEnabled(project.buses.size() > 1 && item.sends.size() < project.buses.size() - 1);
+        sendsLayout->addWidget(addSendButton);
+        form->addRow(sendsGroup);
+        connect(addSendButton, &QPushButton::clicked, this, [this, busId]
+        {
+            QTimer::singleShot(0, this, [this, busId] { addMixerBusSend(busId); });
+        });
+
         auto* removeBusButton = new QPushButton(tr("Remove bus"), group);
         form->addRow(removeBusButton);
         layout->addWidget(group);
@@ -2090,6 +2160,16 @@ void MainWindow::removeMixerBus(quint64 busId)
     }
     for (MixerBus& candidate : project.buses)
     {
+        if (candidate.id != busId)
+        {
+            for (MixerSend& send : candidate.sends)
+            {
+                if (send.busId == busId)
+                    send.busId = parentBusId;
+            }
+            candidate.sends.erase(std::remove_if(candidate.sends.begin(), candidate.sends.end(),
+                [](const MixerSend& send) { return send.busId == 0; }), candidate.sends.end());
+        }
         if (candidate.outputBusId == busId)
             candidate.outputBusId = parentBusId;
     }
@@ -2112,6 +2192,35 @@ void MainWindow::removeMixerBus(quint64 busId)
     statusBar()->showMessage(tr("Removed %1; rerouted its outputs to %2").arg(name, parentName), 2200);
 }
 
+bool MainWindow::mixerRouteWouldCycle(quint64 sourceBusId, quint64 targetBusId) const
+{
+    if (targetBusId == 0)
+        return false;
+    if (sourceBusId == targetBusId)
+        return true;
+
+    std::vector<quint64> pending{targetBusId};
+    std::unordered_set<quint64> visited;
+    while (!pending.empty())
+    {
+        const quint64 routeBusId = pending.back();
+        pending.pop_back();
+        if (routeBusId == sourceBusId)
+            return true;
+        if (!visited.insert(routeBusId).second)
+            continue;
+        const auto routedBus = std::find_if(project.buses.cbegin(), project.buses.cend(),
+            [routeBusId](const MixerBus& candidate) { return candidate.id == routeBusId; });
+        if (routedBus == project.buses.cend())
+            continue;
+        if (routedBus->outputBusId != 0)
+            pending.push_back(routedBus->outputBusId);
+        for (const MixerSend& send : routedBus->sends)
+            pending.push_back(send.busId);
+    }
+    return false;
+}
+
 void MainWindow::setMixerBusOutput(quint64 busId, quint64 outputBusId)
 {
     MixerBus* bus = nullptr;
@@ -2126,27 +2235,11 @@ void MainWindow::setMixerBusOutput(quint64 busId, quint64 outputBusId)
     if (bus == nullptr || bus->outputBusId == outputBusId)
         return;
 
-    quint64 routedBusId = outputBusId;
-    for (qsizetype depth = 0; routedBusId != 0 && depth <= project.buses.size(); ++depth)
+    if (mixerRouteWouldCycle(busId, outputBusId))
     {
-        if (routedBusId == busId)
-        {
-            statusBar()->showMessage(tr("That route would create a mixer cycle"), 3000);
-            QTimer::singleShot(0, this, [this] { refreshMixer(); });
-            return;
-        }
-        const MixerBus* routedBus = nullptr;
-        for (const MixerBus& candidate : project.buses)
-        {
-            if (candidate.id == routedBusId)
-            {
-                routedBus = &candidate;
-                break;
-            }
-        }
-        if (routedBus == nullptr)
-            break;
-        routedBusId = routedBus->outputBusId;
+        statusBar()->showMessage(tr("That route would create a mixer cycle"), 3000);
+        QTimer::singleShot(0, this, [this] { refreshMixer(); });
+        return;
     }
 
     bus->outputBusId = outputBusId;
@@ -2155,6 +2248,97 @@ void MainWindow::setMixerBusOutput(quint64 busId, quint64 outputBusId)
     settingsDirty = true;
     refreshDirtyState();
     refreshMixer();
+}
+
+void MainWindow::setMixerBusSend(quint64 busId, qsizetype sendIndex, quint64 targetBusId, float gain)
+{
+    MixerBus* bus = nullptr;
+    for (MixerBus& candidate : project.buses)
+    {
+        if (candidate.id == busId)
+        {
+            bus = &candidate;
+            break;
+        }
+    }
+    if (bus == nullptr || sendIndex < 0 || sendIndex >= bus->sends.size() || targetBusId == 0)
+        return;
+    const float normalizedGain = std::clamp(gain, 0.0f, 1.0f);
+    MixerSend& send = bus->sends[sendIndex];
+    if (send.busId == targetBusId && std::abs(send.gain - normalizedGain) < 1.0e-6f)
+        return;
+    for (qsizetype otherIndex = 0; otherIndex < bus->sends.size(); ++otherIndex)
+    {
+        if (otherIndex != sendIndex && bus->sends[otherIndex].busId == targetBusId)
+        {
+            statusBar()->showMessage(tr("A bus can send to a destination only once"), 2500);
+            QTimer::singleShot(0, this, [this] { refreshMixer(); });
+            return;
+        }
+    }
+    if (mixerRouteWouldCycle(busId, targetBusId))
+    {
+        statusBar()->showMessage(tr("That send would create a mixer cycle"), 3000);
+        QTimer::singleShot(0, this, [this] { refreshMixer(); });
+        return;
+    }
+    const bool destinationChanged = send.busId != targetBusId;
+    send.busId = targetBusId;
+    send.gain = normalizedGain;
+    project.normalize();
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
+    if (destinationChanged)
+        QTimer::singleShot(0, this, [this] { refreshMixer(); });
+}
+
+void MainWindow::addMixerBusSend(quint64 busId)
+{
+    MixerBus* bus = nullptr;
+    for (MixerBus& candidate : project.buses)
+    {
+        if (candidate.id == busId)
+        {
+            bus = &candidate;
+            break;
+        }
+    }
+    if (bus == nullptr || bus->sends.size() >= project.buses.size() - 1)
+        return;
+    for (const MixerBus& candidate : project.buses)
+    {
+        if (candidate.id == busId || mixerRouteWouldCycle(busId, candidate.id))
+            continue;
+        const bool alreadyUsed = std::any_of(bus->sends.cbegin(), bus->sends.cend(),
+            [&candidate](const MixerSend& send) { return send.busId == candidate.id; });
+        if (alreadyUsed)
+            continue;
+        bus->sends.push_back({candidate.id, 0.5f});
+        project.normalize();
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+        refreshMixer();
+        return;
+    }
+    statusBar()->showMessage(tr("No cycle-free destination is available for this bus"), 3000);
+}
+
+void MainWindow::removeMixerBusSend(quint64 busId, qsizetype sendIndex)
+{
+    for (MixerBus& bus : project.buses)
+    {
+        if (bus.id != busId || sendIndex < 0 || sendIndex >= bus.sends.size())
+            continue;
+        bus.sends.removeAt(sendIndex);
+        project.normalize();
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+        refreshMixer();
+        return;
+    }
 }
 
 void MainWindow::setTrackOutputBus(quint64 trackId, quint64 busId)

@@ -67,7 +67,11 @@ private:
     void refreshMixerMeters();
     void addMixerBus();
     void removeMixerBus(quint64 busId);
+    bool mixerRouteWouldCycle(quint64 sourceBusId, quint64 targetBusId) const;
     void setMixerBusOutput(quint64 busId, quint64 outputBusId);
+    void setMixerBusSend(quint64 busId, qsizetype sendIndex, quint64 targetBusId, float gain);
+    void addMixerBusSend(quint64 busId);
+    void removeMixerBusSend(quint64 busId, qsizetype sendIndex);
     void setTrackOutputBus(quint64 trackId, quint64 busId);
     void setTrackSend(quint64 trackId, qsizetype sendIndex, quint64 busId, float gain);
     void addTrackSend(quint64 trackId);

@@ -137,9 +137,11 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackSends.clear();
     trackAudible.clear();
     busMixStates.clear();
+    busSends.clear();
     busOutputIndices.clear();
     busInputAudible.clear();
     busOutputAudible.clear();
+    busSoloDownstreamAudible.clear();
     busRouteOrder.clear();
     busFrameSamples.clear();
     lastBusOutputSamples.clear();
@@ -167,9 +169,11 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackSends.resize(static_cast<size_t>(project->tracks.size()));
     trackAudible.assign(static_cast<size_t>(project->tracks.size()), 0);
     busMixStates.reserve(static_cast<size_t>(project->buses.size()));
+    busSends.resize(static_cast<size_t>(project->buses.size()));
     busOutputIndices.assign(static_cast<size_t>(project->buses.size()), -1);
     busInputAudible.assign(static_cast<size_t>(project->buses.size()), 0);
     busOutputAudible.assign(static_cast<size_t>(project->buses.size()), 0);
+    busSoloDownstreamAudible.assign(static_cast<size_t>(project->buses.size()), 0);
     busRouteOrder.resize(static_cast<size_t>(project->buses.size()));
     busFrameSamples.resize(static_cast<size_t>(project->buses.size()));
     lastBusOutputSamples.resize(static_cast<size_t>(project->buses.size()));
@@ -210,61 +214,124 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
         const auto parent = busIndexById.find(bus.outputBusId);
         busOutputIndices[busIndex] = parent == busIndexById.end() ? -1 : parent->second;
-        busRouteOrder[busIndex] = busIndex;
+        for (const MixerSend& send : bus.sends)
+        {
+            const auto sendBus = busIndexById.find(send.busId);
+            if (sendBus != busIndexById.end())
+                busSends[busIndex].push_back({sendBus->second, send.gain});
+        }
     }
+
+    std::vector<size_t> busIndegrees(busOutputIndices.size(), 0);
+    for (size_t busIndex = 0; busIndex < busOutputIndices.size(); ++busIndex)
+    {
+        const int parentIndex = busOutputIndices[busIndex];
+        if (parentIndex >= 0)
+            ++busIndegrees[static_cast<size_t>(parentIndex)];
+        for (const TrackSendMix& send : busSends[busIndex])
+            if (send.busIndex >= 0)
+                ++busIndegrees[static_cast<size_t>(send.busIndex)];
+    }
+    std::vector<size_t> readyBuses;
+    readyBuses.reserve(busOutputIndices.size());
+    for (size_t busIndex = 0; busIndex < busIndegrees.size(); ++busIndex)
+        if (busIndegrees[busIndex] == 0)
+            readyBuses.push_back(busIndex);
+    busRouteOrder.clear();
+    busRouteOrder.reserve(busOutputIndices.size());
+    for (size_t readyIndex = 0; readyIndex < readyBuses.size(); ++readyIndex)
+    {
+        const size_t busIndex = readyBuses[readyIndex];
+        busRouteOrder.push_back(busIndex);
+        const auto releaseDestination = [&](int destinationIndex)
+        {
+            if (destinationIndex < 0)
+                return;
+            const size_t destination = static_cast<size_t>(destinationIndex);
+            if (--busIndegrees[destination] == 0)
+                readyBuses.push_back(destination);
+        };
+        releaseDestination(busOutputIndices[busIndex]);
+        for (const TrackSendMix& send : busSends[busIndex])
+            releaseDestination(send.busIndex);
+    }
+    if (busRouteOrder.size() < busOutputIndices.size())
+    {
+        for (size_t busIndex = 0; busIndex < busOutputIndices.size(); ++busIndex)
+        {
+            if (std::find(busRouteOrder.begin(), busRouteOrder.end(), busIndex) == busRouteOrder.end())
+                busRouteOrder.push_back(busIndex);
+        }
+    }
+
     for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
     {
         const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
-        bool inputAudible = !bus.muted && !hasBusSolo;
-        if (hasBusSolo && !bus.muted)
+        if (!hasBusSolo)
         {
-            int routeIndex = static_cast<int>(busIndex);
-            size_t depth = 0;
-            while (routeIndex >= 0 && depth++ < busOutputIndices.size())
-            {
-                const MixerBus& routeBus = project->buses[static_cast<qsizetype>(routeIndex)];
-                if (routeBus.muted)
-                    break;
-                if (routeBus.solo)
-                {
-                    inputAudible = true;
-                    break;
-                }
-                routeIndex = busOutputIndices[static_cast<size_t>(routeIndex)];
-            }
+            busInputAudible[busIndex] = bus.muted ? 0 : 1;
+            busSoloDownstreamAudible[busIndex] = busInputAudible[busIndex];
+            continue;
         }
-        busInputAudible[busIndex] = inputAudible ? 1 : 0;
-        busOutputAudible[busIndex] = busInputAudible[busIndex];
+
+        if (bus.muted)
+            continue;
+        std::vector<size_t> pending{busIndex};
+        std::vector<unsigned char> visited(busOutputIndices.size(), 0);
+        while (!pending.empty())
+        {
+            const size_t routeIndex = pending.back();
+            pending.pop_back();
+            if (routeIndex >= visited.size() || visited[routeIndex] != 0)
+                continue;
+            visited[routeIndex] = 1;
+            const MixerBus& routeBus = project->buses[static_cast<qsizetype>(routeIndex)];
+            if (routeBus.muted)
+                continue;
+            if (routeBus.solo)
+            {
+                busInputAudible[busIndex] = 1;
+                break;
+            }
+            const int parentIndex = busOutputIndices[routeIndex];
+            if (parentIndex >= 0)
+                pending.push_back(static_cast<size_t>(parentIndex));
+            for (const TrackSendMix& send : busSends[routeIndex])
+                if (send.busIndex >= 0)
+                    pending.push_back(static_cast<size_t>(send.busIndex));
+        }
     }
     if (hasBusSolo)
     {
         for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
         {
-            if (!project->buses[static_cast<qsizetype>(busIndex)].solo || busInputAudible[busIndex] == 0)
+            const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
+            if (!bus.solo || bus.muted)
                 continue;
-            int parentIndex = busOutputIndices[busIndex];
-            while (parentIndex >= 0 && !project->buses[static_cast<qsizetype>(parentIndex)].muted)
+            std::vector<size_t> pending{busIndex};
+            while (!pending.empty())
             {
-                busOutputAudible[static_cast<size_t>(parentIndex)] = 1;
-                parentIndex = busOutputIndices[static_cast<size_t>(parentIndex)];
+                const size_t routeIndex = pending.back();
+                pending.pop_back();
+                if (routeIndex >= busSoloDownstreamAudible.size() ||
+                    busSoloDownstreamAudible[routeIndex] != 0)
+                    continue;
+                const MixerBus& routeBus = project->buses[static_cast<qsizetype>(routeIndex)];
+                if (routeBus.muted)
+                    continue;
+                busSoloDownstreamAudible[routeIndex] = 1;
+                const int parentIndex = busOutputIndices[routeIndex];
+                if (parentIndex >= 0)
+                    pending.push_back(static_cast<size_t>(parentIndex));
+                for (const TrackSendMix& send : busSends[routeIndex])
+                    if (send.busIndex >= 0)
+                        pending.push_back(static_cast<size_t>(send.busIndex));
             }
         }
     }
-    const auto busDepth = [this](size_t busIndex)
-    {
-        size_t depth = 0;
-        int parentIndex = busOutputIndices[busIndex];
-        while (parentIndex >= 0 && depth < busOutputIndices.size())
-        {
-            ++depth;
-            parentIndex = busOutputIndices[static_cast<size_t>(parentIndex)];
-        }
-        return depth;
-    };
-    std::stable_sort(busRouteOrder.begin(), busRouteOrder.end(), [&](size_t left, size_t right)
-    {
-        return busDepth(left) > busDepth(right);
-    });
+    for (size_t busIndex = 0; busIndex < busOutputAudible.size(); ++busIndex)
+        busOutputAudible[busIndex] = busInputAudible[busIndex] != 0 ||
+            busSoloDownstreamAudible[busIndex] != 0 ? 1 : 0;
 
     bool hasTrackSolo = false;
     for (const InstrumentTrack& track : project->tracks)
@@ -457,17 +524,40 @@ StereoSample SynthRenderer::finishLiveMixerFrame()
         const int parentIndex = busOutputIndices[busIndex];
         if (parentIndex >= 0)
         {
-            if (busOutputAudible[static_cast<size_t>(parentIndex)] != 0)
+            const size_t destination = static_cast<size_t>(parentIndex);
+            const bool routeAudible = !hasBusSolo
+                ? busInputAudible[destination] != 0
+                : ((busInputAudible[busIndex] != 0 && busInputAudible[destination] != 0) ||
+                   (busSoloDownstreamAudible[busIndex] != 0 &&
+                    busSoloDownstreamAudible[destination] != 0));
+            if (routeAudible)
             {
-                StereoSample& parentInput = liveBusFrameSamples[static_cast<size_t>(parentIndex)];
+                StereoSample& parentInput = liveBusFrameSamples[destination];
                 parentInput.left += output.left;
                 parentInput.right += output.right;
             }
         }
-        else
+        else if (busSoloDownstreamAudible[busIndex] != 0)
         {
             masterSample.left += output.left;
             masterSample.right += output.right;
+        }
+        for (const TrackSendMix& send : busSends[busIndex])
+        {
+            if (send.busIndex < 0 || static_cast<size_t>(send.busIndex) >= busSoloDownstreamAudible.size() ||
+                send.gain <= 0.0f)
+                continue;
+            const size_t destination = static_cast<size_t>(send.busIndex);
+            const bool routeAudible = !hasBusSolo
+                ? busInputAudible[destination] != 0
+                : ((busInputAudible[busIndex] != 0 && busInputAudible[destination] != 0) ||
+                   (busSoloDownstreamAudible[busIndex] != 0 &&
+                    busSoloDownstreamAudible[destination] != 0));
+            if (!routeAudible)
+                continue;
+            StereoSample& sendInput = liveBusFrameSamples[destination];
+            sendInput.left += output.left * send.gain;
+            sendInput.right += output.right * send.gain;
         }
         liveBusFrameSamples[busIndex] = {};
     }
@@ -748,13 +838,33 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         const int parentIndex = busOutputIndices[busIndex];
         if (parentIndex >= 0)
         {
-            if (busOutputAudible[static_cast<size_t>(parentIndex)] != 0)
-                addBusFrameSample(static_cast<size_t>(parentIndex), output);
+            const size_t destination = static_cast<size_t>(parentIndex);
+            const bool routeAudible = !hasBusSolo
+                ? busInputAudible[destination] != 0
+                : ((busInputAudible[busIndex] != 0 && busInputAudible[destination] != 0) ||
+                   (busSoloDownstreamAudible[busIndex] != 0 &&
+                    busSoloDownstreamAudible[destination] != 0));
+            if (routeAudible)
+                addBusFrameSample(destination, output);
         }
-        else
+        else if (busSoloDownstreamAudible[busIndex] != 0)
         {
             sample.left += output.left;
             sample.right += output.right;
+        }
+        for (const TrackSendMix& send : busSends[busIndex])
+        {
+            if (send.busIndex < 0 || static_cast<size_t>(send.busIndex) >= busSoloDownstreamAudible.size() ||
+                send.gain <= 0.0f)
+                continue;
+            const size_t destination = static_cast<size_t>(send.busIndex);
+            const bool routeAudible = !hasBusSolo
+                ? busInputAudible[destination] != 0
+                : ((busInputAudible[busIndex] != 0 && busInputAudible[destination] != 0) ||
+                   (busSoloDownstreamAudible[busIndex] != 0 &&
+                    busSoloDownstreamAudible[destination] != 0));
+            if (routeAudible)
+                addBusFrameSample(destination, {output.left * send.gain, output.right * send.gain});
         }
         busFrameSamples[busIndex] = {};
         busFrameTouched[busIndex] = 0;

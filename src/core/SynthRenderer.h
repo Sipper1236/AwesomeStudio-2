@@ -119,9 +119,11 @@ private:
     std::vector<std::vector<TrackSendMix>> trackSends;
     std::vector<unsigned char> trackAudible;
     std::vector<BusMixState> busMixStates;
+    std::vector<std::vector<TrackSendMix>> busSends;
     std::vector<int> busOutputIndices;
     std::vector<unsigned char> busInputAudible;
     std::vector<unsigned char> busOutputAudible;
+    std::vector<unsigned char> busSoloDownstreamAudible;
     std::vector<size_t> busRouteOrder;
     std::vector<StereoSample> busFrameSamples;
     std::vector<StereoSample> lastBusOutputSamples;
