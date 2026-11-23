@@ -43,6 +43,7 @@ class MainWindow final : public QMainWindow
     friend class MarkerEditCommand;
     friend class TempoMapEditCommand;
     friend class AudioFadeEditCommand;
+    friend class AudioTrimCommand;
     friend class ClipDuplicateCommand;
     friend class ClipRemoveCommand;
     friend class ClipMoveCommand;
@@ -66,6 +67,16 @@ private:
         double fadeOutShape = 1.0;
         QVector<float> fadeInCurvePoints;
         QVector<float> fadeOutCurvePoints;
+    };
+
+    struct AudioTrimState
+    {
+        quint64 clipId = 0;
+        double startBeat = 0.0;
+        double lengthBeats = 0.0;
+        qint64 audioStartFrame = 0;
+        double fadeInBeats = 0.0;
+        double fadeOutBeats = 0.0;
     };
 
     void createActions();
@@ -111,6 +122,7 @@ private:
     void moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
                          double lengthBeats, qint64 audioStartFrame);
+    void applyAudioTrimHistory(quint64 trackId, const AudioTrimState& state);
     void relinkAudioRegion(quint64 trackId, quint64 clipId);
     void setSelectedAudioFade(bool fadeIn, double beats);
     void setSelectedAudioFadeCurve(bool fadeIn, int curve);

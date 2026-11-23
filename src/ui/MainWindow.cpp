@@ -2152,6 +2152,35 @@ private:
     QVector<MainWindow::AudioFadeState> after;
 };
 
+class AudioTrimCommand final : public QUndoCommand
+{
+public:
+    AudioTrimCommand(MainWindow* window, quint64 trackId,
+                     MainWindow::AudioTrimState before, MainWindow::AudioTrimState after)
+        : window(window), trackId(trackId), before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Trim audio region"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyAudioTrimHistory(trackId, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyAudioTrimHistory(trackId, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    MainWindow::AudioTrimState before;
+    MainWindow::AudioTrimState after;
+};
+
 MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     : QMainWindow(parent), audioEngine(engine)
 {
@@ -6612,13 +6641,38 @@ void MainWindow::trimAudioRegion(quint64 trackId, quint64 clipId, double startBe
         !clip->isAudioRegion())
         return;
 
-    clip->startBeat = std::clamp(startBeat, 0.0, 16384.0);
-    clip->lengthBeats = std::clamp(lengthBeats, 0.25, 16384.0);
-    clip->audioStartFrame = std::max<qint64>(0, audioStartFrame);
+    AudioTrimState before{clip->id, clip->startBeat, clip->lengthBeats, clip->audioStartFrame,
+                          clip->audioFadeInBeats, clip->audioFadeOutBeats};
+    AudioTrimState after = before;
+    after.startBeat = std::clamp(startBeat, 0.0, 16384.0);
+    after.lengthBeats = std::clamp(lengthBeats, 0.25, 16384.0);
+    after.audioStartFrame = std::max<qint64>(0, audioStartFrame);
+    after.fadeInBeats = std::clamp(before.fadeInBeats, 0.0, after.lengthBeats);
+    after.fadeOutBeats = std::clamp(before.fadeOutBeats, 0.0, after.lengthBeats);
+    if (std::abs(before.startBeat - after.startBeat) < 1.0e-9 &&
+        std::abs(before.lengthBeats - after.lengthBeats) < 1.0e-9 &&
+        before.audioStartFrame == after.audioStartFrame &&
+        std::abs(before.fadeInBeats - after.fadeInBeats) < 1.0e-9 &&
+        std::abs(before.fadeOutBeats - after.fadeOutBeats) < 1.0e-9)
+        return;
+    undoStack.push(new AudioTrimCommand(this, trackId, before, after));
+}
+
+void MainWindow::applyAudioTrimHistory(quint64 trackId, const AudioTrimState& state)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    MidiClip* clip = project.findClip(trackId, state.clipId);
+    if (track == nullptr || clip == nullptr || track->instrumentType != InstrumentType::Audio ||
+        !clip->isAudioRegion())
+        return;
+
+    clip->startBeat = state.startBeat;
+    clip->lengthBeats = state.lengthBeats;
+    clip->audioStartFrame = state.audioStartFrame;
+    clip->audioFadeInBeats = state.fadeInBeats;
+    clip->audioFadeOutBeats = state.fadeOutBeats;
     project.normalize();
-    settingsDirty = true;
     refreshProjectUi();
-    refreshDirtyState();
     statusBar()->showMessage(tr("Audio region trimmed"), 1800);
 }
 
