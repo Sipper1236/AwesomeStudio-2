@@ -17,7 +17,9 @@ public:
     void setPlayheadBeat(double beat);
     void setAutomationView(bool enabled, int parameter, float minimum = 0.0f,
                            float maximum = 1.0f, float defaultValue = 0.0f,
-                           const QString& pluginUri = QString());
+                           const QString& pluginUri = QString(),
+                           AutomationPoint::Curve defaultCurve = AutomationPoint::Curve::Linear,
+                           const QString& targetLabel = QString());
 
 signals:
     void clipSelected(quint64 trackId, quint64 clipId);

@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 35;
+constexpr int currentProjectVersion = 36;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -115,7 +115,8 @@ QJsonArray saveAutomation(const QVector<AutomationPoint>& points)
     {
         result.push_back(QJsonObject{
             {QStringLiteral("beat"), point.beat},
-            {QStringLiteral("value"), point.value}
+            {QStringLiteral("value"), point.value},
+            {QStringLiteral("curve"), static_cast<int>(point.curveToNext)}
         });
     }
     return result;
@@ -157,7 +158,7 @@ QJsonArray saveEffects(const QVector<MixerEffect>& effects)
 }
 
 bool loadAutomation(const QJsonValue& value, QVector<AutomationPoint>& points,
-                    const QString& parameterName, QString* error);
+                    const QString& parameterName, int version, QString* error);
 
 bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
                  const QString& ownerName, int version, QString* error)
@@ -268,7 +269,8 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
             for (const QJsonValue& curveValue : automationValue.toArray())
             {
                 QVector<AutomationPoint> points;
-                if (!loadAutomation(curveValue, points, QStringLiteral("plugin parameter"), error))
+                if (!loadAutomation(curveValue, points, QStringLiteral("plugin parameter"),
+                                    version, error))
                     return false;
                 effect.pluginParameterAutomation.push_back(std::move(points));
             }
@@ -279,7 +281,7 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
 }
 
 bool loadAutomation(const QJsonValue& value, QVector<AutomationPoint>& points,
-                    const QString& parameterName, QString* error)
+                    const QString& parameterName, int version, QString* error)
 {
     if (value.isUndefined())
         return true;
@@ -302,6 +304,18 @@ bool loadAutomation(const QJsonValue& value, QVector<AutomationPoint>& points,
         point.beat = object.value(QStringLiteral("beat")).toDouble(-1.0);
         point.value = static_cast<float>(object.value(QStringLiteral("value")).toDouble(
             std::numeric_limits<double>::quiet_NaN()));
+        if (version >= 36)
+        {
+            const int curve = object.value(QStringLiteral("curve")).toInt(0);
+            if (curve < static_cast<int>(AutomationPoint::Curve::Linear) ||
+                curve > static_cast<int>(AutomationPoint::Curve::Hold))
+            {
+                setError(error, QStringLiteral("The track contains an unsupported %1 automation curve.")
+                                   .arg(parameterName));
+                return false;
+            }
+            point.curveToNext = static_cast<AutomationPoint::Curve>(curve);
+        }
         if (!std::isfinite(point.beat) || !std::isfinite(point.value) || point.beat < 0.0)
         {
             setError(error, QStringLiteral("The track contains an out-of-range %1 automation point.")
@@ -668,9 +682,9 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                      QStringLiteral("track"), version, error))
         return false;
     if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
-                        QStringLiteral("volume"), error) ||
+                        QStringLiteral("volume"), version, error) ||
         !loadAutomation(object.value(QStringLiteral("panAutomation")), track.panAutomation,
-                        QStringLiteral("pan"), error))
+                        QStringLiteral("pan"), version, error))
         return false;
     track.muted = object.value(QStringLiteral("muted")).toBool(false);
     track.solo = object.value(QStringLiteral("solo")).toBool(false);

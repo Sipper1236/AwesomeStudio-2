@@ -38,7 +38,8 @@ bool automationPointsEqual(const QVector<AutomationPoint>& left, const QVector<A
     for (qsizetype index = 0; index < left.size(); ++index)
     {
         if (std::abs(left[index].beat - right[index].beat) > 1.0e-9 ||
-            std::abs(left[index].value - right[index].value) > 1.0e-6f)
+            std::abs(left[index].value - right[index].value) > 1.0e-6f ||
+            left[index].curveToNext != right[index].curveToNext)
             return false;
     }
     return true;
@@ -94,7 +95,8 @@ public:
     }
 
     void setAutomationView(bool enabled, int parameter, float minimum, float maximum,
-                           float defaultValue, const QString& pluginUri)
+                           float defaultValue, const QString& pluginUri,
+                           AutomationPoint::Curve defaultCurve, const QString& targetLabel)
     {
         automationViewEnabled = enabled;
         automationParameter = std::max(0, parameter);
@@ -104,6 +106,8 @@ public:
         automationDefaultValue = std::isfinite(defaultValue)
             ? std::clamp(defaultValue, automationMinimum, automationMaximum) : automationMinimum;
         automationPluginUri = pluginUri;
+        automationDefaultCurve = defaultCurve;
+        automationTargetLabel = targetLabel;
         selectedAutomationTrackId = 0;
         selectedAutomationPoint = -1;
         updateCanvasSize();
@@ -161,9 +165,12 @@ protected:
                                  selected ? QColor(QStringLiteral("#252f39")) : QColor(QStringLiteral("#202730")));
                 painter.setPen(QColor(QStringLiteral("#94a2ae")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
+                const QString label = automationParameter == 0 ? tr("VOLUME · 0–100%") :
+                    automationParameter == 1 ? tr("PAN · L–R") : automationTargetLabel;
+                const QString shortLabel = painter.fontMetrics().elidedText(
+                    label, Qt::ElideRight, trackHeaderWidth - 20);
                 painter.drawText(QRect(12, laneY, trackHeaderWidth - 20, automationLaneHeight - 1),
-                                 Qt::AlignLeft | Qt::AlignVCenter,
-                                 automationParameter == 0 ? tr("VOLUME · 0–100%") : tr("PAN · L–R"));
+                                 Qt::AlignLeft | Qt::AlignVCenter, shortLabel);
             }
         }
 
@@ -463,7 +470,7 @@ protected:
                 else
                 {
                     selectedAutomationPoint = static_cast<int>(insertAt - points.begin());
-                    points.insert(insertAt, {beat, value});
+                    points.insert(insertAt, {beat, value, automationDefaultCurve});
                 }
             }
             draggingAutomationPoint = true;
@@ -931,11 +938,53 @@ private:
         const QVector<AutomationPoint>& points = automationPoints(track);
         const int right = trackHeaderWidth + gridWidth;
         QPainterPath curve;
-        curve.moveTo(trackHeaderWidth, automationY(laneY, baseAutomationValue(track)));
-        for (const AutomationPoint& point : points)
-            curve.lineTo(trackHeaderWidth + point.beat * pixelsPerBeat, automationY(laneY, point.value));
-        const float endValue = points.isEmpty() ? baseAutomationValue(track) : points.last().value;
-        curve.lineTo(right, automationY(laneY, endValue));
+        const float baseValue = baseAutomationValue(track);
+        if (points.isEmpty())
+        {
+            curve.moveTo(trackHeaderWidth, automationY(laneY, baseValue));
+            curve.lineTo(right, automationY(laneY, baseValue));
+        }
+        else
+        {
+            const AutomationPoint& first = points.first();
+            const double firstX = trackHeaderWidth + first.beat * pixelsPerBeat;
+            curve.moveTo(trackHeaderWidth, automationY(laneY, baseValue));
+            if (first.beat > 0.0)
+                curve.lineTo(firstX, automationY(laneY, baseValue));
+            curve.lineTo(firstX, automationY(laneY, first.value));
+            for (qsizetype index = 0; index + 1 < points.size(); ++index)
+            {
+                const AutomationPoint& from = points[index];
+                const AutomationPoint& to = points[index + 1];
+                const double endX = trackHeaderWidth + to.beat * pixelsPerBeat;
+                if (from.curveToNext == AutomationPoint::Curve::Linear)
+                {
+                    curve.lineTo(endX, automationY(laneY, to.value));
+                    continue;
+                }
+                if (from.curveToNext == AutomationPoint::Curve::Hold)
+                {
+                    curve.lineTo(endX, automationY(laneY, from.value));
+                    curve.lineTo(endX, automationY(laneY, to.value));
+                    continue;
+                }
+                constexpr int maximumSamplesPerSegment = 24;
+                const int samplesPerSegment = std::clamp(
+                    static_cast<int>(std::ceil((to.beat - from.beat) * pixelsPerBeat / 6.0)),
+                    2, maximumSamplesPerSegment);
+                for (int sample = 1; sample <= samplesPerSegment; ++sample)
+                {
+                    const double position = sample / static_cast<double>(samplesPerSegment);
+                    const double beat = from.beat + (to.beat - from.beat) * position;
+                    const double amount = automationCurveProgress(from.curveToNext, position);
+                    const float value = static_cast<float>(from.value +
+                        (to.value - from.value) * amount);
+                    curve.lineTo(trackHeaderWidth + beat * pixelsPerBeat,
+                                 automationY(laneY, value));
+                }
+            }
+            curve.lineTo(right, automationY(laneY, points.last().value));
+        }
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(trackColour(trackIndex).lighter(125), 2));
         painter.drawPath(curve);
@@ -1041,7 +1090,9 @@ private:
     float automationMinimum = 0.0f;
     float automationMaximum = 1.0f;
     float automationDefaultValue = 0.0f;
+    AutomationPoint::Curve automationDefaultCurve = AutomationPoint::Curve::Linear;
     QString automationPluginUri;
+    QString automationTargetLabel;
     int selectedAutomationPoint = -1;
     quint64 selectedAutomationTrackId = 0;
     quint64 automationDragTrackId = 0;
@@ -1087,7 +1138,10 @@ void ArrangementEditor::setPlayheadBeat(double beat)
 
 void ArrangementEditor::setAutomationView(bool enabled, int parameter, float minimum,
                                           float maximum, float defaultValue,
-                                          const QString& pluginUri)
+                                          const QString& pluginUri,
+                                          AutomationPoint::Curve defaultCurve,
+                                          const QString& targetLabel)
 {
-    canvas->setAutomationView(enabled, parameter, minimum, maximum, defaultValue, pluginUri);
+    canvas->setAutomationView(enabled, parameter, minimum, maximum, defaultValue,
+                              pluginUri, defaultCurve, targetLabel);
 }

@@ -108,6 +108,7 @@ private:
     void refreshArrangementAutomationView();
     void addAutomationPoint();
     void removeAutomationPoint();
+    void setSelectedAutomationCurve(int curve);
     void applyAutomationHistory(quint64 trackId, int parameter, const QString& pluginUri,
                                 const QVector<AutomationPoint>& points);
     void addTimelineMarker(double beat);
@@ -226,6 +227,7 @@ private:
     QListWidget* automationPointsList = nullptr;
     QDoubleSpinBox* automationBeatControl = nullptr;
     QDoubleSpinBox* automationValueControl = nullptr;
+    QComboBox* automationCurveControl = nullptr;
     QLabel* automationValueLabel = nullptr;
     QPushButton* removeAutomationPointButton = nullptr;
     struct MixerTrackMeterWidget

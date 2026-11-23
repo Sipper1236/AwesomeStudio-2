@@ -33,6 +33,8 @@ void normalizeAutomation(QVector<AutomationPoint>& points, float minimum, float 
             continue;
         point.beat = std::clamp(point.beat, 0.0, 16384.0);
         point.value = std::clamp(point.value, minimum, maximum);
+        point.curveToNext = static_cast<AutomationPoint::Curve>(
+            std::clamp(static_cast<int>(point.curveToNext), 0, 4));
         validPoints.push_back(point);
     }
     std::stable_sort(validPoints.begin(), validPoints.end(), [](const AutomationPoint& left,

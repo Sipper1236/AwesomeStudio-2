@@ -93,7 +93,8 @@ float automationValue(const QVector<AutomationPoint>& points, double beat, float
     const double span = next->beat - previous->beat;
     if (span <= 0.0)
         return next->value;
-    const float amount = static_cast<float>((beat - previous->beat) / span);
+    const float amount = static_cast<float>(automationCurveProgress(
+        previous->curveToNext, (beat - previous->beat) / span));
     return previous->value + (next->value - previous->value) * amount;
 }
 }

@@ -79,8 +79,22 @@ float automationValueAt(const QVector<AutomationPoint>& points, double beat, flo
     const double span = next->beat - previous->beat;
     if (span <= 0.0)
         return next->value;
-    const float amount = static_cast<float>((beat - previous->beat) / span);
+    const float amount = static_cast<float>(automationCurveProgress(
+        previous->curveToNext, (beat - previous->beat) / span));
     return previous->value + (next->value - previous->value) * amount;
+}
+
+QString automationCurveName(AutomationPoint::Curve curve)
+{
+    switch (curve)
+    {
+        case AutomationPoint::Curve::Smooth: return QObject::tr("Smooth");
+        case AutomationPoint::Curve::EaseIn: return QObject::tr("Ease In");
+        case AutomationPoint::Curve::EaseOut: return QObject::tr("Ease Out");
+        case AutomationPoint::Curve::Hold: return QObject::tr("Hold");
+        case AutomationPoint::Curve::Linear:
+        default: return QObject::tr("Linear");
+    }
 }
 
 constexpr int pluginAutomationTargetBase = 2;
@@ -589,7 +603,8 @@ bool sameAutomationPoints(const QVector<AutomationPoint>& left, const QVector<Au
     for (qsizetype index = 0; index < left.size(); ++index)
     {
         if (std::abs(left[index].beat - right[index].beat) > 1.0e-9 ||
-            std::abs(left[index].value - right[index].value) > 1.0e-6f)
+            std::abs(left[index].value - right[index].value) > 1.0e-6f ||
+            left[index].curveToNext != right[index].curveToNext)
             return false;
     }
     return true;
@@ -1938,8 +1953,16 @@ void MainWindow::createDocks()
     automationValueControl->setSingleStep(5.0);
     automationValueControl->setSuffix(tr("%"));
     automationValueLabel = new QLabel(tr("Volume (%)"), automationGroup);
+    automationCurveControl = new QComboBox(automationGroup);
+    automationCurveControl->addItem(tr("Linear"), static_cast<int>(AutomationPoint::Curve::Linear));
+    automationCurveControl->addItem(tr("Smooth"), static_cast<int>(AutomationPoint::Curve::Smooth));
+    automationCurveControl->addItem(tr("Ease In"), static_cast<int>(AutomationPoint::Curve::EaseIn));
+    automationCurveControl->addItem(tr("Ease Out"), static_cast<int>(AutomationPoint::Curve::EaseOut));
+    automationCurveControl->addItem(tr("Hold"), static_cast<int>(AutomationPoint::Curve::Hold));
+    automationCurveControl->setToolTip(tr("Shape from this keyframe to the next one"));
     automationForm->addRow(tr("Position"), automationBeatControl);
     automationForm->addRow(automationValueLabel, automationValueControl);
+    automationForm->addRow(tr("To next keyframe"), automationCurveControl);
     automationLayout->addLayout(automationForm);
     auto* automationButtons = new QHBoxLayout;
     auto* addAutomationButton = new QPushButton(tr("Add / replace keyframe"), automationGroup);
@@ -1960,10 +1983,15 @@ void MainWindow::createDocks()
         }
         const QSignalBlocker beatBlocker(automationBeatControl);
         const QSignalBlocker valueBlocker(automationValueControl);
+        const QSignalBlocker curveBlocker(automationCurveControl);
         automationBeatControl->setValue(item->data(Qt::UserRole).toDouble());
         automationValueControl->setValue(item->data(Qt::UserRole + 1).toDouble());
+        automationCurveControl->setCurrentIndex(automationCurveControl->findData(
+            item->data(Qt::UserRole + 2).toInt()));
         removeAutomationPointButton->setEnabled(true);
     });
+    connect(automationCurveControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int curve) { setSelectedAutomationCurve(curve); });
     connect(addAutomationButton, &QPushButton::clicked, this, &MainWindow::addAutomationPoint);
     connect(removeAutomationPointButton, &QPushButton::clicked, this, &MainWindow::removeAutomationPoint);
 
@@ -4361,32 +4389,48 @@ void MainWindow::refreshAutomationEditor()
     automationValueControl->setDecimals(volume || pan ? 0 : 4);
     automationValueControl->setSuffix(volume || pan ? QStringLiteral("%") : QString());
 
-    const QSignalBlocker listBlocker(automationPointsList);
-    automationPointsList->clear();
-    if (points != nullptr)
+    const double selectedBeat = automationPointsList->currentItem() == nullptr ? -1.0 :
+        automationPointsList->currentItem()->data(Qt::UserRole).toDouble();
+    int restoredRow = -1;
     {
-        for (const AutomationPoint& point : *points)
+        const QSignalBlocker listBlocker(automationPointsList);
+        automationPointsList->clear();
+        if (points != nullptr)
         {
-            auto* item = new QListWidgetItem(automationPointsList);
-            const double displayedValue = volume || pan ? point.value * 100.0 : point.value;
-            const QString valueText = volume ? tr("%1%").arg(displayedValue, 0, 'f', 0) :
-                pan ? displayedValue < -1.0 ? tr("L %1").arg(std::abs(displayedValue), 0, 'f', 0) :
-                    displayedValue > 1.0 ? tr("R %1").arg(displayedValue, 0, 'f', 0) : tr("Center") :
-                    QString::number(displayedValue, 'g', 6);
-            item->setText(tr("Beat %1  ·  %2").arg(point.beat, 0, 'f', 2).arg(valueText));
-            item->setData(Qt::UserRole, point.beat);
-            item->setData(Qt::UserRole + 1, displayedValue);
+            for (const AutomationPoint& point : *points)
+            {
+                auto* item = new QListWidgetItem(automationPointsList);
+                const double displayedValue = volume || pan ? point.value * 100.0 : point.value;
+                const QString valueText = volume ? tr("%1%").arg(displayedValue, 0, 'f', 0) :
+                    pan ? displayedValue < -1.0 ? tr("L %1").arg(std::abs(displayedValue), 0, 'f', 0) :
+                        displayedValue > 1.0 ? tr("R %1").arg(displayedValue, 0, 'f', 0) : tr("Center") :
+                        QString::number(displayedValue, 'g', 6);
+                item->setText(tr("Beat %1  ·  %2  ·  %3")
+                                  .arg(point.beat, 0, 'f', 2).arg(valueText)
+                                  .arg(automationCurveName(point.curveToNext)));
+                item->setData(Qt::UserRole, point.beat);
+                item->setData(Qt::UserRole + 1, displayedValue);
+                item->setData(Qt::UserRole + 2, static_cast<int>(point.curveToNext));
+                if (selectedBeat >= 0.0 && std::abs(point.beat - selectedBeat) < 1.0e-9)
+                    restoredRow = automationPointsList->count() - 1;
+            }
         }
+        if (restoredRow < 0)
+            automationPointsList->setCurrentRow(-1);
     }
+    if (restoredRow >= 0)
+        automationPointsList->setCurrentRow(restoredRow);
     automationBeatControl->setEnabled(track != nullptr);
     automationValueControl->setEnabled(track != nullptr);
+    automationCurveControl->setEnabled(track != nullptr);
     removeAutomationPointButton->setEnabled(false);
     refreshArrangementAutomationView();
 }
 
 void MainWindow::refreshArrangementAutomationView()
 {
-    if (automationLaneParameterControl == nullptr || arrangementEditor == nullptr)
+    if (automationLaneParameterControl == nullptr || automationCurveControl == nullptr ||
+        arrangementEditor == nullptr)
         return;
     const int index = automationLaneParameterControl->currentIndex();
     const int target = automationLaneParameterControl->itemData(index).toInt();
@@ -4403,7 +4447,10 @@ void MainWindow::refreshArrangementAutomationView()
         automationWriteModeControl->setEnabled(mixAutomationTarget);
     arrangementEditor->setAutomationView(automationViewAction != nullptr &&
                                           automationViewAction->isChecked(),
-                                          target, minimum, maximum, defaultValue, pluginUri);
+                                          target, minimum, maximum, defaultValue, pluginUri,
+                                          static_cast<AutomationPoint::Curve>(
+                                              std::clamp(automationCurveControl->currentData().toInt(), 0, 4)),
+                                          automationLaneParameterControl->currentText());
 }
 
 void MainWindow::addAutomationPoint()
@@ -4422,15 +4469,21 @@ void MainWindow::addAutomationPoint()
     const QVector<AutomationPoint>& points = *currentPoints;
     const QVector<AutomationPoint> before = points;
     QVector<AutomationPoint> after = before;
+    const auto curve = static_cast<AutomationPoint::Curve>(
+        std::clamp(automationCurveControl->currentData().toInt(), 0, 4));
     const AutomationPoint point{automationBeatControl->value(),
-                                static_cast<float>(automationValueControl->value() / valueScale)};
+                                static_cast<float>(automationValueControl->value() / valueScale), curve};
     auto position = std::lower_bound(after.begin(), after.end(), point.beat,
         [](const AutomationPoint& current, double beat) { return current.beat < beat; });
     if (position != after.end() && std::abs(position->beat - point.beat) < 1.0e-9)
     {
         if (std::abs(position->value - point.value) < 1.0e-6f)
-            return;
+        {
+            if (position->curveToNext == point.curveToNext)
+                return;
+        }
         position->value = point.value;
+        position->curveToNext = point.curveToNext;
     }
     else
     {
@@ -4465,6 +4518,36 @@ void MainWindow::removeAutomationPoint()
     }), after.end());
     if (after.size() == before.size())
         return;
+    undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after, pluginUri));
+}
+
+void MainWindow::setSelectedAutomationCurve(int curveValue)
+{
+    const QListWidgetItem* item = automationPointsList->currentItem();
+    InstrumentTrack* track = selectedTrack();
+    if (item == nullptr || track == nullptr)
+    {
+        refreshArrangementAutomationView();
+        return;
+    }
+    const int parameter = automationParameterControl->currentData().toInt();
+    const QString pluginUri = automationParameterControl->currentData(Qt::UserRole + 4).toString();
+    const QVector<AutomationPoint>* currentPoints = automationCurve(
+        static_cast<const InstrumentTrack&>(*track), parameter, pluginUri);
+    if (currentPoints == nullptr)
+        return;
+    const double beat = item->data(Qt::UserRole).toDouble();
+    const auto point = std::lower_bound(currentPoints->cbegin(), currentPoints->cend(), beat,
+        [](const AutomationPoint& candidate, double targetBeat) { return candidate.beat < targetBeat; });
+    if (point == currentPoints->cend() || std::abs(point->beat - beat) > 1.0e-9)
+        return;
+    const auto curve = static_cast<AutomationPoint::Curve>(std::clamp(curveValue, 0, 4));
+    if (point->curveToNext == curve)
+        return;
+    const QVector<AutomationPoint> before = *currentPoints;
+    QVector<AutomationPoint> after = before;
+    const qsizetype index = point - currentPoints->cbegin();
+    after[index].curveToNext = curve;
     undoStack.push(new AutomationEditCommand(this, track->id, parameter, before, after, pluginUri));
 }
 

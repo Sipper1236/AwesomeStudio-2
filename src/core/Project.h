@@ -137,7 +137,37 @@ struct AutomationPoint
 {
     double beat = 0.0;
     float value = 0.0f;
+    enum class Curve
+    {
+        Linear,
+        Smooth,
+        EaseIn,
+        EaseOut,
+        Hold
+    } curveToNext = Curve::Linear;
 };
+
+inline double automationCurveProgress(AutomationPoint::Curve curve, double position)
+{
+    const double t = position <= 0.0 ? 0.0 : position >= 1.0 ? 1.0 : position;
+    switch (curve)
+    {
+        case AutomationPoint::Curve::Smooth:
+            return t * t * (3.0 - 2.0 * t);
+        case AutomationPoint::Curve::EaseIn:
+            return t * t;
+        case AutomationPoint::Curve::EaseOut:
+        {
+            const double inverse = 1.0 - t;
+            return 1.0 - inverse * inverse;
+        }
+        case AutomationPoint::Curve::Hold:
+            return t < 1.0 ? 0.0 : 1.0;
+        case AutomationPoint::Curve::Linear:
+        default:
+            return t;
+    }
+}
 
 struct TimelineMarker
 {
