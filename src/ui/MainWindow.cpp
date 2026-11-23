@@ -1796,8 +1796,8 @@ public:
     {
         if (window != nullptr && applied)
         {
-            window->applyClipDuplicateHistory(trackId, clip, insertIndex, false,
-                                              previousTrackId, previousClipId);
+            window->applyClipListHistory(trackId, clip, insertIndex, false,
+                                         previousTrackId, previousClipId);
             applied = false;
         }
     }
@@ -1806,7 +1806,7 @@ public:
     {
         if (window != nullptr)
         {
-            const quint64 appliedId = window->applyClipDuplicateHistory(
+            const quint64 appliedId = window->applyClipListHistory(
                 trackId, clip, insertIndex, true, trackId, clip.id);
             if (appliedId != 0)
             {
@@ -1825,6 +1825,52 @@ private:
     qsizetype insertIndex;
     quint64 previousTrackId;
     quint64 previousClipId;
+    bool applied = false;
+};
+
+class ClipRemoveCommand final : public QUndoCommand
+{
+public:
+    ClipRemoveCommand(MainWindow* window, quint64 trackId, MidiClip clip, qsizetype clipIndex,
+                      quint64 previousTrackId, quint64 previousClipId,
+                      quint64 nextTrackId, quint64 nextClipId)
+        : window(window), trackId(trackId), clip(std::move(clip)), clipIndex(clipIndex),
+          previousTrackId(previousTrackId), previousClipId(previousClipId),
+          nextTrackId(nextTrackId), nextClipId(nextClipId)
+    {
+        setText(QObject::tr("Remove Playlist clip"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr && applied)
+        {
+            const quint64 restoredId = window->applyClipListHistory(
+                trackId, clip, clipIndex, true, previousTrackId, previousClipId);
+            if (restoredId != 0)
+            {
+                clip.id = restoredId;
+                applied = false;
+            }
+        }
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            applied = window->applyClipListHistory(trackId, clip, clipIndex, false,
+                                                   nextTrackId, nextClipId) != 0;
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    MidiClip clip;
+    qsizetype clipIndex;
+    quint64 previousTrackId;
+    quint64 previousClipId;
+    quint64 nextTrackId;
+    quint64 nextClipId;
     bool applied = false;
 };
 
@@ -6344,9 +6390,9 @@ void MainWindow::duplicateClip(quint64 trackId, quint64 clipId)
                              2200);
 }
 
-quint64 MainWindow::applyClipDuplicateHistory(quint64 trackId, const MidiClip& clip,
-                                              qsizetype insertIndex, bool present,
-                                              quint64 selectionTrackId, quint64 selectionClipId)
+quint64 MainWindow::applyClipListHistory(quint64 trackId, const MidiClip& clip,
+                                         qsizetype insertIndex, bool present,
+                                         quint64 selectionTrackId, quint64 selectionClipId)
 {
     InstrumentTrack* track = project.findTrack(trackId);
     if (present && track == nullptr)
@@ -6372,8 +6418,8 @@ quint64 MainWindow::applyClipDuplicateHistory(quint64 trackId, const MidiClip& c
             appliedId = inserted.id;
         }
         track->clips.insert(std::clamp<qsizetype>(insertIndex, 0, track->clips.size()), inserted);
-        selectedTrackId = trackId;
-        selectedClipId = appliedId;
+        selectedTrackId = selectionTrackId;
+        selectedClipId = selectionClipId == clip.id ? appliedId : selectionClipId;
     }
     else
     {
@@ -6413,16 +6459,26 @@ void MainWindow::removeClip(quint64 trackId, quint64 clipId)
     InstrumentTrack* track = project.findTrack(trackId);
     if (track == nullptr)
         return;
-    for (auto it = track->clips.begin(); it != track->clips.end(); ++it)
+    for (qsizetype index = 0; index < track->clips.size(); ++index)
     {
-        if (it->id == clipId)
+        const MidiClip& clip = track->clips[index];
+        if (clip.id == clipId)
         {
-            track->clips.erase(it);
+            const MidiClip removedClip = clip;
+            const quint64 previousTrackId = selectedTrackId;
+            const quint64 previousClipId = selectedClipId;
+            quint64 nextTrackId = selectedTrackId;
+            quint64 nextClipId = selectedClipId;
             if (selectedTrackId == trackId && selectedClipId == clipId)
-                selectedClipId = track->clips.isEmpty() ? 0 : track->clips.first().id;
-            settingsDirty = true;
-            refreshProjectUi();
-            statusBar()->showMessage(tr("Pattern removed"), 1600);
+            {
+                nextClipId = 0;
+                if (track->clips.size() > 1)
+                    nextClipId = track->clips[index == 0 ? 1 : 0].id;
+            }
+            undoStack.push(new ClipRemoveCommand(this, trackId, removedClip, index,
+                previousTrackId, previousClipId, nextTrackId, nextClipId));
+            statusBar()->showMessage(tr("Removed %1 · undo to restore")
+                .arg(removedClip.name.isEmpty() ? tr("clip") : removedClip.name), 2200);
             return;
         }
     }
