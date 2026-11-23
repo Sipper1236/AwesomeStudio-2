@@ -50,6 +50,8 @@ private:
         float secondOscillatorMix = 0.5f;
         int midiPitch = 60;
         int midiChannel = 0;
+        int probabilityPercent = 100;
+        quint64 probabilitySeed = 0;
         bool percussion = false;
         bool secondOscillatorEnabled = false;
     };
@@ -74,6 +76,8 @@ private:
         size_t trackIndex = 0;
         float sourceGain = 1.0f;
         double playbackRate = 1.0;
+        int probabilityPercent = 100;
+        quint64 probabilitySeed = 0;
         bool drumSamplePlayback = false;
         bool drumSampleLoop = false;
         std::shared_ptr<const AudioAsset> source;
@@ -195,6 +199,7 @@ private:
     size_t nextStartIndex = 0;
     size_t nextPitchBendIndex = 0;
     size_t nextAudioStartIndex = 0;
+    quint64 playbackCycle = 0;
     qint64 lastFrame = -1;
     double sampleRate = 48000.0;
     float lowBandCoefficient = 0.0f;

@@ -29,6 +29,7 @@ private:
     void configureDivision(int steps);
     void refreshPads();
     void toggleStep(int row, int column, bool enabled);
+    void setStepProbability(int row, int column, int probabilityPercent);
 
     QSpinBox* barControl = nullptr;
     QComboBox* divisionControl = nullptr;

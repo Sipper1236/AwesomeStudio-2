@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QInputDialog>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -29,6 +30,15 @@ int supportedStepCount(int requested)
     {
         return std::abs(left - requested) < std::abs(right - requested);
     });
+}
+
+bool matchesGridStep(const MidiNote& note, int pitch, double barStart, double barEnd,
+                    double stepLength, int stepsPerBar, int column)
+{
+    const double relativeBeat = note.startBeat - barStart;
+    return note.pitch == pitch && note.startBeat >= barStart && note.startBeat < barEnd &&
+           std::clamp(static_cast<int>(std::floor(relativeBeat / stepLength + 0.5)),
+                      0, stepsPerBar - 1) == column;
 }
 }
 
@@ -59,7 +69,7 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
     for (const int division : supportedStepCounts)
         divisionControl->addItem(QString::number(division), division);
     controls->addWidget(divisionControl);
-    auto* hint = new QLabel(tr("Step edits are written to the selected drum clip · scroll for finer divisions"), this);
+    auto* hint = new QLabel(tr("Right-click a step to set trigger probability · scroll for finer divisions"), this);
     hint->setStyleSheet(QStringLiteral("color: #a8b5c1;"));
     controls->addWidget(hint, 1);
     root->addLayout(controls);
@@ -107,9 +117,37 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
             pad->setCheckable(true);
             pad->setAccessibleName(tr("%1, step %2").arg(tr(drumNames[row])).arg(column + 1));
             pad->setToolTip(tr("%1 · step %2").arg(tr(drumNames[row])).arg(column + 1));
+            pad->setContextMenuPolicy(Qt::CustomContextMenu);
             grid->setCellWidget(row, column, pad);
             connect(pad, &QPushButton::toggled, this,
                     [this, row, column](bool enabled) { toggleStep(row, column, enabled); });
+            connect(pad, &QWidget::customContextMenuRequested, this,
+                    [this, row, column](const QPoint&)
+            {
+                if (!patternAvailable)
+                    return;
+                const double stepLength = quarterNotesPerBar / stepsPerBar;
+                const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
+                const double barEnd = barStart + quarterNotesPerBar;
+                const int pitch = drumPitches[static_cast<size_t>(row)];
+                int currentProbability = 100;
+                for (const MidiNote& note : notes)
+                {
+                    if (matchesGridStep(note, pitch, barStart, barEnd, stepLength,
+                                        stepsPerBar, column))
+                    {
+                        currentProbability = note.probabilityPercent;
+                        break;
+                    }
+                }
+                bool accepted = false;
+                const int probability = QInputDialog::getInt(this, tr("Step probability"),
+                    tr("Trigger chance for %1, step %2 (%)")
+                        .arg(tr(drumNames[row])).arg(column + 1),
+                    currentProbability, 0, 100, 5, &accepted);
+                if (accepted)
+                    setStepProbability(row, column, probability);
+            });
         }
     }
     root->addWidget(grid);
@@ -174,14 +212,14 @@ void StepSequencer::refreshPads()
         {
             const double stepStart = barStart + column * stepLength;
             bool active = false;
+            int probability = 100;
             for (const MidiNote& note : notes)
             {
-                const double relativeBeat = note.startBeat - barStart;
-                if (note.pitch == drumPitches[row] && note.startBeat >= barStart && note.startBeat < barEnd &&
-                    std::clamp(static_cast<int>(std::floor(relativeBeat / stepLength + 0.5)),
-                               0, stepsPerBar - 1) == column)
+                if (matchesGridStep(note, drumPitches[row], barStart, barEnd,
+                                    stepLength, stepsPerBar, column))
                 {
                     active = true;
+                    probability = note.probabilityPercent;
                     break;
                 }
             }
@@ -191,6 +229,13 @@ void StepSequencer::refreshPads()
             const QSignalBlocker blocker(pad);
             pad->setEnabled(patternAvailable && stepStart < clipLengthBeats);
             pad->setChecked(active);
+            pad->setText(active && probability < 100
+                             ? QStringLiteral("%1%").arg(probability)
+                             : QString());
+            pad->setToolTip(active && probability < 100
+                ? tr("%1 · step %2 · %3% trigger chance")
+                    .arg(tr(drumNames[row])).arg(column + 1).arg(probability)
+                : tr("%1 · step %2").arg(tr(drumNames[row])).arg(column + 1));
         }
     }
 }
@@ -210,10 +255,7 @@ void StepSequencer::toggleStep(int row, int column, bool enabled)
     const int pitch = drumPitches[row];
     const auto matchesStep = [pitch, barStart, barEnd, stepLength, column, this](const MidiNote& note)
     {
-        const double relativeBeat = note.startBeat - barStart;
-        return note.pitch == pitch && note.startBeat >= barStart && note.startBeat < barEnd &&
-               std::clamp(static_cast<int>(std::floor(relativeBeat / stepLength + 0.5)),
-                          0, stepsPerBar - 1) == column;
+        return matchesGridStep(note, pitch, barStart, barEnd, stepLength, stepsPerBar, column);
     };
     if (enabled)
     {
@@ -233,6 +275,45 @@ void StepSequencer::toggleStep(int row, int column, bool enabled)
     else
     {
         notes.erase(std::remove_if(notes.begin(), notes.end(), matchesStep), notes.end());
+    }
+    refreshPads();
+    if (notes != before)
+        emit notesEdited(before, notes);
+}
+
+void StepSequencer::setStepProbability(int row, int column, int probabilityPercent)
+{
+    if (!patternAvailable || row < 0 || row >= static_cast<int>(drumPitches.size()) ||
+        column < 0 || column >= stepsPerBar)
+        return;
+    const double stepLength = quarterNotesPerBar / stepsPerBar;
+    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
+    const double barEnd = barStart + quarterNotesPerBar;
+    const double stepStart = barStart + column * stepLength;
+    if (stepStart >= clipLengthBeats)
+        return;
+
+    const QVector<MidiNote> before = notes;
+    const int pitch = drumPitches[static_cast<size_t>(row)];
+    bool found = false;
+    for (MidiNote& note : notes)
+    {
+        if (!matchesGridStep(note, pitch, barStart, barEnd, stepLength, stepsPerBar, column))
+            continue;
+        note.probabilityPercent = std::clamp(probabilityPercent, 0, 100);
+        found = true;
+    }
+    if (!found)
+    {
+        MidiNote note;
+        note.id = nextNoteId++;
+        note.pitch = pitch;
+        note.velocity = 100;
+        note.probabilityPercent = std::clamp(probabilityPercent, 0, 100);
+        note.startBeat = stepStart;
+        note.lengthBeats = std::max(1.0 / 64.0, stepLength);
+        notes.push_back(note);
+        emit previewRequested(pitch);
     }
     refreshPads();
     if (notes != before)

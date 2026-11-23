@@ -47,6 +47,21 @@ float noiseSample(qint64 ageFrames, qint64 startFrame, int midiPitch)
     return static_cast<float>(value & 0x00ffffffu) / 8388607.5f - 1.0f;
 }
 
+bool probabilityPasses(int probabilityPercent, quint64 seed, quint64 cycle)
+{
+    if (probabilityPercent >= 100)
+        return true;
+    if (probabilityPercent <= 0)
+        return false;
+
+    quint64 value = seed ^ (cycle * 0x9e3779b97f4a7c15ULL);
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+    return static_cast<int>(value % 100) < probabilityPercent;
+}
+
 float automationValue(const QVector<AutomationPoint>& points, double beat, float defaultValue)
 {
     if (points.isEmpty())
@@ -164,6 +179,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     nextStartIndex = 0;
     nextPitchBendIndex = 0;
     nextAudioStartIndex = 0;
+    playbackCycle = 0;
     lastFrame = -1;
     if (!project)
         return;
@@ -430,6 +446,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             }
             for (const MidiNote& note : clip.notes)
             {
+                const quint64 probabilitySeed = track.id * 0x9e3779b97f4a7c15ULL ^
+                    clip.id * 0xbf58476d1ce4e5b9ULL ^ note.id * 0x94d049bb133111ebULL;
                 if (track.instrumentType == InstrumentType::DrumRack)
                 {
                     const int pad = drumPadForPitch(note.pitch);
@@ -448,6 +466,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             region.drumSamplePlayback = true;
                             const DrumPadSample& padSample = track.drumSamples[static_cast<size_t>(pad)];
                             region.drumSampleLoop = padSample.loopEnabled;
+                            region.probabilityPercent = note.probabilityPercent;
+                            region.probabilitySeed = probabilitySeed;
                             region.sourceStartFrame = static_cast<qint64>(std::llround(
                                 static_cast<double>(source->frameCount() - 1) *
                                 padSample.startPositionPercent / 100.0));
@@ -505,6 +525,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                                 track.secondOscillatorEnabled;
                 voice.midiPitch = note.pitch;
                 voice.midiChannel = note.channel >= 0 ? note.channel : trackMidiChannel;
+                voice.probabilityPercent = note.probabilityPercent;
+                voice.probabilitySeed = probabilitySeed;
                 voice.percussion = track.instrumentType == InstrumentType::DrumRack;
                 if (voice.percussion)
                 {
@@ -559,6 +581,7 @@ void SynthRenderer::resetTransport()
     nextStartIndex = 0;
     nextPitchBendIndex = 0;
     nextAudioStartIndex = 0;
+    playbackCycle = 0;
     for (std::array<float, 16>& bends : trackPitchBends)
         bends.fill(0.0f);
     lastFrame = -1;
@@ -1103,8 +1126,9 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         return {};
 
     // A backwards frame means the transport restarted or wrapped at the loop boundary.
-    if (projectFrame < lastFrame)
+    if (lastFrame != -1 && projectFrame < lastFrame)
     {
+        ++playbackCycle;
         activeNotes.clear();
         activeAudioRegions.clear();
         resetTrackEqualizers();
@@ -1143,6 +1167,8 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     {
         const size_t index = nextStartIndex++;
         VoiceNote& voice = notes[index];
+        if (!probabilityPasses(voice.probabilityPercent, voice.probabilitySeed, playbackCycle))
+            continue;
         if (voice.trackIndex < trackPitchBends.size())
         {
             const float semitones = trackPitchBends[voice.trackIndex][
@@ -1160,7 +1186,12 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
 
     while (nextAudioStartIndex < audioRegions.size() &&
            audioRegions[nextAudioStartIndex].startFrame <= projectFrame)
-        activeAudioRegions.push_back(nextAudioStartIndex++);
+    {
+        const size_t index = nextAudioStartIndex++;
+        const AudioRegion& region = audioRegions[index];
+        if (probabilityPasses(region.probabilityPercent, region.probabilitySeed, playbackCycle))
+            activeAudioRegions.push_back(index);
+    }
     activeAudioRegions.erase(std::remove_if(activeAudioRegions.begin(), activeAudioRegions.end(),
         [&](size_t index) { return projectFrame >= audioRegions[index].endFrame; }), activeAudioRegions.end());
 
