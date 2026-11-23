@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 36;
+constexpr int currentProjectVersion = 37;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -117,6 +117,19 @@ QJsonArray saveAutomation(const QVector<AutomationPoint>& points)
             {QStringLiteral("beat"), point.beat},
             {QStringLiteral("value"), point.value},
             {QStringLiteral("curve"), static_cast<int>(point.curveToNext)}
+        });
+    }
+    return result;
+}
+
+QJsonArray saveTempoChanges(const QVector<TempoChange>& changes)
+{
+    QJsonArray result;
+    for (const TempoChange& change : changes)
+    {
+        result.push_back(QJsonObject{
+            {QStringLiteral("beat"), change.beat},
+            {QStringLiteral("bpm"), change.bpm}
         });
     }
     return result;
@@ -861,6 +874,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("pitchBendRangeSemitones"), safeProject.pitchBendRangeSemitones},
         {QStringLiteral("masterEffects"), saveEffects(safeProject.masterEffects)},
         {QStringLiteral("markers"), markers},
+        {QStringLiteral("tempoChanges"), saveTempoChanges(safeProject.tempoChanges)},
         {QStringLiteral("buses"), buses},
         {QStringLiteral("tracks"), tracks}
     };
@@ -929,6 +943,35 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     loaded.metronomeEnabled = version >= 5 ? root.value(QStringLiteral("metronomeEnabled")).toBool(false) : false;
     loaded.countInBars = version >= 5 ? root.value(QStringLiteral("countInBars")).toInt(0) : 0;
     loaded.masterGain = static_cast<float>(root.value(QStringLiteral("masterGain")).toDouble(0.8));
+    if (version >= 37)
+    {
+        const QJsonValue tempoValue = root.value(QStringLiteral("tempoChanges"));
+        if (!tempoValue.isArray() || tempoValue.toArray().size() > 1000)
+        {
+            setError(error, QStringLiteral("The project has invalid or excessive tempo changes."));
+            return false;
+        }
+        for (const QJsonValue& changeValue : tempoValue.toArray())
+        {
+            if (!changeValue.isObject())
+            {
+                setError(error, QStringLiteral("The project contains an invalid tempo change."));
+                return false;
+            }
+            const QJsonObject object = changeValue.toObject();
+            const double beat = object.value(QStringLiteral("beat")).toDouble(
+                std::numeric_limits<double>::quiet_NaN());
+            const double bpm = object.value(QStringLiteral("bpm")).toDouble(
+                std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(beat) || beat < 0.0 || beat > 16384.0 ||
+                !std::isfinite(bpm) || bpm < 20.0 || bpm > 300.0)
+            {
+                setError(error, QStringLiteral("The project contains an invalid tempo change."));
+                return false;
+            }
+            loaded.tempoChanges.push_back({beat, bpm});
+        }
+    }
     if (version >= 22)
     {
         const double pitchBendRange = root.value(QStringLiteral("pitchBendRangeSemitones")).toDouble(

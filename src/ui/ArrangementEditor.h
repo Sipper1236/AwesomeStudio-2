@@ -39,6 +39,8 @@ signals:
     void markerRenameRequested(double beat);
     void markerRemoveRequested(double beat);
     void markerSeekRequested(double beat);
+    void tempoChangeRequested(double beat);
+    void tempoRemoveRequested(double beat);
 
 private:
     class Canvas;

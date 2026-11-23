@@ -222,8 +222,7 @@ void AudioEngine::seekToBeat(double beat)
         return;
     const double maximumBeat = std::max(0.0, project->songLengthBeats() - 1.0 / 64.0);
     const double clampedBeat = std::clamp(beat, 0.0, maximumBeat);
-    const double framesPerBeat = outputSampleRate * 60.0 / project->tempoBpm;
-    requestedPositionFrames.store(static_cast<qint64>(std::llround(clampedBeat * framesPerBeat)),
+    requestedPositionFrames.store(project->frameAtBeat(clampedBeat, outputSampleRate),
                                   std::memory_order_relaxed);
     resetPosition.store(false, std::memory_order_release);
     seekPosition.store(true, std::memory_order_release);
@@ -241,10 +240,7 @@ double AudioEngine::positionBeats() const
     if (!project)
         return 0.0;
 
-    const double framesPerBeat = outputSampleRate * 60.0 / project->tempoBpm;
-    return framesPerBeat > 0.0
-        ? static_cast<double>(publishedPositionFrames.load(std::memory_order_acquire)) / framesPerBeat
-        : 0.0;
+    return project->beatAtFrame(publishedPositionFrames.load(std::memory_order_acquire), outputSampleRate);
 }
 
 float AudioEngine::trackPeakLevel(quint64 trackId) const
@@ -991,15 +987,15 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     else if (resetPosition.exchange(false, std::memory_order_acq_rel))
     {
         const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
-            outputSampleRate * 60.0 / project->tempoBpm * 4.0 / project->beatUnit)));
+            outputSampleRate * 60.0 / project->tempoAtBeat(0.0) * 4.0 / project->beatUnit)));
         const qint64 countInFrames = static_cast<qint64>(project->countInBars) *
                                      project->beatsPerBar * beatUnitFrames;
         playbackFrame = -countInFrames;
     }
 
     bool playingState = playing.load(std::memory_order_acquire);
-    const qint64 patternFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
-        project->songLengthBeats() * outputSampleRate * 60.0 / project->tempoBpm)));
+    const qint64 patternFrames = std::max<qint64>(1,
+        project->frameAtBeat(project->songLengthBeats(), outputSampleRate));
     const qint64 releaseTailFrames = static_cast<qint64>(outputSampleRate * 0.08);
     const qint64 clockStart = audioClockFrames.load(std::memory_order_relaxed);
     const auto sampleFormat = outputFormat->sampleFormat();
@@ -1051,8 +1047,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         if (project->loopEnabled && playbackFrame >= 0)
             currentFrame %= patternFrames;
 
-        renderer.setCurrentBeat(static_cast<double>(currentFrame) * project->tempoBpm /
-                                (60.0 * outputSampleRate));
+        renderer.setCurrentBeat(project->beatAtFrame(currentFrame, outputSampleRate));
         renderer.beginMixerFrame();
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;

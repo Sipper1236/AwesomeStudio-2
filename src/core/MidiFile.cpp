@@ -151,7 +151,8 @@ struct ParsedTrack
 
 bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                 ParsedTrack& track, double& tempo, int& beatsPerBar, int& beatUnit,
-                bool& foundTempo, bool& foundTimeSignature, QString* error)
+                bool& foundTempo, bool& foundTimeSignature,
+                QVector<TempoChange>& tempoChanges, QString* error)
 {
     const int end = start + length;
     int position = start;
@@ -220,7 +221,7 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
             {
                 track.name = QString::fromUtf8(payload.constData(), payload.size()).trimmed();
             }
-            else if (type == 0x51 && payload.size() == 3 && !foundTempo)
+            else if (type == 0x51 && payload.size() == 3)
             {
                 const quint32 microseconds =
                     (static_cast<quint32>(static_cast<quint8>(payload[0])) << 16) |
@@ -228,8 +229,19 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                     static_cast<quint32>(static_cast<quint8>(payload[2]));
                 if (microseconds != 0)
                 {
-                    tempo = 60000000.0 / microseconds;
-                    foundTempo = true;
+                    const double bpm = 60000000.0 / microseconds;
+                    const double beat = static_cast<double>(absoluteTick) / ppqn;
+                    if (beat > maximumSongBeats || tempoChanges.size() >= 1000)
+                    {
+                        setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
+                        return false;
+                    }
+                    tempoChanges.push_back({beat, bpm});
+                    if (absoluteTick == 0 && !foundTempo)
+                    {
+                        tempo = bpm;
+                        foundTempo = true;
+                    }
                 }
             }
             else if (type == 0x58 && payload.size() >= 2 && !foundTimeSignature)
@@ -402,7 +414,24 @@ QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
     appendByte(track, 24);
     appendByte(track, 8);
 
-    appendVariableLength(track, static_cast<quint32>(std::max<qint64>(0, songEndTick)));
+    qint64 previousTempoTick = 0;
+    for (const TempoChange& change : project.tempoChanges)
+    {
+        const qint64 tempoTick = std::max<qint64>(previousTempoTick,
+            std::llround(change.beat * exportPpqn));
+        const quint32 tempoMicroseconds = static_cast<quint32>(std::clamp(
+            std::llround(60000000.0 / change.bpm), 1LL, 0xffffffLL));
+        appendVariableLength(track, static_cast<quint32>(tempoTick - previousTempoTick));
+        appendByte(track, 0xff);
+        appendByte(track, 0x51);
+        appendByte(track, 3);
+        appendByte(track, static_cast<quint8>((tempoMicroseconds >> 16) & 0xff));
+        appendByte(track, static_cast<quint8>((tempoMicroseconds >> 8) & 0xff));
+        appendByte(track, static_cast<quint8>(tempoMicroseconds & 0xff));
+        previousTempoTick = tempoTick;
+    }
+
+    appendVariableLength(track, static_cast<quint32>(std::max<qint64>(0, songEndTick - previousTempoTick)));
     appendMeta(track, 0x2f, {});
     return track;
 }
@@ -535,6 +564,8 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     int beatUnit = 4;
     bool foundTempo = false;
     bool foundTimeSignature = false;
+    QVector<TempoChange> tempoChanges;
+    tempoChanges.reserve(32);
     for (quint16 index = 0; index < trackCount; ++index)
     {
         if (!validChunk(bytes, offset, "MTrk"))
@@ -551,7 +582,8 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
         }
         ParsedTrack track;
         if (!parseTrack(bytes, offset + 8, static_cast<int>(length), ppqn, track,
-                        tempo, beatsPerBar, beatUnit, foundTempo, foundTimeSignature, error))
+                        tempo, beatsPerBar, beatUnit, foundTempo, foundTimeSignature,
+                        tempoChanges, error))
             return false;
         parsedTracks.push_back(std::move(track));
         offset = static_cast<int>(trackEnd);
@@ -561,6 +593,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     loaded.tracks.clear();
     loaded.title = QFileInfo(path).completeBaseName();
     loaded.tempoBpm = tempo;
+    loaded.tempoChanges = tempoChanges;
     loaded.beatsPerBar = beatsPerBar;
     loaded.beatUnit = beatUnit;
     loaded.loopEnabled = false;
@@ -639,7 +672,10 @@ bool MidiFile::save(const QString& path, const ProjectData& project, QString* er
 {
     ProjectData safeProject = project;
     safeProject.normalize();
-    const qint64 songEndTick = std::llround(safeProject.songLengthBeats() * exportPpqn);
+    const double tempoMapEndBeat = safeProject.tempoChanges.isEmpty() ? 0.0 :
+        safeProject.tempoChanges.back().beat;
+    const qint64 songEndTick = std::llround(
+        std::max(safeProject.songLengthBeats(), tempoMapEndBeat) * exportPpqn);
 
     QByteArray file;
     file.append("MThd", 4);

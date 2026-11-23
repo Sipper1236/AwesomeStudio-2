@@ -127,6 +127,8 @@ protected:
                                        quarterNotesPerBar * 16.0);
         for (const TimelineMarker& marker : project.markers)
             visibleBeats = std::max(visibleBeats, marker.beat + quarterNotesPerBar * 2.0);
+        for (const TempoChange& change : project.tempoChanges)
+            visibleBeats = std::max(visibleBeats, change.beat + quarterNotesPerBar * 2.0);
         const int gridWidth = static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
         painter.fillRect(QRect(trackHeaderWidth, 0, gridWidth, rulerHeight), QColor(QStringLiteral("#202630")));
         painter.fillRect(QRect(0, 0, trackHeaderWidth, rulerHeight), QColor(QStringLiteral("#252d37")));
@@ -254,18 +256,24 @@ protected:
                         const QRectF waveBounds = bounds.adjusted(6, 27, -6, -6);
                         const int waveLeft = static_cast<int>(waveBounds.left());
                         const int waveRight = static_cast<int>(waveBounds.right());
-                        const double framesPerPixel = clip.lengthBeats * 60.0 / project.tempoBpm *
-                            clip.audioSource->sampleRate / std::max(1.0, waveBounds.width());
                         const qint64 sourceFrames = clip.audioSource->frameCount();
+                        const double clipStartSeconds = project.secondsAtBeat(clip.startBeat);
+                        const double beatsPerPixel = clip.lengthBeats / std::max(1.0, waveBounds.width());
                         const int centerY = static_cast<int>(waveBounds.center().y());
                         const int amplitude = std::max(2, static_cast<int>(waveBounds.height() * 0.48));
                         painter.setPen(QPen(QColor(QStringLiteral("#16323a")), 1));
                         for (int x = waveLeft; x <= waveRight; ++x)
                         {
-                            const qint64 firstFrame = clip.audioStartFrame + static_cast<qint64>(
-                                std::floor((x - waveLeft) * framesPerPixel));
-                            const qint64 lastFrame = std::min(sourceFrames, firstFrame +
-                                std::max<qint64>(1, static_cast<qint64>(std::ceil(framesPerPixel))));
+                            const double firstBeat = clip.startBeat + (x - waveLeft) * beatsPerPixel;
+                            const double nextBeat = clip.startBeat + (x - waveLeft + 1) * beatsPerPixel;
+                            const qint64 firstFrame = clip.audioStartFrame + static_cast<qint64>(std::floor(
+                                (project.secondsAtBeat(firstBeat) - clipStartSeconds) *
+                                clip.audioSource->sampleRate));
+                            const qint64 nextFrame = clip.audioStartFrame + static_cast<qint64>(std::ceil(
+                                (project.secondsAtBeat(nextBeat) - clipStartSeconds) *
+                                clip.audioSource->sampleRate));
+                            const qint64 lastFrame = std::min(sourceFrames,
+                                std::max(firstFrame + 1, nextFrame));
                             float peak = 0.0f;
                             if (firstFrame < lastFrame)
                             {
@@ -356,6 +364,23 @@ protected:
             painter.drawText(labelRect.adjusted(5, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft, marker.name);
         }
 
+        const QFont tempoFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold);
+        const QFontMetrics tempoMetrics(tempoFont);
+        for (const TempoChange& change : project.tempoChanges)
+        {
+            const int x = trackHeaderWidth + static_cast<int>(std::round(change.beat * pixelsPerBeat));
+            const QString label = tr("%1 BPM").arg(change.bpm, 0, 'f', 1);
+            const int labelWidth = tempoMetrics.horizontalAdvance(label) + 10;
+            const QRect labelRect(x + 5, 5, labelWidth, rulerHeight - 10);
+            painter.setPen(QPen(QColor(QStringLiteral("#e4b966")), 1));
+            painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * rowHeight);
+            painter.setBrush(QColor(QStringLiteral("#514329")));
+            painter.drawRoundedRect(labelRect, 3, 3);
+            painter.setPen(QColor(QStringLiteral("#fff2d4")));
+            painter.setFont(tempoFont);
+            painter.drawText(labelRect.adjusted(4, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft, label);
+        }
+
         if (playheadBeat >= 0.0 && playheadBeat <= visibleBeats)
         {
             const int x = trackHeaderWidth + static_cast<int>(std::round(playheadBeat * pixelsPerBeat));
@@ -395,6 +420,13 @@ protected:
                 {
                     addAction = menu.addAction(tr("Add marker here…"));
                 }
+                menu.addSeparator();
+                const int tempoIndex = tempoChangeAt(point);
+                const double tempoBeat = tempoIndex >= 0 ? project.tempoChanges[tempoIndex].beat : beat;
+                QAction* tempoAction = menu.addAction(tempoIndex >= 0
+                    ? tr("Change tempo here…") : tr("Add tempo change here…"));
+                QAction* removeTempoAction = tempoIndex >= 0
+                    ? menu.addAction(tr("Remove tempo change")) : nullptr;
                 QAction* chosen = menu.exec(event->globalPosition().toPoint());
                 if (chosen == addAction)
                     emit owner->markerAddRequested(beat);
@@ -402,6 +434,10 @@ protected:
                     emit owner->markerRenameRequested(markerBeat);
                 else if (chosen == removeAction)
                     emit owner->markerRemoveRequested(markerBeat);
+                else if (chosen == tempoAction)
+                    emit owner->tempoChangeRequested(tempoBeat);
+                else if (chosen == removeTempoAction)
+                    emit owner->tempoRemoveRequested(tempoBeat);
                 return;
             }
         }
@@ -632,19 +668,25 @@ protected:
                 double maximumDelta = initialClipLength - 0.25;
                 if (originalClip->audioSource != nullptr && originalClip->audioSource->sampleRate > 0)
                 {
-                    const double framesPerBeat = originalClip->audioSource->sampleRate * 60.0 /
-                                                 project.tempoBpm;
+                    const double initialStartSeconds = project.secondsAtBeat(initialClipStart);
+                    const double minimumStartBeat = project.beatAtSeconds(initialStartSeconds -
+                        static_cast<double>(initialAudioStartFrame) /
+                        originalClip->audioSource->sampleRate);
                     minimumDelta = std::max(minimumDelta,
-                        -initialAudioStartFrame / std::max(1.0, framesPerBeat));
+                        minimumStartBeat - initialClipStart);
                     const qint64 maximumStartFrame = originalClip->audioSource->frameCount() - 1;
+                    const double maximumStartBeat = project.beatAtSeconds(initialStartSeconds +
+                        static_cast<double>(maximumStartFrame - initialAudioStartFrame) /
+                        originalClip->audioSource->sampleRate);
                     maximumDelta = std::min(maximumDelta,
-                        static_cast<double>(maximumStartFrame - initialAudioStartFrame) / framesPerBeat);
+                        maximumStartBeat - initialClipStart);
                     maximumDelta = std::min(maximumDelta, 16384.0 - initialClipStart);
                     const double delta = std::clamp(snappedDelta, minimumDelta, maximumDelta);
                     newStartBeat = initialClipStart + delta;
                     newLengthBeats = initialClipLength - delta;
                     newAudioStartFrame = std::max<qint64>(0, initialAudioStartFrame +
-                        static_cast<qint64>(std::llround(delta * framesPerBeat)));
+                        static_cast<qint64>(std::llround((project.secondsAtBeat(newStartBeat) -
+                            initialStartSeconds) * originalClip->audioSource->sampleRate)));
                 }
             }
             else
@@ -655,7 +697,9 @@ protected:
                     const double remainingSeconds = static_cast<double>(
                         originalClip->audioSource->frameCount() - initialAudioStartFrame) /
                         originalClip->audioSource->sampleRate;
-                    maximumLength = std::min(maximumLength, remainingSeconds * project.tempoBpm / 60.0);
+                    maximumLength = std::min(maximumLength,
+                        project.beatAtSeconds(project.secondsAtBeat(initialClipStart) + remainingSeconds) -
+                        initialClipStart);
                 }
                 maximumLength = std::max(0.25, maximumLength);
                 newLengthBeats = std::clamp(initialClipLength + snappedDelta, 0.25, maximumLength);
@@ -777,6 +821,22 @@ private:
             const TimelineMarker& marker = project.markers[index];
             const int x = trackHeaderWidth + static_cast<int>(std::round(marker.beat * pixelsPerBeat));
             const QRect bounds(x - 3, 0, metrics.horizontalAdvance(marker.name) + 16, rulerHeight);
+            if (bounds.contains(position))
+                return index;
+        }
+        return -1;
+    }
+
+    int tempoChangeAt(const QPoint& position) const
+    {
+        const QFont font(QStringLiteral("Sans Serif"), 8, QFont::DemiBold);
+        const QFontMetrics metrics(font);
+        for (int index = project.tempoChanges.size() - 1; index >= 0; --index)
+        {
+            const TempoChange& change = project.tempoChanges[index];
+            const int x = trackHeaderWidth + static_cast<int>(std::round(change.beat * pixelsPerBeat));
+            const QString label = tr("%1 BPM").arg(change.bpm, 0, 'f', 1);
+            const QRect bounds(x + 5, 5, metrics.horizontalAdvance(label) + 10, rulerHeight - 10);
             if (bounds.contains(position))
                 return index;
         }
@@ -1064,8 +1124,12 @@ private:
     void updateCanvasSize()
     {
         const double quarterNotesPerBar = project.quarterNotesPerBar();
-        const double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
-                                             quarterNotesPerBar * 16.0);
+        double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
+                                       quarterNotesPerBar * 16.0);
+        for (const TimelineMarker& marker : project.markers)
+            visibleBeats = std::max(visibleBeats, marker.beat + quarterNotesPerBar * 2.0);
+        for (const TempoChange& change : project.tempoChanges)
+            visibleBeats = std::max(visibleBeats, change.beat + quarterNotesPerBar * 2.0);
         const int width = trackHeaderWidth + static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
         const int height = rulerHeight + std::max(1, static_cast<int>(project.tracks.size())) * currentRowHeight();
         setMinimumSize(width, height);

@@ -177,6 +177,14 @@ struct TimelineMarker
     bool operator==(const TimelineMarker& other) const;
 };
 
+struct TempoChange
+{
+    double beat = 0.0;
+    double bpm = 120.0;
+
+    bool operator==(const TempoChange& other) const;
+};
+
 struct MixerSend
 {
     quint64 busId = 0;
@@ -278,12 +286,20 @@ struct ProjectData
     double pitchBendRangeSemitones = 2.0;
     QVector<MixerEffect> masterEffects;
     QVector<TimelineMarker> markers;
+    QVector<TempoChange> tempoChanges;
     QVector<MixerBus> buses;
     QVector<InstrumentTrack> tracks;
 
     double patternLengthBeats() const;
     double quarterNotesPerBar() const;
     double songLengthBeats() const;
+    double tempoAtBeat(double beat) const;
+    double secondsAtBeat(double beat) const;
+    double beatAtSeconds(double seconds) const;
+    qint64 frameAtBeat(double beat, int sampleRate) const;
+    double beatAtFrame(qint64 frame, int sampleRate) const;
+    qint64 framesBetweenBeats(double startBeat, double endBeat, int sampleRate) const;
+    void rebuildTempoCache();
     InstrumentTrack* findTrack(quint64 trackId);
     const InstrumentTrack* findTrack(quint64 trackId) const;
     MidiClip* findClip(quint64 trackId, quint64 clipId);
@@ -293,4 +309,7 @@ struct ProjectData
     quint64 nextClipId() const;
     quint64 nextNoteId() const;
     void normalize();
+
+private:
+    QVector<double> tempoChangeElapsedSeconds;
 };

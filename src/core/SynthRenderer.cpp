@@ -427,21 +427,21 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 clip.audioSource->channelCount > 0 && clip.audioSource->frameCount() > clip.audioStartFrame)
             {
                 AudioRegion region;
-                region.startFrame = static_cast<qint64>(std::llround(clip.startBeat * sampleRate *
-                                                                    60.0 / project->tempoBpm));
+                region.startFrame = project->frameAtBeat(clip.startBeat, static_cast<int>(sampleRate));
                 region.sourceStartFrame = clip.audioStartFrame;
-                region.fadeInFrames = static_cast<qint64>(std::llround(
-                    clip.audioFadeInBeats * sampleRate * 60.0 / project->tempoBpm));
-                region.fadeOutFrames = static_cast<qint64>(std::llround(
-                    clip.audioFadeOutBeats * sampleRate * 60.0 / project->tempoBpm));
+                region.fadeInFrames = project->framesBetweenBeats(
+                    clip.startBeat, clip.startBeat + clip.audioFadeInBeats, static_cast<int>(sampleRate));
+                region.fadeOutFrames = project->framesBetweenBeats(
+                    clip.startBeat + clip.lengthBeats - clip.audioFadeOutBeats,
+                    clip.startBeat + clip.lengthBeats, static_cast<int>(sampleRate));
                 region.fadeInCurve = clip.audioFadeInCurve;
                 region.fadeOutCurve = clip.audioFadeOutCurve;
                 region.fadeInShape = clip.audioFadeInShape;
                 region.fadeOutShape = clip.audioFadeOutShape;
                 region.source = clip.audioSource;
                 region.trackIndex = trackIndex;
-                const qint64 clipDuration = static_cast<qint64>(std::llround(
-                    clip.lengthBeats * sampleRate * 60.0 / project->tempoBpm));
+                const qint64 clipDuration = project->framesBetweenBeats(
+                    clip.startBeat, clip.startBeat + clip.lengthBeats, static_cast<int>(sampleRate));
                 const qint64 sourceFrames = clip.audioSource->frameCount() - clip.audioStartFrame;
                 const qint64 sourceDuration = static_cast<qint64>(std::ceil(
                     static_cast<double>(sourceFrames) * sampleRate / clip.audioSource->sampleRate));
@@ -456,8 +456,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             for (const MidiPitchBend& bend : clip.pitchBends)
             {
                 PitchBendEvent event;
-                event.frame = static_cast<qint64>(std::llround(
-                    (clip.startBeat + bend.beat) * sampleRate * 60.0 / project->tempoBpm));
+                event.frame = project->frameAtBeat(clip.startBeat + bend.beat,
+                                                    static_cast<int>(sampleRate));
                 event.trackIndex = trackIndex;
                 event.channel = std::clamp(bend.channel, 0, 15);
                 event.semitones = (static_cast<float>(std::clamp(bend.value, 0, 16383)) - 8192.0f) /
@@ -480,8 +480,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             source->channelCount > 0 && source->frameCount() > 0)
                         {
                             AudioRegion region;
-                            const qint64 noteStartFrame = static_cast<qint64>(std::llround(
-                                (clip.startBeat + note.startBeat) * sampleRate * 60.0 / project->tempoBpm));
+                            const double noteStartBeat = clip.startBeat + note.startBeat;
                             region.source = source;
                             region.trackIndex = trackIndex;
                             region.drumSamplePlayback = true;
@@ -502,9 +501,6 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                 static_cast<double>(padSample.tuningSemitones) / 12.0);
                             const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
                             region.sourceGain = velocityGain;
-                            const qint64 noteDurationFrames = std::max<qint64>(1,
-                                static_cast<qint64>(std::llround(
-                                    note.lengthBeats * sampleRate * 60.0 / project->tempoBpm)));
                             const int ratchetCount = std::clamp(note.ratchetCount, 1, 8);
                             const qint64 remainingSourceFrames = source->frameCount() - region.sourceStartFrame;
                             const qint64 oneShotDurationFrames = static_cast<qint64>(std::ceil(
@@ -513,11 +509,15 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             for (int hit = 0; hit < ratchetCount; ++hit)
                             {
                                 AudioRegion hitRegion = region;
-                                const qint64 hitStartOffset = noteDurationFrames * hit / ratchetCount;
-                                const qint64 hitEndOffset = noteDurationFrames * (hit + 1) / ratchetCount;
-                                hitRegion.startFrame = noteStartFrame + hitStartOffset;
+                                const qint64 hitStartFrame = project->frameAtBeat(
+                                    noteStartBeat + note.lengthBeats * hit / ratchetCount,
+                                    static_cast<int>(sampleRate));
+                                const qint64 hitEndFrame = project->frameAtBeat(
+                                    noteStartBeat + note.lengthBeats * (hit + 1) / ratchetCount,
+                                    static_cast<int>(sampleRate));
+                                hitRegion.startFrame = hitStartFrame;
                                 const qint64 duration = region.drumSampleLoop
-                                    ? std::max<qint64>(1, hitEndOffset - hitStartOffset)
+                                    ? std::max<qint64>(1, hitEndFrame - hitStartFrame)
                                     : std::max<qint64>(1, oneShotDurationFrames);
                                 if (region.drumSampleLoop)
                                 {
@@ -541,20 +541,17 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 }
 
                 const double startBeat = clip.startBeat + note.startBeat;
-                const qint64 noteStartFrame = static_cast<qint64>(std::llround(
-                    startBeat * sampleRate * 60.0 / project->tempoBpm));
-                const qint64 noteDurationFrames = std::max<qint64>(1,
-                    static_cast<qint64>(std::llround(
-                        note.lengthBeats * sampleRate * 60.0 / project->tempoBpm)));
                 const int ratchetCount = track.instrumentType == InstrumentType::DrumRack
                     ? std::clamp(note.ratchetCount, 1, 8) : 1;
                 for (int hit = 0; hit < ratchetCount; ++hit)
                 {
                     VoiceNote voice;
-                    voice.startFrame = noteStartFrame + noteDurationFrames * hit / ratchetCount;
-                    const qint64 hitEndOffset = noteDurationFrames * (hit + 1) / ratchetCount;
-                    voice.endFrame = voice.startFrame + std::max<qint64>(
-                        1, hitEndOffset - noteDurationFrames * hit / ratchetCount);
+                    voice.startFrame = project->frameAtBeat(
+                        startBeat + note.lengthBeats * hit / ratchetCount,
+                        static_cast<int>(sampleRate));
+                    voice.endFrame = std::max(voice.startFrame + 1, project->frameAtBeat(
+                        startBeat + note.lengthBeats * (hit + 1) / ratchetCount,
+                        static_cast<int>(sampleRate)));
                     voice.attackFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
                         track.attackSeconds * sampleRate)));
                     voice.decayFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
@@ -1158,7 +1155,8 @@ double SynthRenderer::effectTailSeconds() const
     };
     double longestTrackTail = 0.0;
     double renderOverrunSeconds = 0.0;
-    const double songEndFrame = project->songLengthBeats() * sampleRate * 60.0 / project->tempoBpm;
+    const double songEndFrame = project->frameAtBeat(project->songLengthBeats(),
+                                                      static_cast<int>(sampleRate));
     for (const AudioRegion& region : audioRegions)
     {
         if (region.drumSamplePlayback)
@@ -1283,8 +1281,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
             bends.fill(0.0f);
     }
     lastFrame = projectFrame;
-    const double projectBeat = static_cast<double>(projectFrame) * project->tempoBpm /
-                               (60.0 * sampleRate);
+    const double projectBeat = project->beatAtFrame(projectFrame, static_cast<int>(sampleRate));
     setCurrentBeat(projectBeat);
 
     StereoSample sample;
@@ -1466,15 +1463,16 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
                        right * region.sourceGain * mix.rightGain * fadeEnvelope);
     }
 
-    const qint64 beatUnitFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
-        sampleRate * 60.0 / project->tempoBpm * 4.0 / project->beatUnit)));
     const qint64 countInTicks = static_cast<qint64>(project->countInBars) * project->beatsPerBar;
-    const qint64 countInFrames = countInTicks * beatUnitFrames;
-    const qint64 metronomeFrame = projectFrame + countInFrames;
-    if (metronomeFrame >= 0 && (project->metronomeEnabled || projectFrame < 0))
+    const double countInBeatOffset = static_cast<double>(countInTicks) * 4.0 / project->beatUnit;
+    const double metronomeBeat = projectBeat + countInBeatOffset;
+    const qint64 tick = static_cast<qint64>(std::floor(
+        metronomeBeat * project->beatUnit / 4.0 + 1.0e-9));
+    const double clickBeat = static_cast<double>(tick) * 4.0 / project->beatUnit - countInBeatOffset;
+    const qint64 clickStartFrame = project->frameAtBeat(clickBeat, static_cast<int>(sampleRate));
+    const qint64 age = projectFrame - clickStartFrame;
+    if (age >= 0 && (project->metronomeEnabled || projectFrame < 0))
     {
-        const qint64 tick = metronomeFrame / beatUnitFrames;
-        const qint64 age = metronomeFrame % beatUnitFrames;
         const bool downbeat = tick % project->beatsPerBar == 0;
         const qint64 clickLength = static_cast<qint64>(sampleRate * (downbeat ? 0.045 : 0.032));
         if (age < clickLength)

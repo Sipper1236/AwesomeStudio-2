@@ -636,8 +636,11 @@ double audioRegionEndBeat(const ProjectData& project, const MidiClip& clip)
     if (clip.audioSource == nullptr || clip.audioSource->sampleRate <= 0 ||
         clip.audioStartFrame < 0 || clip.audioStartFrame >= clip.audioSource->frameCount())
         return clip.startBeat;
-    const double sourceDurationBeats = static_cast<double>(clip.audioSource->frameCount() - clip.audioStartFrame) /
-                                       clip.audioSource->sampleRate * project.tempoBpm / 60.0;
+    const double sourceEndSeconds = project.secondsAtBeat(clip.startBeat) +
+        static_cast<double>(clip.audioSource->frameCount() - clip.audioStartFrame) /
+        clip.audioSource->sampleRate;
+    const double sourceEndBeat = project.beatAtSeconds(sourceEndSeconds);
+    const double sourceDurationBeats = std::max(0.0, sourceEndBeat - clip.startBeat);
     durationBeats = std::min(durationBeats, sourceDurationBeats);
     return clip.startBeat + std::max(0.0, durationBeats);
 }
@@ -844,6 +847,38 @@ private:
     QPointer<MainWindow> window;
     QVector<TimelineMarker> before;
     QVector<TimelineMarker> after;
+};
+
+class TempoMapEditCommand final : public QUndoCommand
+{
+public:
+    TempoMapEditCommand(MainWindow* window, double beforeBaseTempo,
+                        QVector<TempoChange> before, double afterBaseTempo,
+                        QVector<TempoChange> after)
+        : window(window), beforeBaseTempo(beforeBaseTempo), before(std::move(before)),
+          afterBaseTempo(afterBaseTempo), after(std::move(after))
+    {
+        setText(QObject::tr("Edit tempo map"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyTempoHistory(beforeBaseTempo, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyTempoHistory(afterBaseTempo, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    double beforeBaseTempo;
+    QVector<TempoChange> before;
+    double afterBaseTempo;
+    QVector<TempoChange> after;
 };
 
 class AudioFadeEditCommand final : public QUndoCommand
@@ -1071,6 +1106,10 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             this, &MainWindow::removeTimelineMarker);
     connect(arrangementEditor, &ArrangementEditor::markerSeekRequested,
             this, &MainWindow::seekToTimelineMarker);
+    connect(arrangementEditor, &ArrangementEditor::tempoChangeRequested,
+            this, &MainWindow::setTimelineTempo);
+    connect(arrangementEditor, &ArrangementEditor::tempoRemoveRequested,
+            this, &MainWindow::removeTimelineTempo);
     connect(arrangementEditor, &ArrangementEditor::trackSelected, this,
             [this](quint64 trackId) { selectTrack(trackId); });
     connect(&undoStack, &QUndoStack::cleanChanged, this, [this] { refreshDirtyState(); });
@@ -1577,12 +1616,14 @@ void MainWindow::createToolBars()
     tempoControl->setDecimals(1);
     tempoControl->setSingleStep(1.0);
     tempoControl->setSuffix(tr(" BPM"));
+    tempoControl->setToolTip(tr("Tempo at the start of the project. Add later tempo changes from the Playlist ruler."));
     tempoControl->setValue(project.tempoBpm);
     tempoControl->setFixedWidth(104);
     transportBar->addWidget(tempoControl);
     connect(tempoControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value)
     {
         project.tempoBpm = value;
+        project.rebuildTempoCache();
         audioEngine.setProject(project);
         settingsDirty = true;
         refreshDirtyState();
@@ -4895,6 +4936,101 @@ void MainWindow::applyMarkerHistory(const QVector<TimelineMarker>& markers)
     refreshDirtyState();
 }
 
+void MainWindow::setTimelineTempo(double beat)
+{
+    if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
+    {
+        statusBar()->showMessage(tr("Stop recording before editing the tempo map"), 3000);
+        return;
+    }
+
+    beat = std::clamp(beat, 0.0, 16384.0);
+    double targetBeat = std::round(beat * 4.0) / 4.0;
+    for (const TempoChange& change : project.tempoChanges)
+    {
+        if (std::abs(change.beat - beat) < 1.0e-6)
+        {
+            targetBeat = change.beat;
+            break;
+        }
+    }
+    targetBeat = std::clamp(targetBeat, 0.0, 16384.0);
+    const double currentTempo = project.tempoAtBeat(targetBeat);
+    bool accepted = false;
+    const double bpm = QInputDialog::getDouble(this, tr("Set arrangement tempo"),
+        tr("Tempo at beat %1").arg(targetBeat + 1.0, 0, 'f', 2), currentTempo,
+        20.0, 300.0, 1, &accepted);
+    if (!accepted || std::abs(bpm - currentTempo) < 1.0e-9)
+        return;
+
+    const double beforeBaseTempo = project.tempoBpm;
+    const QVector<TempoChange> before = project.tempoChanges;
+    double afterBaseTempo = beforeBaseTempo;
+    QVector<TempoChange> after = before;
+    if (targetBeat < 1.0e-9)
+    {
+        afterBaseTempo = bpm;
+    }
+    else
+    {
+        auto position = std::lower_bound(after.begin(), after.end(), targetBeat,
+            [](const TempoChange& change, double value) { return change.beat < value; });
+        if (position != after.end() && std::abs(position->beat - targetBeat) < 1.0e-6)
+            position->bpm = bpm;
+        else
+        {
+            if (after.size() >= 1000)
+            {
+                statusBar()->showMessage(tr("This project has reached the 1,000-tempo-change limit"), 3500);
+                return;
+            }
+            after.insert(position, {targetBeat, bpm});
+        }
+    }
+    undoStack.push(new TempoMapEditCommand(this, beforeBaseTempo, before,
+                                           afterBaseTempo, after));
+    statusBar()->showMessage(tr("Tempo set to %1 BPM at beat %2")
+                                 .arg(bpm, 0, 'f', 1).arg(targetBeat + 1.0, 0, 'f', 2), 2500);
+}
+
+void MainWindow::removeTimelineTempo(double beat)
+{
+    if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
+    {
+        statusBar()->showMessage(tr("Stop recording before editing the tempo map"), 3000);
+        return;
+    }
+    for (qsizetype index = 0; index < project.tempoChanges.size(); ++index)
+    {
+        if (std::abs(project.tempoChanges[index].beat - beat) >= 1.0e-6)
+            continue;
+        const double beforeBaseTempo = project.tempoBpm;
+        const QVector<TempoChange> before = project.tempoChanges;
+        QVector<TempoChange> after = before;
+        after.removeAt(index);
+        undoStack.push(new TempoMapEditCommand(this, beforeBaseTempo, before,
+                                               beforeBaseTempo, after));
+        statusBar()->showMessage(tr("Removed tempo change; tempo returns to %1 BPM")
+                                     .arg(project.tempoAtBeat(beat), 0, 'f', 1), 2500);
+        return;
+    }
+}
+
+void MainWindow::applyTempoHistory(double baseTempo, const QVector<TempoChange>& changes)
+{
+    project.tempoBpm = baseTempo;
+    project.tempoChanges = changes;
+    project.normalize();
+    audioEngine.setProject(project);
+    arrangementEditor->setProject(project);
+    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+    {
+        const QSignalBlocker blocker(tempoControl);
+        tempoControl->setValue(project.tempoBpm);
+    }
+    refreshDirtyState();
+}
+
 bool MainWindow::maybeSave()
 {
     finishAutomationWrite();
@@ -5415,8 +5551,9 @@ void MainWindow::importAudio()
     clip.name = QFileInfo(path).fileName();
     clip.audioSourcePath = asset->path;
     clip.audioSource = std::move(asset);
-    const double durationBeats = static_cast<double>(clip.audioSource->frameCount()) /
-                                 clip.audioSource->sampleRate * project.tempoBpm / 60.0;
+    const double durationSeconds = static_cast<double>(clip.audioSource->frameCount()) /
+                                   clip.audioSource->sampleRate;
+    const double durationBeats = project.beatAtSeconds(durationSeconds);
     clip.lengthBeats = std::clamp(durationBeats, 0.25, 16384.0);
     track.clips.push_back(std::move(clip));
     project.tracks.push_back(std::move(track));
@@ -6449,9 +6586,10 @@ void MainWindow::finishAudioRecording(bool keepTake)
     clip.id = project.nextClipId();
     clip.name = takeName;
     clip.startBeat = recordingStartBeat;
-    const double durationBeats = static_cast<double>(asset->frameCount()) / asset->sampleRate *
-                                 project.tempoBpm / 60.0;
-    clip.lengthBeats = std::max(0.25, durationBeats);
+    const double durationSeconds = static_cast<double>(asset->frameCount()) / asset->sampleRate;
+    const double endBeat = project.beatAtSeconds(project.secondsAtBeat(recordingStartBeat) +
+                                                  durationSeconds);
+    clip.lengthBeats = std::max(0.25, endBeat - recordingStartBeat);
     clip.audioSourcePath = asset->path;
     clip.audioSource = asset;
     track.clips.push_back(std::move(clip));
@@ -6677,9 +6815,10 @@ double MainWindow::currentMidiRecordingBeat()
 {
     if (midiRecordClock.isValid())
     {
-        const double elapsedBeats = static_cast<double>(midiRecordClock.nsecsElapsed()) *
-                                    project.tempoBpm / 60000000000.0;
-        midiLastBeat = std::max(midiLastBeat, midiRecordStartBeat + elapsedBeats);
+        const double elapsedSeconds = static_cast<double>(midiRecordClock.nsecsElapsed()) / 1.0e9;
+        const double elapsedBeat = project.beatAtSeconds(
+            project.secondsAtBeat(midiRecordStartBeat) + elapsedSeconds);
+        midiLastBeat = std::max(midiLastBeat, elapsedBeat);
     }
     return midiLastBeat;
 }

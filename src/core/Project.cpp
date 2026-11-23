@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -154,6 +155,11 @@ bool TimelineMarker::operator==(const TimelineMarker& other) const
     return std::abs(beat - other.beat) < 1.0e-9 && name == other.name;
 }
 
+bool TempoChange::operator==(const TempoChange& other) const
+{
+    return std::abs(beat - other.beat) < 1.0e-9 && std::abs(bpm - other.bpm) < 1.0e-9;
+}
+
 double ProjectData::patternLengthBeats() const
 {
     return quarterNotesPerBar() * bars;
@@ -186,6 +192,83 @@ double ProjectData::songLengthBeats() const
             length = std::max(length, clip.startBeat + clip.lengthBeats);
     }
     return length;
+}
+
+double ProjectData::tempoAtBeat(double beat) const
+{
+    const auto next = std::upper_bound(tempoChanges.cbegin(), tempoChanges.cend(), beat,
+        [](double value, const TempoChange& change) { return value < change.beat; });
+    return next == tempoChanges.cbegin() ? tempoBpm : (next - 1)->bpm;
+}
+
+double ProjectData::secondsAtBeat(double beat) const
+{
+    if (!std::isfinite(beat))
+        return 0.0;
+    if (beat <= 0.0)
+        return beat * 60.0 / tempoBpm;
+
+    const auto next = std::lower_bound(tempoChanges.cbegin(), tempoChanges.cend(), beat,
+        [](const TempoChange& change, double value) { return change.beat < value; });
+    if (next == tempoChanges.cbegin())
+        return beat * 60.0 / tempoBpm;
+    const qsizetype index = next - tempoChanges.cbegin() - 1;
+    return tempoChangeElapsedSeconds[index] + (beat - tempoChanges[index].beat) *
+           60.0 / tempoChanges[index].bpm;
+}
+
+double ProjectData::beatAtSeconds(double seconds) const
+{
+    if (!std::isfinite(seconds))
+        return 0.0;
+    if (seconds <= 0.0)
+        return seconds * tempoBpm / 60.0;
+
+    const auto next = std::upper_bound(tempoChangeElapsedSeconds.cbegin(),
+                                       tempoChangeElapsedSeconds.cend(), seconds);
+    if (next == tempoChangeElapsedSeconds.cbegin())
+        return seconds * tempoBpm / 60.0;
+    const qsizetype index = next - tempoChangeElapsedSeconds.cbegin() - 1;
+    return tempoChanges[index].beat + (seconds - tempoChangeElapsedSeconds[index]) *
+           tempoChanges[index].bpm / 60.0;
+}
+
+qint64 ProjectData::frameAtBeat(double beat, int sampleRate) const
+{
+    const double frames = secondsAtBeat(beat) * std::max(1, sampleRate);
+    if (!std::isfinite(frames) || frames >= static_cast<double>(std::numeric_limits<qint64>::max()))
+        return std::numeric_limits<qint64>::max();
+    if (frames <= static_cast<double>(std::numeric_limits<qint64>::min()))
+        return std::numeric_limits<qint64>::min();
+    return static_cast<qint64>(std::llround(frames));
+}
+
+double ProjectData::beatAtFrame(qint64 frame, int sampleRate) const
+{
+    return beatAtSeconds(static_cast<double>(frame) / std::max(1, sampleRate));
+}
+
+qint64 ProjectData::framesBetweenBeats(double startBeat, double endBeat, int sampleRate) const
+{
+    const qint64 startFrame = frameAtBeat(startBeat, sampleRate);
+    const qint64 endFrame = frameAtBeat(endBeat, sampleRate);
+    return endFrame >= startFrame ? endFrame - startFrame : 0;
+}
+
+void ProjectData::rebuildTempoCache()
+{
+    tempoChangeElapsedSeconds.resize(tempoChanges.size());
+    double elapsedSeconds = 0.0;
+    double cursorBeat = 0.0;
+    double activeTempo = tempoBpm;
+    for (qsizetype index = 0; index < tempoChanges.size(); ++index)
+    {
+        const TempoChange& change = tempoChanges[index];
+        elapsedSeconds += (change.beat - cursorBeat) * 60.0 / activeTempo;
+        tempoChangeElapsedSeconds[index] = elapsedSeconds;
+        cursorBeat = change.beat;
+        activeTempo = change.bpm;
+    }
 }
 
 InstrumentTrack* ProjectData::findTrack(quint64 trackId)
@@ -263,6 +346,34 @@ void ProjectData::normalize()
         beatUnit = 4;
     bars = std::clamp(bars, 1, 64);
     countInBars = std::clamp(countInBars, 0, 4);
+    if (tempoChanges.size() > 1000)
+        tempoChanges.resize(1000);
+    QVector<TempoChange> validTempoChanges;
+    validTempoChanges.reserve(tempoChanges.size());
+    for (TempoChange change : tempoChanges)
+    {
+        if (!std::isfinite(change.beat) || !std::isfinite(change.bpm))
+            continue;
+        change.beat = std::clamp(change.beat, 0.0, 16384.0);
+        change.bpm = std::clamp(change.bpm, 20.0, 300.0);
+        validTempoChanges.push_back(change);
+    }
+    std::stable_sort(validTempoChanges.begin(), validTempoChanges.end(),
+        [](const TempoChange& left, const TempoChange& right) { return left.beat < right.beat; });
+    tempoChanges.clear();
+    for (const TempoChange& change : validTempoChanges)
+    {
+        if (change.beat < 1.0e-9)
+        {
+            tempoBpm = change.bpm;
+            continue;
+        }
+        if (!tempoChanges.isEmpty() && std::abs(tempoChanges.back().beat - change.beat) < 1.0e-9)
+            tempoChanges.back() = change;
+        else
+            tempoChanges.push_back(change);
+    }
+    rebuildTempoCache();
     masterGain = std::clamp(masterGain, 0.0f, 1.0f);
     if (!std::isfinite(pitchBendRangeSemitones))
         pitchBendRangeSemitones = 2.0;

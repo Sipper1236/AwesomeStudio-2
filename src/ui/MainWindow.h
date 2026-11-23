@@ -41,6 +41,7 @@ class MainWindow final : public QMainWindow
     friend class PitchBendRangeCommand;
     friend class AutomationEditCommand;
     friend class MarkerEditCommand;
+    friend class TempoMapEditCommand;
     friend class AudioFadeEditCommand;
 
 public:
@@ -116,6 +117,9 @@ private:
     void removeTimelineMarker(double beat);
     void seekToTimelineMarker(double beat);
     void applyMarkerHistory(const QVector<TimelineMarker>& markers);
+    void setTimelineTempo(double beat);
+    void removeTimelineTempo(double beat);
+    void applyTempoHistory(double baseTempo, const QVector<TempoChange>& changes);
     void beginAutomationWrite(quint64 trackId, int parameter, float value,
                               const QString& pluginUri = QString(),
                               qsizetype effectIndex = -1, qsizetype parameterIndex = -1,

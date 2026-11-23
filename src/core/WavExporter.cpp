@@ -158,9 +158,8 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     qint64 frameCount = 0;
     if (customRange)
     {
-        const double framesPerBeat = sampleRate * 60.0 / safeProject.tempoBpm;
-        rangeStartFrame = static_cast<qint64>(std::llround(startBeat * framesPerBeat));
-        const qint64 rangeEndFrame = static_cast<qint64>(std::llround(endBeat * framesPerBeat));
+        rangeStartFrame = safeProject.frameAtBeat(startBeat, sampleRate);
+        const qint64 rangeEndFrame = safeProject.frameAtBeat(endBeat, sampleRate);
         frameCount = rangeEndFrame - rangeStartFrame;
         if (frameCount <= 0)
         {
@@ -171,10 +170,10 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     else
     {
         const qint64 beatUnitFrames = static_cast<qint64>(std::llround(
-            sampleRate * 60.0 / safeProject.tempoBpm * 4.0 / safeProject.beatUnit));
+            sampleRate * 60.0 / safeProject.tempoAtBeat(0.0) * 4.0 / safeProject.beatUnit));
         countInFrames = static_cast<qint64>(safeProject.countInBars) *
                         safeProject.beatsPerBar * beatUnitFrames;
-        const double durationSeconds = safeProject.songLengthBeats() * 60.0 / safeProject.tempoBpm +
+        const double durationSeconds = safeProject.secondsAtBeat(safeProject.songLengthBeats()) +
                                        renderer.effectTailSeconds() + 0.1;
         frameCount = countInFrames + static_cast<qint64>(std::ceil(durationSeconds * sampleRate));
     }
