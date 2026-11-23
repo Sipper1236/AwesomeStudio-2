@@ -36,7 +36,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Arm Write automation, choose Volume or Pan and Touch or Latch, then move the matching Mixer control during playback. Touch commits when you release the control; Latch keeps writing its last value until playback stops or Write is disarmed. Each pass is one undoable edit and is audible while recording.
 - Import Standard MIDI Files (formats 0 and 1 with PPQN timing), and export arrangements as multitrack MIDI or stereo 16-bit WAV.
 - Use **File → Export track stems…** to render every track to a separate stereo WAV in a folder. Each stem includes that track's EQ and level/pan automation plus the master level; mute and solo state do not omit tracks.
-- Select any track and use **Track Equalizer** in the Browser to adjust low (below 120 Hz), mid (120 Hz–6 kHz), and high (above 6 kHz) bands from −18 to +18 dB. The EQ runs in live playback, full WAV exports, and track stems.
+- Select any track and use **Track Equalizer** in the Browser to adjust low (below 120 Hz), mid (120 Hz–6 kHz), and high (above 6 kHz) bands from −18 to +18 dB. The EQ runs in realtime arrangement playback, full WAV exports, and track stems.
 - Right-click the Playlist ruler to add a named arrangement marker; right-click a marker to rename or remove it. Left-click the ruler or a marker to seek and start playback. Marker edits can be undone and are saved in the project.
 - Save and reopen `.aws` projects.
 - Use the editor without an audio device; connect an output device to audition notes.
