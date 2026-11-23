@@ -1916,6 +1916,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                 finishAudioRecording(false);
                 statusBar()->showMessage(tr("Playback stopped before recording could start."), 4000);
             }
+            else if (recordingPunchEnabled && beat >= recordingPunchOutBeat)
+            {
+                finishAudioRecording(false);
+                statusBar()->showMessage(tr("Punch-out passed before recording could start."), 4000);
+            }
             else if (beat >= 0.0 && !startPendingAudioRecording(beat))
             {
                 finishAudioRecording(false);
@@ -1927,6 +1932,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             if (audioRecorder->maximumReached())
                 finishAudioRecording(true);
             else if (!inputIssue.isEmpty())
+                finishAudioRecording(true);
+            else if (recordingPunchEnabled && beat >= recordingPunchOutBeat)
                 finishAudioRecording(true);
             else if (recordingTransportActive && !audioEngine.isPlaying())
                 finishAudioRecording(true);
@@ -2433,6 +2440,34 @@ void MainWindow::createToolBars()
     audioInputControl->setMinimumWidth(190);
     audioInputControl->setToolTip(tr("Audio device used for new recordings"));
     recordingBar->addWidget(audioInputControl);
+    recordingBar->addSeparator();
+    punchRecordAction = new QAction(tr("Punch"), this);
+    punchRecordAction->setCheckable(true);
+    punchRecordAction->setToolTip(tr("Record only between the punch-in and punch-out beats"));
+    recordingBar->addAction(punchRecordAction);
+    recordingBar->addWidget(new QLabel(tr("IN"), recordingBar));
+    punchInControl = new QDoubleSpinBox(recordingBar);
+    punchInControl->setRange(0.0, 16384.0);
+    punchInControl->setDecimals(2);
+    punchInControl->setSingleStep(0.25);
+    punchInControl->setSuffix(tr(" beats"));
+    punchInControl->setValue(0.0);
+    punchInControl->setToolTip(tr("Punch-in position in quarter-note beats"));
+    recordingBar->addWidget(punchInControl);
+    recordingBar->addWidget(new QLabel(tr("OUT"), recordingBar));
+    punchOutControl = new QDoubleSpinBox(recordingBar);
+    punchOutControl->setRange(0.0, 16384.0);
+    punchOutControl->setDecimals(2);
+    punchOutControl->setSingleStep(0.25);
+    punchOutControl->setSuffix(tr(" beats"));
+    punchOutControl->setValue(16.0);
+    punchOutControl->setToolTip(tr("Punch-out position in quarter-note beats"));
+    recordingBar->addWidget(punchOutControl);
+    connect(punchRecordAction, &QAction::toggled, this, &MainWindow::refreshPunchRangeUi);
+    connect(punchInControl, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this, &MainWindow::refreshPunchRangeUi);
+    connect(punchOutControl, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this, &MainWindow::refreshPunchRangeUi);
     recordingBar->addSeparator();
     recordingBar->addAction(midiRecordAction);
     recordingBar->addAction(midiMonitorAction);
@@ -3877,6 +3912,7 @@ void MainWindow::refreshProjectUi()
                               clip == nullptr ? 16 : clip->stepsPerBar);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+    refreshPunchRangeUi();
 
     const QSignalBlocker tempoBlocker(tempoControl);
     const QSignalBlocker meterBlocker(timeSignatureControl);
@@ -7733,6 +7769,27 @@ void MainWindow::refreshAudioInputs()
                                    (audioRecorder != nullptr || audioMonitor != nullptr || !devices.isEmpty()));
     recordAction->setEnabled(!midiRecordingActive && !midiRecordingPending &&
                              (audioRecorder || recordingPending || !devices.isEmpty()));
+    refreshPunchRangeUi();
+}
+
+void MainWindow::refreshPunchRangeUi()
+{
+    if (punchRecordAction == nullptr || punchInControl == nullptr || punchOutControl == nullptr ||
+        arrangementEditor == nullptr)
+        return;
+    const double maximumBeat = std::clamp(project.songLengthBeats(), 1.0, 16384.0);
+    {
+        const QSignalBlocker punchInBlocker(punchInControl);
+        const QSignalBlocker punchOutBlocker(punchOutControl);
+        punchInControl->setRange(0.0, maximumBeat);
+        punchOutControl->setRange(0.0, maximumBeat);
+    }
+    const bool idle = !audioRecorder && !recordingPending;
+    punchRecordAction->setEnabled(idle);
+    punchInControl->setEnabled(idle && punchRecordAction->isChecked());
+    punchOutControl->setEnabled(idle && punchRecordAction->isChecked());
+    arrangementEditor->setPunchRange(punchRecordAction->isChecked(),
+                                     punchInControl->value(), punchOutControl->value());
 }
 
 void MainWindow::refreshMidiInputs()
@@ -8044,6 +8101,18 @@ void MainWindow::startAudioRecording()
 {
     if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending)
         return;
+    const bool punchEnabled = punchRecordAction != nullptr && punchRecordAction->isChecked();
+    const double punchInBeat = punchInControl == nullptr ? 0.0 : punchInControl->value();
+    const double punchOutBeat = punchOutControl == nullptr ? 16.0 : punchOutControl->value();
+    if (punchEnabled && (punchOutBeat - punchInBeat < 1.0 ||
+                         punchOutBeat > project.songLengthBeats()))
+    {
+        QMessageBox::warning(this, tr("Invalid punch range"),
+            tr("Set punch-out at least one beat after punch-in and within the current song length."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
     if (project.tracks.size() >= 256)
     {
         QMessageBox::warning(this, tr("Track limit"), tr("A project can contain up to 256 tracks."));
@@ -8113,6 +8182,14 @@ void MainWindow::startAudioRecording()
     }
 
     const bool playbackAvailable = audioEngine.isAudioAvailable() || audioEngine.initialize();
+    if (punchEnabled && !playbackAvailable)
+    {
+        QMessageBox::warning(this, tr("Punch recording needs playback"),
+            tr("Punch recording needs an audio output so the Playlist can follow the punch range."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
     const quint64 usedAudioBytes = projectAudioBytes();
     recordingDecodedByteLimit = usedAudioBytes >= AudioFile::maximumProjectDecodedBytes
         ? 0 : AudioFile::maximumProjectDecodedBytes - usedAudioBytes;
@@ -8130,8 +8207,19 @@ void MainWindow::startAudioRecording()
     pendingRecordingPath = path;
     pendingRecordingDeviceId = selectedDevice.id();
     pendingRecordingDeviceName = selectedDevice.description();
+    recordingPunchEnabled = punchEnabled;
+    recordingPunchInBeat = punchInBeat;
+    recordingPunchOutBeat = punchOutBeat;
+    recordingPunchPriorLoopEnabled = project.loopEnabled;
+    if (punchEnabled)
+    {
+        project.loopEnabled = false;
+        const QSignalBlocker loopBlocker(loopAction);
+        loopAction->setChecked(false);
+    }
     recordingPending = true;
     recordingTransportActive = playbackAvailable;
+    refreshPunchRangeUi();
     audioInputControl->setEnabled(false);
     tempoControl->setEnabled(false);
     timeSignatureControl->setEnabled(false);
@@ -8144,9 +8232,14 @@ void MainWindow::startAudioRecording()
     if (playbackAvailable)
     {
         audioEngine.setProject(project);
+        if (punchEnabled)
+            audioEngine.seekToBeat(std::max(0.0, punchInBeat - 1.0));
         audioEngine.startPlayback();
         playAction->setChecked(true);
-        statusBar()->showMessage(project.countInBars > 0
+        statusBar()->showMessage(punchEnabled
+            ? tr("Punch recording scheduled from beat %1 to %2…")
+                  .arg(punchInBeat + 1.0, 0, 'f', 2).arg(punchOutBeat + 1.0, 0, 'f', 2)
+            : project.countInBars > 0
             ? tr("Waiting for count-in before recording to %1…").arg(QFileInfo(path).fileName())
             : tr("Starting recording to %1…").arg(QFileInfo(path).fileName()));
     }
@@ -8212,6 +8305,9 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
 
     const bool wasWaitingForCountIn = recordingPending;
+    const bool wasPunchRecording = recordingPunchEnabled;
+    const double punchInBeat = recordingPunchInBeat;
+    const double punchOutBeat = recordingPunchOutBeat;
     const QString path = audioRecorder ? audioRecorder->path() : pendingRecordingPath;
     const bool reachedLimit = audioRecorder && audioRecorder->maximumReached();
     const QString captureIssue = audioRecorder ? audioRecorder->errorMessage() : QString{};
@@ -8222,6 +8318,7 @@ void MainWindow::finishAudioRecording(bool keepTake)
     audioRecorder.reset();
     recordingPending = false;
     recordingTransportActive = false;
+    recordingPunchEnabled = false;
     pendingRecordingPath.clear();
     pendingRecordingDeviceId.clear();
     pendingRecordingDeviceName.clear();
@@ -8233,6 +8330,13 @@ void MainWindow::finishAudioRecording(bool keepTake)
     metronomeAction->setEnabled(true);
     audioEngine.stopPlayback();
     playAction->setChecked(false);
+    if (wasPunchRecording)
+    {
+        project.loopEnabled = recordingPunchPriorLoopEnabled;
+        const QSignalBlocker loopBlocker(loopAction);
+        loopAction->setChecked(project.loopEnabled);
+        audioEngine.setProject(project);
+    }
     {
         const QSignalBlocker blocker(recordAction);
         recordAction->setChecked(false);
@@ -8244,7 +8348,9 @@ void MainWindow::finishAudioRecording(bool keepTake)
         return;
     if (wasWaitingForCountIn)
     {
-        statusBar()->showMessage(tr("Recording stopped before the count-in finished; no take was created."), 3500);
+        statusBar()->showMessage(wasPunchRecording
+            ? tr("Recording stopped before the punch range; no take was created.")
+            : tr("Recording stopped before the count-in finished; no take was created."), 3500);
         return;
     }
     if (!finished)
@@ -8269,11 +8375,35 @@ void MainWindow::finishAudioRecording(bool keepTake)
     MidiClip clip;
     clip.id = project.nextClipId();
     clip.name = takeName;
-    clip.startBeat = recordingStartBeat;
     const double durationSeconds = static_cast<double>(asset->frameCount()) / asset->sampleRate;
-    const double endBeat = project.beatAtSeconds(project.secondsAtBeat(recordingStartBeat) +
-                                                  durationSeconds);
-    clip.lengthBeats = std::max(0.25, endBeat - recordingStartBeat);
+    if (wasPunchRecording)
+    {
+        const double captureStartSeconds = project.secondsAtBeat(recordingStartBeat);
+        const double punchStartSeconds = project.secondsAtBeat(punchInBeat);
+        const double punchEndSeconds = project.secondsAtBeat(punchOutBeat);
+        const double captureEndSeconds = captureStartSeconds + durationSeconds;
+        const double regionStartSeconds = std::max(captureStartSeconds, punchStartSeconds);
+        const double regionEndSeconds = std::min(captureEndSeconds, punchEndSeconds);
+        if (regionEndSeconds <= regionStartSeconds || asset->frameCount() <= 0)
+        {
+            statusBar()->showMessage(tr("The take did not contain audio inside the punch range."), 5000);
+            return;
+        }
+        clip.startBeat = project.beatAtSeconds(regionStartSeconds);
+        clip.audioStartFrame = std::clamp<qint64>(
+            static_cast<qint64>(std::llround((regionStartSeconds - captureStartSeconds) *
+                                             asset->sampleRate)),
+            0, asset->frameCount() - 1);
+        const double regionEndBeat = project.beatAtSeconds(regionEndSeconds);
+        clip.lengthBeats = std::max(0.25, regionEndBeat - clip.startBeat);
+    }
+    else
+    {
+        clip.startBeat = recordingStartBeat;
+        const double endBeat = project.beatAtSeconds(project.secondsAtBeat(recordingStartBeat) +
+                                                      durationSeconds);
+        clip.lengthBeats = std::max(0.25, endBeat - recordingStartBeat);
+    }
     clip.audioSourcePath = asset->path;
     clip.audioSource = asset;
     track.clips.push_back(std::move(clip));

@@ -15,6 +15,7 @@ public:
     void setSelection(quint64 trackId, quint64 clipId);
     void setPixelsPerBeat(int pixels);
     void setPlayheadBeat(double beat);
+    void setPunchRange(bool enabled, double punchInBeat, double punchOutBeat);
     void setAutomationView(bool enabled, int parameter, float minimum = 0.0f,
                            float maximum = 1.0f, float defaultValue = 0.0f,
                            const QString& pluginUri = QString(),

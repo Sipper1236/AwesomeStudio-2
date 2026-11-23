@@ -173,6 +173,7 @@ private:
     void startAudioRecording();
     bool startPendingAudioRecording(double playheadBeat);
     void finishAudioRecording(bool keepTake = true);
+    void refreshPunchRangeUi();
     void refreshAudioInputs();
     void startMidiRecording();
     bool startPendingMidiRecording(double playheadBeat);
@@ -322,6 +323,7 @@ private:
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;
     QAction* recordAction = nullptr;
+    QAction* punchRecordAction = nullptr;
     QAction* audioMonitorAction = nullptr;
     QAction* midiRecordAction = nullptr;
     QAction* midiMonitorAction = nullptr;
@@ -329,6 +331,8 @@ private:
     QAction* automationWriteAction = nullptr;
     QComboBox* automationWriteModeControl = nullptr;
     QComboBox* automationLaneParameterControl = nullptr;
+    QDoubleSpinBox* punchInControl = nullptr;
+    QDoubleSpinBox* punchOutControl = nullptr;
     QComboBox* pianoRollKeyControl = nullptr;
     QComboBox* pianoRollScaleControl = nullptr;
     QAction* pianoRollScaleSnapAction = nullptr;
@@ -347,9 +351,13 @@ private:
     QByteArray pendingRecordingDeviceId;
     QString pendingRecordingDeviceName;
     double recordingStartBeat = 0.0;
+    double recordingPunchInBeat = 0.0;
+    double recordingPunchOutBeat = 16.0;
     quint64 recordingDecodedByteLimit = 0;
     bool recordingPending = false;
     bool recordingTransportActive = false;
+    bool recordingPunchEnabled = false;
+    bool recordingPunchPriorLoopEnabled = false;
     struct OpenMidiNote
     {
         int pitch = 0;

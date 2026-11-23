@@ -106,6 +106,21 @@ public:
         update();
     }
 
+    void setPunchRange(bool enabled, double punchInBeat, double punchOutBeat)
+    {
+        const bool finiteRange = std::isfinite(punchInBeat) && std::isfinite(punchOutBeat);
+        if (!std::isfinite(punchInBeat))
+            punchInBeat = 0.0;
+        if (!std::isfinite(punchOutBeat))
+            punchOutBeat = punchInBeat;
+        punchInBeat = std::clamp(punchInBeat, 0.0, 16384.0);
+        punchOutBeat = std::clamp(punchOutBeat, punchInBeat, 16384.0);
+        punchRangeEnabled = enabled && finiteRange && punchOutBeat > punchInBeat;
+        this->punchInBeat = punchInBeat;
+        this->punchOutBeat = punchOutBeat;
+        updateCanvasSize();
+    }
+
     void setAutomationView(bool enabled, int parameter, float minimum, float maximum,
                            float defaultValue, const QString& pluginUri,
                            AutomationPoint::Curve defaultCurve, const QString& targetLabel)
@@ -214,6 +229,19 @@ protected:
                                        static_cast<int>(std::round(pixelsPerBeat * quarterNotesPerBar)) - 10,
                                        rulerHeight), Qt::AlignVCenter, QString::number(bar + 1));
             }
+        }
+
+        if (punchRangeEnabled)
+        {
+            const int punchInX = trackHeaderWidth + static_cast<int>(std::round(
+                punchInBeat * pixelsPerBeat));
+            const int punchOutX = trackHeaderWidth + static_cast<int>(std::round(
+                punchOutBeat * pixelsPerBeat));
+            painter.fillRect(QRect(punchInX, rulerHeight, punchOutX - punchInX,
+                                   trackCount * rowHeight), QColor(227, 135, 96, 24));
+            painter.setPen(QPen(QColor(QStringLiteral("#e38760")), 1.5, Qt::DashLine));
+            painter.drawLine(punchInX, 0, punchInX, rulerHeight + trackCount * rowHeight);
+            painter.drawLine(punchOutX, 0, punchOutX, rulerHeight + trackCount * rowHeight);
         }
 
         if (automationViewEnabled)
@@ -1187,6 +1215,8 @@ private:
             visibleBeats = std::max(visibleBeats, marker.beat + quarterNotesPerBar * 2.0);
         for (const TempoChange& change : project.tempoChanges)
             visibleBeats = std::max(visibleBeats, change.beat + quarterNotesPerBar * 2.0);
+        if (punchRangeEnabled)
+            visibleBeats = std::max(visibleBeats, punchOutBeat + quarterNotesPerBar);
         const int width = trackHeaderWidth + static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
         const int height = rulerHeight + std::max(1, static_cast<int>(project.tracks.size())) * currentRowHeight();
         setMinimumSize(width, height);
@@ -1207,6 +1237,8 @@ private:
     int dragStartX = 0;
     int pixelsPerBeat = 28;
     double playheadBeat = -1.0;
+    double punchInBeat = 0.0;
+    double punchOutBeat = 0.0;
     int automationParameter = 0;
     float automationMinimum = 0.0f;
     float automationMaximum = 1.0f;
@@ -1219,6 +1251,7 @@ private:
     quint64 automationDragTrackId = 0;
     QVector<AutomationPoint> automationDragBefore;
     bool automationViewEnabled = false;
+    bool punchRangeEnabled = false;
     bool draggingAutomationPoint = false;
     bool automationNeedsTrackSelection = false;
     bool movingClip = false;
@@ -1255,6 +1288,11 @@ void ArrangementEditor::setPixelsPerBeat(int pixels)
 void ArrangementEditor::setPlayheadBeat(double beat)
 {
     canvas->setPlayheadBeat(beat);
+}
+
+void ArrangementEditor::setPunchRange(bool enabled, double punchInBeat, double punchOutBeat)
+{
+    canvas->setPunchRange(enabled, punchInBeat, punchOutBeat);
 }
 
 void ArrangementEditor::setAutomationView(bool enabled, int parameter, float minimum,
