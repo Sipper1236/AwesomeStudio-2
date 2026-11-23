@@ -1756,6 +1756,41 @@ void MainWindow::refreshMixer()
                 setTrackOutputBus(trackId, outputBus->currentData().toULongLong());
         });
 
+        auto* sendBus = new QComboBox(group);
+        sendBus->addItem(tr("Off"), QVariant::fromValue<qulonglong>(0));
+        for (const MixerBus& bus : project.buses)
+            sendBus->addItem(bus.name, QVariant::fromValue<qulonglong>(bus.id));
+        sendBus->setCurrentIndex(std::max(0, sendBus->findData(
+            QVariant::fromValue<qulonglong>(item.sendBusId))));
+        form->addRow(tr("Aux send"), sendBus);
+
+        auto* sendLevel = new QSlider(Qt::Horizontal, group);
+        sendLevel->setRange(0, 100);
+        sendLevel->setValue(static_cast<int>(std::round(item.sendGain * 100.0f)));
+        sendLevel->setEnabled(item.sendBusId != 0);
+        auto* sendLevelLabel = new QLabel(tr("%1%").arg(sendLevel->value()), group);
+        auto* sendLevelRow = new QWidget(group);
+        auto* sendLevelLayout = new QHBoxLayout(sendLevelRow);
+        sendLevelLayout->setContentsMargins(0, 0, 0, 0);
+        sendLevelLayout->addWidget(sendLevel, 1);
+        sendLevelLayout->addWidget(sendLevelLabel);
+        form->addRow(tr("Send level"), sendLevelRow);
+        connect(sendBus, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this, trackId, sendBus, sendLevel](int index)
+        {
+            if (index < 0)
+                return;
+            const quint64 busId = sendBus->currentData().toULongLong();
+            sendLevel->setEnabled(busId != 0);
+            setTrackSend(trackId, busId, sendLevel->value() / 100.0f);
+        });
+        connect(sendLevel, &QSlider::valueChanged, this,
+                [this, trackId, sendBus, sendLevelLabel](int value)
+        {
+            sendLevelLabel->setText(tr("%1%").arg(value));
+            setTrackSend(trackId, sendBus->currentData().toULongLong(), value / 100.0f);
+        });
+
         auto* volume = new QSlider(Qt::Horizontal, group);
         volume->setObjectName(QStringLiteral("mixerTrackVolume_%1").arg(item.id));
         volume->setRange(0, 100);
@@ -1967,6 +2002,11 @@ void MainWindow::removeMixerBus(quint64 busId)
     {
         if (track.outputBusId == busId)
             track.outputBusId = 0;
+        if (track.sendBusId == busId)
+        {
+            track.sendBusId = 0;
+            track.sendGain = 0.0f;
+        }
     }
     project.buses.erase(bus);
     project.normalize();
@@ -1981,6 +2021,22 @@ void MainWindow::setTrackOutputBus(quint64 trackId, quint64 busId)
     if (track == nullptr || track->outputBusId == busId)
         return;
     track->outputBusId = busId;
+    project.normalize();
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::setTrackSend(quint64 trackId, quint64 busId, float gain)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+    const float normalizedGain = std::clamp(gain, 0.0f, 1.0f);
+    if (track->sendBusId == busId && std::abs(track->sendGain - normalizedGain) < 1.0e-6f)
+        return;
+    track->sendBusId = busId;
+    track->sendGain = normalizedGain;
     project.normalize();
     audioEngine.setProject(project);
     settingsDirty = true;

@@ -21,7 +21,8 @@ public:
     void resetTransport();
     void beginMixerFrame();
     void addLiveBusFrameSample(size_t busIndex, StereoSample input);
-    StereoSample routeLiveTrackSample(size_t trackIndex, StereoSample input, int* busIndex = nullptr) const;
+    StereoSample routeLiveTrackSample(size_t trackIndex, StereoSample input, int* busIndex = nullptr,
+                                      StereoSample* sendSample = nullptr, int* sendBusIndex = nullptr) const;
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
@@ -96,6 +97,7 @@ private:
 
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
     void addTrackSample(size_t trackIndex, float left, float right);
+    void addBusFrameSample(size_t busIndex, StereoSample input);
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
     void resetTrackEqualizers();
 
@@ -107,8 +109,11 @@ private:
     std::vector<TrackEqualizerState> trackEqualizerStates;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;
+    std::vector<int> trackSendBusIndices;
+    std::vector<float> trackSendGains;
     std::vector<unsigned char> trackAudible;
     std::vector<BusMixState> busMixStates;
+    std::vector<unsigned char> busAudible;
     std::vector<StereoSample> busFrameSamples;
     std::vector<StereoSample> lastBusOutputSamples;
     std::vector<unsigned char> busFrameTouched;
@@ -128,4 +133,5 @@ private:
     double sampleRate = 48000.0;
     float lowBandCoefficient = 0.0f;
     float highBandCoefficient = 0.0f;
+    bool hasBusSolo = false;
 };

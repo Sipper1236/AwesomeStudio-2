@@ -112,6 +112,8 @@ struct InstrumentTrack
     float eqMidDb = 0.0f;
     float eqHighDb = 0.0f;
     quint64 outputBusId = 0;
+    quint64 sendBusId = 0;
+    float sendGain = 0.0f;
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
     bool muted = false;

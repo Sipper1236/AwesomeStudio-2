@@ -231,6 +231,10 @@ void ProjectData::normalize()
         usedTrackIds.insert(track.id);
         if (track.outputBusId != 0 && usedBusIds.find(track.outputBusId) == usedBusIds.end())
             track.outputBusId = 0;
+        if (track.sendBusId != 0 && usedBusIds.find(track.sendBusId) == usedBusIds.end())
+            track.sendBusId = 0;
+        if (!std::isfinite(track.sendGain)) track.sendGain = 0.0f;
+        track.sendGain = std::clamp(track.sendGain, 0.0f, 1.0f);
         track.instrumentType = static_cast<InstrumentType>(
             std::clamp(static_cast<int>(track.instrumentType), 0, 2));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);

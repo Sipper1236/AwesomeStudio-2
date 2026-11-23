@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 14;
+constexpr int currentProjectVersion = 15;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -223,6 +223,8 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("eqMidDb"), track.eqMidDb},
         {QStringLiteral("eqHighDb"), track.eqHighDb},
         {QStringLiteral("outputBusId"), static_cast<qint64>(track.outputBusId)},
+        {QStringLiteral("sendBusId"), static_cast<qint64>(track.sendBusId)},
+        {QStringLiteral("sendGain"), track.sendGain},
         {QStringLiteral("volumeAutomation"), saveAutomation(track.volumeAutomation)},
         {QStringLiteral("panAutomation"), saveAutomation(track.panAutomation)},
         {QStringLiteral("muted"), track.muted},
@@ -315,6 +317,19 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     }
     if (version >= 14 && !readId(object, QStringLiteral("outputBusId"), track.outputBusId, error))
         return false;
+    if (version >= 15)
+    {
+        if (!readId(object, QStringLiteral("sendBusId"), track.sendBusId, error))
+            return false;
+        const double sendGain = object.value(QStringLiteral("sendGain")).toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+        if (!std::isfinite(sendGain))
+        {
+            setError(error, QStringLiteral("The track contains an invalid mixer send level."));
+            return false;
+        }
+        track.sendGain = static_cast<float>(sendGain);
+    }
     if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
                         QStringLiteral("volume"), error) ||
         !loadAutomation(object.value(QStringLiteral("panAutomation")), track.panAutomation,

@@ -529,25 +529,35 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
         addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
     }
 
+    const auto addLiveBusSample = [this](int busIndex, StereoSample sample)
+    {
+        if (busIndex < 0 || static_cast<size_t>(busIndex) >= maximumBusCount)
+            return;
+        const size_t bus = static_cast<size_t>(busIndex);
+        if (!liveMidiBusFrameTouched[bus])
+        {
+            liveMidiBusFrameTouched[bus] = true;
+            liveMidiTouchedBuses[liveMidiTouchedBusCount++] = bus;
+        }
+        liveMidiBusFrameSamples[bus].left += sample.left;
+        liveMidiBusFrameSamples[bus].right += sample.right;
+    };
+
     for (size_t index = 0; index < liveMidiTouchedTrackCount; ++index)
     {
         const size_t trackIndex = liveMidiTouchedTracks[index];
         const StereoSample& trackSample = liveMidiTrackFrameSamples[trackIndex];
         int busIndex = -1;
-        const StereoSample routedSample = renderer.routeLiveTrackSample(trackIndex, trackSample, &busIndex);
+        StereoSample sendSample;
+        int sendBusIndex = -1;
+        const StereoSample routedSample = renderer.routeLiveTrackSample(
+            trackIndex, trackSample, &busIndex, &sendSample, &sendBusIndex);
         mixed.left += routedSample.left;
         mixed.right += routedSample.right;
-        if (busIndex >= 0 && static_cast<size_t>(busIndex) < maximumBusCount)
-        {
-            const size_t bus = static_cast<size_t>(busIndex);
-            if (!liveMidiBusFrameTouched[bus])
-            {
-                liveMidiBusFrameTouched[bus] = true;
-                liveMidiTouchedBuses[liveMidiTouchedBusCount++] = bus;
-            }
-            liveMidiBusFrameSamples[bus].left += routedSample.left;
-            liveMidiBusFrameSamples[bus].right += routedSample.right;
-        }
+        mixed.left += sendSample.left;
+        mixed.right += sendSample.right;
+        addLiveBusSample(busIndex, routedSample);
+        addLiveBusSample(sendBusIndex, sendSample);
         liveMidiBlockPeaks[trackIndex] = std::max(liveMidiBlockPeaks[trackIndex],
             std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
         liveMidiTrackFrameSamples[trackIndex] = {};
