@@ -22,6 +22,8 @@ signals:
     void clipAdded(quint64 trackId, double startBeat);
     void clipRemoved(quint64 trackId, quint64 clipId);
     void clipMoved(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
+    void audioRegionTrimmed(quint64 trackId, quint64 clipId, double startBeat,
+                            double lengthBeats, qint64 audioStartFrame);
     void trackSelected(quint64 trackId);
 
 private:

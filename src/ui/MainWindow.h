@@ -47,6 +47,8 @@ private:
     void addNewPattern();
     void removeClip(quint64 trackId, quint64 clipId);
     void moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat);
+    void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
+                         double lengthBeats, qint64 audioStartFrame);
     InstrumentTrack* selectedTrack();
     MidiClip* selectedClip();
     bool maybeSave();

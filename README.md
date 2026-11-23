@@ -15,6 +15,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Choose sine, triangle, saw, or square per instrument track.
 - Add a drum rack with synthesized kick, snare, closed-hat, and open-hat voices, then program 16 steps per bar. Step edits and piano-roll notes share undo and redo.
 - Import mono or stereo WAV audio as a Playlist track. Supported sources are PCM 8/16/24/32-bit or IEEE float32 WAV at 8–192 kHz; regions display a waveform and play in the arrangement and WAV export.
+- Trim a loaded audio region from either edge by dragging its handle in the Playlist; the left edge updates the source offset and arrangement position together.
 - Adjust track level, pan, mute, solo, and master level.
 - Import Standard MIDI Files (formats 0 and 1 with PPQN timing), and export arrangements as multitrack MIDI or stereo 16-bit WAV.
 - Save and reopen `.aws` projects.

@@ -26,7 +26,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 
 ### 2. Arrangement and mixing
 
-- [ ] Audio clip trimming, fades, markers, comping, and portable media packaging
+- [x] Basic left/right edge trimming for WAV audio regions
+- [ ] Audio fades, markers, comping, and portable media packaging
 - [ ] Mixer buses, routing, sends, inserts, and peak meters
 - [ ] Bundled EQ, delay, compression, and reverb in the playback graph
 - [ ] Automation lanes with undoable edits

@@ -146,6 +146,9 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(arrangementEditor, &ArrangementEditor::clipMoved, this,
             [this](quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat)
             { moveClip(sourceTrackId, targetTrackId, clipId, startBeat); });
+    connect(arrangementEditor, &ArrangementEditor::audioRegionTrimmed, this,
+            [this](quint64 trackId, quint64 clipId, double startBeat, double lengthBeats, qint64 audioStartFrame)
+            { trimAudioRegion(trackId, clipId, startBeat, lengthBeats, audioStartFrame); });
     connect(arrangementEditor, &ArrangementEditor::trackSelected, this,
             [this](quint64 trackId) { selectTrack(trackId); });
     connect(&undoStack, &QUndoStack::cleanChanged, this, [this] { refreshDirtyState(); });
@@ -1028,6 +1031,25 @@ void MainWindow::moveClip(quint64 sourceTrackId, quint64 targetTrackId, quint64 
     settingsDirty = true;
     refreshProjectUi();
     refreshDirtyState();
+}
+
+void MainWindow::trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
+                                 double lengthBeats, qint64 audioStartFrame)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    MidiClip* clip = project.findClip(trackId, clipId);
+    if (track == nullptr || clip == nullptr || track->instrumentType != InstrumentType::Audio ||
+        !clip->isAudioRegion())
+        return;
+
+    clip->startBeat = std::clamp(startBeat, 0.0, 16384.0);
+    clip->lengthBeats = std::clamp(lengthBeats, 0.25, 16384.0);
+    clip->audioStartFrame = std::max<qint64>(0, audioStartFrame);
+    project.normalize();
+    settingsDirty = true;
+    refreshProjectUi();
+    refreshDirtyState();
+    statusBar()->showMessage(tr("Audio region trimmed"), 1800);
 }
 
 bool MainWindow::maybeSave()

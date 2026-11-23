@@ -146,6 +146,16 @@ protected:
                 painter.setBrush(fill);
                 painter.drawRoundedRect(bounds, 4.0, 4.0);
 
+                if (selected && clip.isAudioRegion())
+                {
+                    painter.setPen(QPen(QColor(QStringLiteral("#d5fff7")), 2));
+                    if (clip.audioSource != nullptr && clip.audioSource->frameCount() > clip.audioStartFrame)
+                        painter.drawLine(QPointF(bounds.left() + 5, bounds.top() + 3),
+                                         QPointF(bounds.left() + 5, bounds.bottom() - 3));
+                    painter.drawLine(QPointF(bounds.right() - 5, bounds.top() + 3),
+                                     QPointF(bounds.right() - 5, bounds.bottom() - 3));
+                }
+
                 painter.setPen(QColor(QStringLiteral("#102126")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
                 painter.drawText(bounds.adjusted(7, 3, -4, -3), Qt::AlignTop | Qt::AlignLeft,
@@ -260,8 +270,19 @@ protected:
             draggedClipId = clip.id;
             draggedTrackId = track.id;
             initialClipStart = clip.startBeat;
+            initialClipLength = clip.lengthBeats;
+            initialAudioStartFrame = clip.audioStartFrame;
             dragStartX = point.x();
-            movingClip = true;
+            const QRectF bounds = clipBounds(clip, row);
+            const bool nearLeftEdge = point.x() <= bounds.left() + 8;
+            const bool nearRightEdge = point.x() >= bounds.right() - 8;
+            resizingAudioRegion = clip.isAudioRegion() &&
+                (nearRightEdge || (nearLeftEdge && clip.audioSource != nullptr &&
+                                   clip.audioSource->frameCount() > clip.audioStartFrame));
+            resizeLeftEdge = nearLeftEdge && !nearRightEdge;
+            movingClip = !resizingAudioRegion;
+            if (resizingAudioRegion)
+                setCursor(Qt::SizeHorCursor);
             emit owner->clipSelected(track.id, clip.id);
             update();
             return;
@@ -277,9 +298,82 @@ protected:
 
     void mouseMoveEvent(QMouseEvent* event) override
     {
-        if (!movingClip)
-            return;
         const QPoint point = event->position().toPoint();
+        if (!movingClip && !resizingAudioRegion)
+        {
+            const int hit = clipAt(point);
+            if (hit >= 0)
+            {
+                const int row = (point.y() - rulerHeight) / trackHeight;
+                const MidiClip& clip = project.tracks[row].clips[hit];
+                const QRectF bounds = clipBounds(clip, row);
+                const bool nearLeftEdge = point.x() <= bounds.left() + 8;
+                const bool nearRightEdge = point.x() >= bounds.right() - 8;
+                if (clip.isAudioRegion() && (nearRightEdge ||
+                    (nearLeftEdge && clip.audioSource != nullptr &&
+                     clip.audioSource->frameCount() > clip.audioStartFrame)))
+                {
+                    setCursor(Qt::SizeHorCursor);
+                    return;
+                }
+            }
+            unsetCursor();
+            return;
+        }
+
+        if (resizingAudioRegion)
+        {
+            const double rawDelta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
+            const double snap = std::max(0.25, project.quarterNotesPerBar() / 4.0);
+            const double snappedDelta = std::round(rawDelta / snap) * snap;
+            const MidiClip* originalClip = project.findClip(sourceTrackId, draggedClipId);
+            if (originalClip == nullptr)
+                return;
+
+            double newStartBeat = initialClipStart;
+            double newLengthBeats = initialClipLength;
+            qint64 newAudioStartFrame = initialAudioStartFrame;
+            if (resizeLeftEdge)
+            {
+                double minimumDelta = -initialClipStart;
+                double maximumDelta = initialClipLength - 0.25;
+                if (originalClip->audioSource != nullptr && originalClip->audioSource->sampleRate > 0)
+                {
+                    const double framesPerBeat = originalClip->audioSource->sampleRate * 60.0 /
+                                                 project.tempoBpm;
+                    minimumDelta = std::max(minimumDelta,
+                        -initialAudioStartFrame / std::max(1.0, framesPerBeat));
+                    const qint64 maximumStartFrame = originalClip->audioSource->frameCount() - 1;
+                    maximumDelta = std::min(maximumDelta,
+                        static_cast<double>(maximumStartFrame - initialAudioStartFrame) / framesPerBeat);
+                    maximumDelta = std::min(maximumDelta, 16384.0 - initialClipStart);
+                    const double delta = std::clamp(snappedDelta, minimumDelta, maximumDelta);
+                    newStartBeat = initialClipStart + delta;
+                    newLengthBeats = initialClipLength - delta;
+                    newAudioStartFrame = std::max<qint64>(0, initialAudioStartFrame +
+                        static_cast<qint64>(std::llround(delta * framesPerBeat)));
+                }
+            }
+            else
+            {
+                double maximumLength = 16384.0 - initialClipStart;
+                if (originalClip->audioSource != nullptr && originalClip->audioSource->sampleRate > 0)
+                {
+                    const double remainingSeconds = static_cast<double>(
+                        originalClip->audioSource->frameCount() - initialAudioStartFrame) /
+                        originalClip->audioSource->sampleRate;
+                    maximumLength = std::min(maximumLength, remainingSeconds * project.tempoBpm / 60.0);
+                }
+                maximumLength = std::max(0.25, maximumLength);
+                newLengthBeats = std::clamp(initialClipLength + snappedDelta, 0.25, maximumLength);
+            }
+
+            setLocalAudioTrim(sourceTrackId, draggedClipId, newStartBeat,
+                              newLengthBeats, newAudioStartFrame);
+            updateCanvasSize();
+            return;
+        }
+
         const double delta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
         const double snap = std::max(0.25, project.quarterNotesPerBar() / 4.0);
         const double startBeat = std::max(0.0, std::round((initialClipStart + delta) / snap) * snap);
@@ -295,7 +389,21 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent* event) override
     {
-        if (event->button() != Qt::LeftButton || !movingClip)
+        if (event->button() != Qt::LeftButton)
+            return;
+        if (resizingAudioRegion)
+        {
+            resizingAudioRegion = false;
+            unsetCursor();
+            const MidiClip* clip = project.findClip(sourceTrackId, draggedClipId);
+            if (clip != nullptr && (std::abs(clip->startBeat - initialClipStart) > 1.0e-9 ||
+                                    std::abs(clip->lengthBeats - initialClipLength) > 1.0e-9 ||
+                                    clip->audioStartFrame != initialAudioStartFrame))
+                emit owner->audioRegionTrimmed(sourceTrackId, draggedClipId, clip->startBeat,
+                                               clip->lengthBeats, clip->audioStartFrame);
+            return;
+        }
+        if (!movingClip)
             return;
         movingClip = false;
         const MidiClip* clip = project.findClip(draggedTrackId, draggedClipId);
@@ -378,6 +486,17 @@ private:
             }
     }
 
+    void setLocalAudioTrim(quint64 trackId, quint64 clipId, double startBeat,
+                           double lengthBeats, qint64 audioStartFrame)
+    {
+        MidiClip* clip = project.findClip(trackId, clipId);
+        if (clip == nullptr)
+            return;
+        clip->startBeat = startBeat;
+        clip->lengthBeats = lengthBeats;
+        clip->audioStartFrame = audioStartFrame;
+    }
+
     void updateCanvasSize()
     {
         const double quarterNotesPerBar = project.quarterNotesPerBar();
@@ -398,10 +517,14 @@ private:
     quint64 draggedTrackId = 0;
     quint64 draggedClipId = 0;
     double initialClipStart = 0.0;
+    double initialClipLength = 0.0;
+    qint64 initialAudioStartFrame = 0;
     int dragStartX = 0;
     int pixelsPerBeat = 28;
     double playheadBeat = -1.0;
     bool movingClip = false;
+    bool resizingAudioRegion = false;
+    bool resizeLeftEdge = false;
 };
 
 ArrangementEditor::ArrangementEditor(QWidget* parent) : QScrollArea(parent)
