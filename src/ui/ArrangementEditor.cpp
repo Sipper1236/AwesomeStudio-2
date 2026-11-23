@@ -3,6 +3,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QScrollBar>
 
 #include <algorithm>
@@ -15,6 +16,7 @@ namespace
 constexpr int trackHeaderWidth = 142;
 constexpr int rulerHeight = 28;
 constexpr int trackHeight = 72;
+constexpr int automationLaneHeight = 50;
 QColor trackColour(int index)
 {
     static const QColor palette[] = {
@@ -23,6 +25,19 @@ QColor trackColour(int index)
         QColor(QStringLiteral("#d26f91")), QColor(QStringLiteral("#b4a04d"))
     };
     return palette[index % static_cast<int>(std::size(palette))];
+}
+
+bool automationPointsEqual(const QVector<AutomationPoint>& left, const QVector<AutomationPoint>& right)
+{
+    if (left.size() != right.size())
+        return false;
+    for (qsizetype index = 0; index < left.size(); ++index)
+    {
+        if (std::abs(left[index].beat - right[index].beat) > 1.0e-9 ||
+            std::abs(left[index].value - right[index].value) > 1.0e-6f)
+            return false;
+    }
+    return true;
 }
 }
 
@@ -38,11 +53,25 @@ public:
     void setProject(const ProjectData& value)
     {
         project = value;
+        if (selectedAutomationPoint >= 0)
+        {
+            const InstrumentTrack* track = project.findTrack(selectedAutomationTrackId);
+            if (track == nullptr || selectedAutomationPoint >= automationPoints(*track).size())
+            {
+                selectedAutomationTrackId = 0;
+                selectedAutomationPoint = -1;
+            }
+        }
         updateCanvasSize();
     }
 
     void setSelection(quint64 selectedTrack, quint64 selectedClip)
     {
+        if (selectedTrackId != selectedTrack)
+        {
+            selectedAutomationTrackId = 0;
+            selectedAutomationPoint = -1;
+        }
         selectedTrackId = selectedTrack;
         selectedClipId = selectedClip;
         update();
@@ -60,6 +89,15 @@ public:
         update();
     }
 
+    void setAutomationView(bool enabled, int parameter)
+    {
+        automationViewEnabled = enabled;
+        automationParameter = std::clamp(parameter, 0, 1);
+        selectedAutomationTrackId = 0;
+        selectedAutomationPoint = -1;
+        updateCanvasSize();
+    }
+
 protected:
     void paintEvent(QPaintEvent*) override
     {
@@ -68,6 +106,7 @@ protected:
         painter.fillRect(rect(), QColor(QStringLiteral("#131820")));
 
         const int trackCount = std::max(1, static_cast<int>(project.tracks.size()));
+        const int rowHeight = currentRowHeight();
         const double quarterNotesPerBar = project.quarterNotesPerBar();
         const double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
                                              quarterNotesPerBar * 16.0);
@@ -77,14 +116,14 @@ protected:
 
         for (int row = 0; row < trackCount; ++row)
         {
-            const int y = rulerHeight + row * trackHeight;
+            const int y = rulerHeight + row * rowHeight;
             const bool selected = row < project.tracks.size() && project.tracks[row].id == selectedTrackId;
-            painter.fillRect(QRect(trackHeaderWidth, y, gridWidth, trackHeight - 1),
+            painter.fillRect(QRect(trackHeaderWidth, y, gridWidth, rowHeight - 1),
                              row % 2 == 0 ? QColor(QStringLiteral("#191f27")) : QColor(QStringLiteral("#171d25")));
-            painter.fillRect(QRect(0, y, trackHeaderWidth, trackHeight - 1),
+            painter.fillRect(QRect(0, y, trackHeaderWidth, rowHeight - 1),
                              selected ? QColor(QStringLiteral("#29343e")) : QColor(QStringLiteral("#222a33")));
             painter.setPen(QColor(QStringLiteral("#303944")));
-            painter.drawLine(0, y + trackHeight - 1, width(), y + trackHeight - 1);
+            painter.drawLine(0, y + rowHeight - 1, width(), y + rowHeight - 1);
 
             if (row >= project.tracks.size())
                 continue;
@@ -102,6 +141,17 @@ protected:
                                      : track.instrumentType == InstrumentType::Audio
                                          ? tr("AUDIO · %1 regions").arg(track.clips.size())
                                          : tr("MIDI · %1 clips").arg(track.clips.size()));
+            if (automationViewEnabled)
+            {
+                const int laneY = y + trackHeight;
+                painter.fillRect(QRect(0, laneY, trackHeaderWidth, automationLaneHeight - 1),
+                                 selected ? QColor(QStringLiteral("#252f39")) : QColor(QStringLiteral("#202730")));
+                painter.setPen(QColor(QStringLiteral("#94a2ae")));
+                painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
+                painter.drawText(QRect(12, laneY, trackHeaderWidth - 20, automationLaneHeight - 1),
+                                 Qt::AlignLeft | Qt::AlignVCenter,
+                                 automationParameter == 0 ? tr("VOLUME · 0–100%") : tr("PAN · L–R"));
+            }
         }
 
         const int totalBeats = static_cast<int>(std::ceil(visibleBeats));
@@ -112,7 +162,7 @@ protected:
             if (std::min(barOffset, quarterNotesPerBar - barOffset) > 0.02)
             {
                 painter.setPen(QColor(QStringLiteral("#2b333d")));
-                painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * trackHeight);
+                painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * rowHeight);
             }
         }
         const int totalBars = static_cast<int>(std::ceil(visibleBeats / quarterNotesPerBar));
@@ -121,7 +171,7 @@ protected:
             const double beat = bar * quarterNotesPerBar;
             const int x = trackHeaderWidth + static_cast<int>(std::round(beat * pixelsPerBeat));
             painter.setPen(QColor(QStringLiteral("#596572")));
-            painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * trackHeight);
+            painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * rowHeight);
             if (beat < visibleBeats)
             {
                 painter.setPen(QColor(QStringLiteral("#e2e8ee")));
@@ -132,10 +182,19 @@ protected:
             }
         }
 
+        if (automationViewEnabled)
+        {
+            for (int trackIndex = 0; trackIndex < project.tracks.size(); ++trackIndex)
+            {
+                const int rowY = rulerHeight + trackIndex * rowHeight;
+                drawAutomationLane(painter, project.tracks[trackIndex], trackIndex, rowY, gridWidth);
+            }
+        }
+
         for (int trackIndex = 0; trackIndex < project.tracks.size(); ++trackIndex)
         {
             const InstrumentTrack& track = project.tracks[trackIndex];
-            const int rowY = rulerHeight + trackIndex * trackHeight;
+            const int rowY = rulerHeight + trackIndex * rowHeight;
             for (const MidiClip& clip : track.clips)
             {
                 const QRectF bounds = clipBounds(clip, trackIndex);
@@ -245,7 +304,7 @@ protected:
         {
             const int x = trackHeaderWidth + static_cast<int>(std::round(playheadBeat * pixelsPerBeat));
             painter.setPen(QPen(QColor(QStringLiteral("#f1a85c")), 2.0));
-            painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * trackHeight);
+            painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * rowHeight);
         }
     }
 
@@ -253,14 +312,81 @@ protected:
     {
         setFocus(Qt::MouseFocusReason);
         const QPoint point = event->position().toPoint();
-        const int row = (point.y() - rulerHeight) / trackHeight;
+        const int row = (point.y() - rulerHeight) / currentRowHeight();
         if (row < 0 || row >= project.tracks.size())
             return;
-        const InstrumentTrack& track = project.tracks[row];
+        InstrumentTrack& track = project.tracks[row];
+        const int rowY = rulerHeight + row * currentRowHeight();
+        if (automationViewEnabled && point.y() >= rowY + trackHeight && point.x() >= trackHeaderWidth)
+        {
+            automationNeedsTrackSelection = selectedTrackId != track.id;
+            selectedTrackId = track.id;
+            selectedAutomationTrackId = track.id;
+            if (event->button() == Qt::RightButton)
+            {
+                const int hit = automationPointAt(track, row, point);
+                if (hit >= 0)
+                {
+                    const quint64 trackId = track.id;
+                    QVector<AutomationPoint> before = automationPoints(track);
+                    QVector<AutomationPoint> after = before;
+                    after.removeAt(hit);
+                    if (automationNeedsTrackSelection)
+                        emit owner->trackSelected(trackId);
+                    emit owner->automationChanged(trackId, automationParameter, before, after);
+                    automationNeedsTrackSelection = false;
+                    selectedAutomationPoint = -1;
+                    update();
+                }
+                return;
+            }
+            if (event->button() != Qt::LeftButton)
+                return;
+
+            selectedAutomationPoint = automationPointAt(track, row, point);
+            automationDragTrackId = track.id;
+            automationDragBefore = automationPoints(track);
+            if (selectedAutomationPoint < 0)
+            {
+                if (automationDragBefore.size() >= 10000)
+                {
+                    emit owner->automationPointLimitReached();
+                    return;
+                }
+                QVector<AutomationPoint>& points = mutableAutomationPoints(track);
+                const double beat = std::clamp(
+                    (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+                const float value = automationValueAtY(rowY + trackHeight, point.y());
+                auto insertAt = std::lower_bound(points.begin(), points.end(), beat,
+                    [](const AutomationPoint& current, double targetBeat)
+                    { return current.beat < targetBeat; });
+                if (insertAt != points.end() && std::abs(insertAt->beat - beat) < 0.001)
+                {
+                    selectedAutomationPoint = static_cast<int>(insertAt - points.begin());
+                    insertAt->value = value;
+                }
+                else if (insertAt != points.begin() && std::abs((insertAt - 1)->beat - beat) < 0.001)
+                {
+                    --insertAt;
+                    selectedAutomationPoint = static_cast<int>(insertAt - points.begin());
+                    insertAt->value = value;
+                }
+                else
+                {
+                    selectedAutomationPoint = static_cast<int>(insertAt - points.begin());
+                    points.insert(insertAt, {beat, value});
+                }
+            }
+            draggingAutomationPoint = true;
+            update();
+            return;
+        }
         if (point.x() < trackHeaderWidth)
         {
             selectedTrackId = track.id;
             selectedClipId = 0;
+            selectedAutomationTrackId = 0;
+            selectedAutomationPoint = -1;
             emit owner->trackSelected(track.id);
             update();
             return;
@@ -282,6 +408,8 @@ protected:
         selectedTrackId = track.id;
         if (hit >= 0)
         {
+            selectedAutomationTrackId = 0;
+            selectedAutomationPoint = -1;
             const MidiClip& clip = track.clips[hit];
             selectedClipId = clip.id;
             sourceTrackId = track.id;
@@ -317,12 +445,51 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override
     {
         const QPoint point = event->position().toPoint();
+        if (draggingAutomationPoint)
+        {
+            const int trackIndex = trackIndexForId(automationDragTrackId);
+            InstrumentTrack* track = project.findTrack(automationDragTrackId);
+            if (track == nullptr || trackIndex < 0)
+                return;
+            QVector<AutomationPoint>& points = mutableAutomationPoints(*track);
+            if (selectedAutomationPoint < 0 || selectedAutomationPoint >= points.size())
+                return;
+            const int rowY = rulerHeight + trackIndex * currentRowHeight();
+            double beat = std::clamp((point.x() - trackHeaderWidth) /
+                                     static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+            double minimumBeat = 0.0;
+            double maximumBeat = 16384.0;
+            if (selectedAutomationPoint > 0)
+                minimumBeat = points[selectedAutomationPoint - 1].beat + 0.001;
+            if (selectedAutomationPoint + 1 < points.size())
+                maximumBeat = points[selectedAutomationPoint + 1].beat - 0.001;
+            if (minimumBeat > maximumBeat)
+                beat = points[selectedAutomationPoint].beat;
+            else
+                beat = std::clamp(beat, minimumBeat, maximumBeat);
+            AutomationPoint& selected = points[selectedAutomationPoint];
+            selected.beat = std::clamp(beat, 0.0, 16384.0);
+            selected.value = automationValueAtY(rowY + trackHeight, point.y());
+            update();
+            return;
+        }
         if (!movingClip && !resizingAudioRegion)
         {
+            if (automationViewEnabled)
+            {
+                const int row = (point.y() - rulerHeight) / currentRowHeight();
+                if (row >= 0 && row < project.tracks.size() && point.x() >= trackHeaderWidth &&
+                    point.y() >= rulerHeight + row * currentRowHeight() + trackHeight)
+                {
+                    setCursor(automationPointAt(project.tracks[row], row, point) >= 0
+                                  ? Qt::SizeAllCursor : Qt::CrossCursor);
+                    return;
+                }
+            }
             const int hit = clipAt(point);
             if (hit >= 0)
             {
-                const int row = (point.y() - rulerHeight) / trackHeight;
+                const int row = (point.y() - rulerHeight) / currentRowHeight();
                 const MidiClip& clip = project.tracks[row].clips[hit];
                 const QRectF bounds = clipBounds(clip, row);
                 const bool nearLeftEdge = point.x() <= bounds.left() + 8;
@@ -395,7 +562,7 @@ protected:
         const double delta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
         const double snap = std::max(0.25, project.quarterNotesPerBar() / 4.0);
         const double startBeat = std::max(0.0, std::round((initialClipStart + delta) / snap) * snap);
-        const int row = std::clamp((point.y() - rulerHeight) / trackHeight, 0,
+        const int row = std::clamp((point.y() - rulerHeight) / currentRowHeight(), 0,
                                    static_cast<int>(project.tracks.size()) - 1);
         const quint64 targetTrackId = project.tracks[row].id;
         setLocalClipPosition(draggedTrackId, targetTrackId, draggedClipId, startBeat);
@@ -409,6 +576,22 @@ protected:
     {
         if (event->button() != Qt::LeftButton)
             return;
+        if (draggingAutomationPoint)
+        {
+            draggingAutomationPoint = false;
+            const quint64 trackId = automationDragTrackId;
+            const InstrumentTrack* track = project.findTrack(trackId);
+            const QVector<AutomationPoint> after = track == nullptr
+                ? automationDragBefore : automationPoints(*track);
+            if (automationNeedsTrackSelection)
+                emit owner->trackSelected(trackId);
+            if (!automationPointsEqual(automationDragBefore, after))
+                emit owner->automationChanged(trackId, automationParameter, automationDragBefore, after);
+            automationNeedsTrackSelection = false;
+            automationDragBefore.clear();
+            update();
+            return;
+        }
         if (resizingAudioRegion)
         {
             resizingAudioRegion = false;
@@ -432,8 +615,10 @@ protected:
 
     void mouseDoubleClickEvent(QMouseEvent* event) override
     {
+        if (automationViewEnabled)
+            return;
         const QPoint point = event->position().toPoint();
-        const int row = (point.y() - rulerHeight) / trackHeight;
+        const int row = (point.y() - rulerHeight) / currentRowHeight();
         if (row < 0 || row >= project.tracks.size())
             return;
         const int hit = clipAt(point);
@@ -448,6 +633,23 @@ protected:
     {
         if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace)
         {
+            if (automationViewEnabled && selectedAutomationPoint >= 0)
+            {
+                const InstrumentTrack* track = project.findTrack(selectedAutomationTrackId);
+                if (track != nullptr && selectedAutomationPoint < automationPoints(*track).size())
+                {
+                    const quint64 trackId = track->id;
+                    const QVector<AutomationPoint> before = automationPoints(*track);
+                    QVector<AutomationPoint> after = before;
+                    after.removeAt(selectedAutomationPoint);
+                    emit owner->automationChanged(trackId, automationParameter, before, after);
+                    selectedAutomationPoint = -1;
+                    update();
+                }
+                return;
+            }
+            if (automationViewEnabled)
+                return;
             if (selectedTrackId != 0 && selectedClipId != 0)
                 emit owner->clipRemoved(selectedTrackId, selectedClipId);
             return;
@@ -456,16 +658,124 @@ protected:
     }
 
 private:
+    int currentRowHeight() const
+    {
+        return trackHeight + (automationViewEnabled ? automationLaneHeight : 0);
+    }
+
+    const QVector<AutomationPoint>& automationPoints(const InstrumentTrack& track) const
+    {
+        return automationParameter == 0 ? track.volumeAutomation : track.panAutomation;
+    }
+
+    float baseAutomationValue(const InstrumentTrack& track) const
+    {
+        return automationParameter == 0 ? track.gain : track.pan;
+    }
+
+    QVector<AutomationPoint>& mutableAutomationPoints(InstrumentTrack& track)
+    {
+        return automationParameter == 0 ? track.volumeAutomation : track.panAutomation;
+    }
+
+    int trackIndexForId(quint64 trackId) const
+    {
+        for (qsizetype index = 0; index < project.tracks.size(); ++index)
+            if (project.tracks[index].id == trackId)
+                return static_cast<int>(index);
+        return -1;
+    }
+
+    int automationPointAt(const InstrumentTrack& track, int trackIndex, const QPoint& position) const
+    {
+        const int laneY = rulerHeight + trackIndex * currentRowHeight() + trackHeight;
+        const QVector<AutomationPoint>& points = automationPoints(track);
+        for (qsizetype index = 0; index < points.size(); ++index)
+        {
+            const QPoint center(trackHeaderWidth + static_cast<int>(std::round(
+                                    points[index].beat * pixelsPerBeat)),
+                                automationY(laneY, points[index].value));
+            if ((center - position).manhattanLength() <= 12)
+                return static_cast<int>(index);
+        }
+        return -1;
+    }
+
+    double normalizedAutomationValue(float value) const
+    {
+        return automationParameter == 0 ? std::clamp(static_cast<double>(value), 0.0, 1.0) :
+                                          (std::clamp(static_cast<double>(value), -1.0, 1.0) + 1.0) * 0.5;
+    }
+
+    int automationY(int laneY, float value) const
+    {
+        const double normalized = normalizedAutomationValue(value);
+        const int inset = 7;
+        return laneY + automationLaneHeight - inset - static_cast<int>(std::round(
+            normalized * (automationLaneHeight - inset * 2)));
+    }
+
+    float automationValueAtY(int laneY, int y) const
+    {
+        const double normalized = std::clamp(
+            static_cast<double>(laneY + automationLaneHeight - 7 - y) /
+                static_cast<double>(automationLaneHeight - 14), 0.0, 1.0);
+        return static_cast<float>(automationParameter == 0 ? normalized : normalized * 2.0 - 1.0);
+    }
+
+    void drawAutomationLane(QPainter& painter, const InstrumentTrack& track, int trackIndex,
+                            int rowY, int gridWidth) const
+    {
+        const int laneY = rowY + trackHeight;
+        const QRect laneRect(trackHeaderWidth, laneY, gridWidth, automationLaneHeight - 1);
+        painter.fillRect(laneRect, QColor(QStringLiteral("#141a21")));
+        const int top = laneY + 7;
+        const int bottom = laneY + automationLaneHeight - 7;
+        painter.setPen(QPen(QColor(QStringLiteral("#333d48")), 1));
+        painter.drawLine(trackHeaderWidth, top, trackHeaderWidth + gridWidth, top);
+        painter.drawLine(trackHeaderWidth, bottom, trackHeaderWidth + gridWidth, bottom);
+        if (automationParameter == 1)
+        {
+            painter.setPen(QPen(QColor(QStringLiteral("#29323c")), 1, Qt::DashLine));
+            painter.drawLine(trackHeaderWidth, (top + bottom) / 2,
+                             trackHeaderWidth + gridWidth, (top + bottom) / 2);
+        }
+
+        const QVector<AutomationPoint>& points = automationPoints(track);
+        const int right = trackHeaderWidth + gridWidth;
+        QPainterPath curve;
+        curve.moveTo(trackHeaderWidth, automationY(laneY, baseAutomationValue(track)));
+        for (const AutomationPoint& point : points)
+            curve.lineTo(trackHeaderWidth + point.beat * pixelsPerBeat, automationY(laneY, point.value));
+        const float endValue = points.isEmpty() ? baseAutomationValue(track) : points.last().value;
+        curve.lineTo(right, automationY(laneY, endValue));
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(trackColour(trackIndex).lighter(125), 2));
+        painter.drawPath(curve);
+
+        for (qsizetype index = 0; index < points.size(); ++index)
+        {
+            const AutomationPoint& point = points[index];
+            const QPointF center(trackHeaderWidth + point.beat * pixelsPerBeat,
+                                 automationY(laneY, point.value));
+            const bool selected = track.id == selectedAutomationTrackId && index == selectedAutomationPoint;
+            painter.setPen(QPen(selected ? QColor(QStringLiteral("#f2f6f8")) :
+                                          trackColour(trackIndex).lighter(150), selected ? 2 : 1));
+            painter.setBrush(selected ? QColor(QStringLiteral("#f0cf82")) : trackColour(trackIndex));
+            painter.drawEllipse(center, selected ? 5.5 : 4.0, selected ? 5.5 : 4.0);
+        }
+    }
+
     QRectF clipBounds(const MidiClip& clip, int trackIndex) const
     {
         return QRectF(trackHeaderWidth + clip.startBeat * pixelsPerBeat + 2,
-                      rulerHeight + trackIndex * trackHeight + 9,
+                      rulerHeight + trackIndex * currentRowHeight() + 9,
                       std::max(18.0, clip.lengthBeats * pixelsPerBeat - 4), trackHeight - 18);
     }
 
     int clipAt(const QPoint& point) const
     {
-        const int row = (point.y() - rulerHeight) / trackHeight;
+        const int row = (point.y() - rulerHeight) / currentRowHeight();
         if (row < 0 || row >= project.tracks.size())
             return -1;
         const InstrumentTrack& track = project.tracks[row];
@@ -521,7 +831,7 @@ private:
         const double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
                                              quarterNotesPerBar * 16.0);
         const int width = trackHeaderWidth + static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
-        const int height = rulerHeight + std::max(1, static_cast<int>(project.tracks.size())) * trackHeight;
+        const int height = rulerHeight + std::max(1, static_cast<int>(project.tracks.size())) * currentRowHeight();
         setMinimumSize(width, height);
         resize(width, height);
         update();
@@ -540,6 +850,14 @@ private:
     int dragStartX = 0;
     int pixelsPerBeat = 28;
     double playheadBeat = -1.0;
+    int automationParameter = 0;
+    int selectedAutomationPoint = -1;
+    quint64 selectedAutomationTrackId = 0;
+    quint64 automationDragTrackId = 0;
+    QVector<AutomationPoint> automationDragBefore;
+    bool automationViewEnabled = false;
+    bool draggingAutomationPoint = false;
+    bool automationNeedsTrackSelection = false;
     bool movingClip = false;
     bool resizingAudioRegion = false;
     bool resizeLeftEdge = false;
@@ -574,4 +892,9 @@ void ArrangementEditor::setPixelsPerBeat(int pixels)
 void ArrangementEditor::setPlayheadBeat(double beat)
 {
     canvas->setPlayheadBeat(beat);
+}
+
+void ArrangementEditor::setAutomationView(bool enabled, int parameter)
+{
+    canvas->setAutomationView(enabled, parameter);
 }

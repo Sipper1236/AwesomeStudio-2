@@ -16,12 +16,12 @@ Status describes the executable built by the repository's CMake target. Source f
 | Audio recording | Select an input device, record mono/stereo WAV takes, and add them as new Playlist audio tracks; uses count-in when output is available, works without output, and respects project and WAV size limits | Input monitoring, latency compensation, armed tracks, punch recording, take comping |
 | MIDI input | ALSA input device enumeration and note recording on Linux; note on/off, overlapping same-pitch notes, count-in, loop timing, pattern assignment, and undo/redo | Native MIDI backends on other platforms, live monitoring, channel preservation, controller mapping |
 | Plugins and effects | Not implemented in the executable | VST3/CLAP hosting, parameter automation, bundled effects |
-| Automation | Per-track volume and pan keyframes, edited in an undoable beat/value list and linearly interpolated in playback and WAV export | Graphical lanes and curves, write/read modes, plugin parameter automation |
+| Automation | Per-track volume and pan keyframes with graphical Playlist lanes, click-to-add and drag-to-edit points, right-click/Delete removal, undo/redo, and linear playback/render interpolation | Automation write/read modes, curved segments, plugin parameter automation |
 | Collaboration and notation | Not implemented | Score view, collaboration, session interchange |
 
 ## Next slices
 
-1. Add graphical automation lanes, automation recording, and plugin parameter automation with plugin hosting.
+1. Add automation write/read modes and plugin parameter automation with plugin hosting.
 2. Add live MIDI monitoring, controller mapping, and native input backends for other platforms; add audio monitoring, latency compensation, punch recording, and take comping.
 3. Add audio fade curves, crossfades, markers, and portable media packaging or relinking.
 4. Add mixer buses, sends, meters, effects inserts, and a real-time routing graph.

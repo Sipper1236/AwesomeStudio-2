@@ -150,6 +150,8 @@ private:
     QComboBox* audioInputControl = nullptr;
     QAction* recordAction = nullptr;
     QAction* midiRecordAction = nullptr;
+    QAction* automationViewAction = nullptr;
+    QComboBox* automationLaneParameterControl = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
     std::unique_ptr<MidiInput> midiInput;
     QComboBox* midiInputControl = nullptr;

@@ -228,6 +228,18 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(arrangementEditor, &ArrangementEditor::audioRegionTrimmed, this,
             [this](quint64 trackId, quint64 clipId, double startBeat, double lengthBeats, qint64 audioStartFrame)
             { trimAudioRegion(trackId, clipId, startBeat, lengthBeats, audioStartFrame); });
+    connect(arrangementEditor, &ArrangementEditor::automationChanged, this,
+            [this](quint64 trackId, int parameter, const QVector<AutomationPoint>& before,
+                   const QVector<AutomationPoint>& after)
+    {
+        if (project.findTrack(trackId) == nullptr)
+            return;
+        undoStack.push(new AutomationEditCommand(this, trackId, parameter, before, after));
+    });
+    connect(arrangementEditor, &ArrangementEditor::automationPointLimitReached, this, [this]
+    {
+        statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
+    });
     connect(arrangementEditor, &ArrangementEditor::trackSelected, this,
             [this](quint64 trackId) { selectTrack(trackId); });
     connect(&undoStack, &QUndoStack::cleanChanged, this, [this] { refreshDirtyState(); });
@@ -557,6 +569,33 @@ void MainWindow::createToolBars()
         audioEngine.setProject(project);
         settingsDirty = true;
         refreshDirtyState();
+    });
+
+    arrangementBar->addSeparator();
+    automationViewAction = new QAction(tr("Automation lanes"), this);
+    automationViewAction->setCheckable(true);
+    automationViewAction->setToolTip(tr("Show and edit volume or pan automation in the Playlist"));
+    arrangementBar->addAction(automationViewAction);
+    automationLaneParameterControl = new QComboBox(arrangementBar);
+    automationLaneParameterControl->addItem(tr("Volume"), 0);
+    automationLaneParameterControl->addItem(tr("Pan"), 1);
+    automationLaneParameterControl->setFixedWidth(88);
+    automationLaneParameterControl->setEnabled(false);
+    automationLaneParameterControl->setToolTip(tr("Automation parameter shown in the Playlist lanes"));
+    arrangementBar->addWidget(automationLaneParameterControl);
+    connect(automationViewAction, &QAction::toggled, this, [this](bool enabled)
+    {
+        automationLaneParameterControl->setEnabled(enabled);
+        arrangementEditor->setAutomationView(enabled,
+                                              automationLaneParameterControl->currentData().toInt());
+        if (enabled)
+            statusBar()->showMessage(tr("Click a lane to add a point, drag points to edit, and right-click or press Delete to remove one."), 6000);
+    });
+    connect(automationLaneParameterControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index)
+    {
+        arrangementEditor->setAutomationView(automationViewAction->isChecked(),
+                                              automationLaneParameterControl->itemData(index).toInt());
     });
 
     auto* transportBar = addToolBar(tr("Transport"));
@@ -1535,6 +1574,8 @@ void MainWindow::applyAutomationHistory(quint64 trackId, int parameter,
     else
         return;
     audioEngine.setProject(project);
+    arrangementEditor->setProject(project);
+    arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     refreshAutomationEditor();
     refreshDirtyState();
 }

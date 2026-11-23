@@ -15,6 +15,7 @@ public:
     void setSelection(quint64 trackId, quint64 clipId);
     void setPixelsPerBeat(int pixels);
     void setPlayheadBeat(double beat);
+    void setAutomationView(bool enabled, int parameter);
 
 signals:
     void clipSelected(quint64 trackId, quint64 clipId);
@@ -25,6 +26,10 @@ signals:
     void audioRegionTrimmed(quint64 trackId, quint64 clipId, double startBeat,
                             double lengthBeats, qint64 audioStartFrame);
     void trackSelected(quint64 trackId);
+    void automationChanged(quint64 trackId, int parameter,
+                           const QVector<AutomationPoint>& before,
+                           const QVector<AutomationPoint>& after);
+    void automationPointLimitReached();
 
 private:
     class Canvas;
