@@ -713,6 +713,8 @@ void MainWindow::createMenus()
     QMenu* editMenu = menuBar()->addMenu(tr("&Edit"));
     editMenu->addAction(undoAction);
     editMenu->addAction(redoAction);
+    editMenu->addSeparator();
+    editMenu->addAction(tr("Quantize note starts to grid"), midiEditor, &MidiEditor::quantizeNotesToGrid);
 
     QMenu* patternMenu = menuBar()->addMenu(tr("&Track"));
     patternMenu->addAction(addTrackAction);

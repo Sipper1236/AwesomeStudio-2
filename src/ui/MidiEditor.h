@@ -15,6 +15,7 @@ public:
     void setPatternLengthBeats(double beats);
     void setTimeSignature(int beatsPerBar, int beatUnit);
     void setSnap(double beatStep);
+    void quantizeNotesToGrid();
     void setPixelsPerBeat(int pixels);
     void setPlayheadBeat(double beat);
 

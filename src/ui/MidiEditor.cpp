@@ -92,6 +92,29 @@ public:
         snap = std::clamp(beatStep, 1.0 / 64.0, 4.0);
     }
 
+    void quantizeNotesToGrid()
+    {
+        if (notes.isEmpty())
+            return;
+
+        const QVector<MidiNote> before = notes;
+        const bool quantizeAll = selected.isEmpty();
+        for (MidiNote& note : notes)
+        {
+            if (!quantizeAll && !selected.contains(note.id))
+                continue;
+            note.startBeat = std::clamp(std::round(note.startBeat / snap) * snap, 0.0,
+                                        std::max(0.0, patternLength - note.lengthBeats));
+        }
+        std::sort(notes.begin(), notes.end(), [](const MidiNote& left, const MidiNote& right)
+        {
+            if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
+            return left.pitch < right.pitch;
+        });
+        commitIfChanged(before);
+        update();
+    }
+
     void setPixelsPerBeat(int pixels)
     {
         pixelsPerBeat = std::clamp(pixels, 36, 180);
@@ -524,6 +547,11 @@ void MidiEditor::setTimeSignature(int beatsPerBar, int beatUnit)
 void MidiEditor::setSnap(double beatStep)
 {
     canvas->setSnap(beatStep);
+}
+
+void MidiEditor::quantizeNotesToGrid()
+{
+    canvas->quantizeNotesToGrid();
 }
 
 void MidiEditor::setPixelsPerBeat(int pixels)

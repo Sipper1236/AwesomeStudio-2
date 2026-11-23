@@ -5,7 +5,7 @@ Status describes the executable built by the repository's CMake target. Source f
 | Area | Current status | Gap to a full DAW |
 |---|---|---|
 | Build and desktop shell | Working Qt 6 app with menus, docks, and saved window layout | Packaging, crash recovery, accessibility review |
-| Piano roll | Per-clip full MIDI pitch range, snap grid, draw/move/resize/delete, Shift multi-select, velocity lane, MIDI-note undo/redo, editable clip length | Quantize, scale/chord tools, ghost notes |
+| Piano roll | Per-clip full MIDI pitch range, snap grid, draw/move/resize/delete, Shift multi-select, velocity lane, MIDI-note undo/redo, editable clip length, quantize selected or all note starts to the current grid | Scale/chord tools, ghost notes |
 | Instruments | Multiple polyphonic synth tracks plus a four-pad drum rack with synthesized voices or one assigned WAV sample per pad | ADSR/filter controls, presets, velocity layers, pad tuning/envelopes, plugin instruments |
 | Transport | Arrangement play/stop, 20–300 BPM, common editable time signatures, song loop, off/1–4 bar count-in, accented metronome | Punch recording, tempo maps, transport markers |
 | Projects | Versioned v8 `.aws` JSON save/open with atomic writes; v1 projects migrate to a track and clip; v2–v7 files gain compatible meter/instrument/transport defaults; audio sources reopen from saved paths and missing or over-budget media stay offline; shared source cache with 512 MiB project memory cap | Autosave, backups, portable media packaging, broader migration tooling |
