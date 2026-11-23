@@ -22,7 +22,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Basic ascending arpeggiation for selected chord notes on the current grid
 - [x] Exact single-note pitch, start, duration, velocity, and channel properties
 - [x] Upward strumming for selected chord notes
-- [ ] Arpeggiator direction, octave-range, gate, and velocity controls
+- [x] Arpeggiator direction, octave-range, and gate controls
+- [ ] Arpeggiator velocity patterns
 - [x] Built-in synth preview and arrangement playback
 - [x] Project save/open and stereo WAV export
 - [x] Playlist with multi-track MIDI clips and basic mixer controls

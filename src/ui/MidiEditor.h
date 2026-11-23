@@ -20,7 +20,7 @@ public:
     void setGhostNotesEnabled(bool enabled);
     void quantizeNotesToGrid();
     bool addChordToSelection(const QVector<int>& semitoneIntervals);
-    bool arpeggiateSelectedChord();
+    bool arpeggiateSelectedChord(int direction, int octaveRange, int gatePercent);
     bool strumSelectedChord();
     void editSelectedNoteProperties();
     void setPixelsPerBeat(int pixels);

@@ -209,7 +209,7 @@ public:
         return true;
     }
 
-    bool arpeggiateSelectedChord()
+    bool arpeggiateSelectedChord(int direction, int octaveRange, int gatePercent)
     {
         QVector<MidiNote> chord;
         for (const MidiNote& note : notes)
@@ -249,6 +249,39 @@ public:
         if (chord.size() < 2)
             return false;
 
+        direction = std::clamp(direction, 0, 2);
+        octaveRange = std::clamp(octaveRange, 1, 4);
+        gatePercent = std::clamp(gatePercent, 10, 100);
+        QVector<MidiNote> pitchOrder;
+        for (int octave = 0; octave < octaveRange; ++octave)
+        {
+            for (const MidiNote& note : chord)
+            {
+                MidiNote octaveNote = note;
+                octaveNote.pitch += octave * 12;
+                if (octaveNote.pitch <= 127)
+                    pitchOrder.push_back(octaveNote);
+            }
+        }
+        if (pitchOrder.size() < 2)
+            return false;
+
+        QVector<MidiNote> sequence;
+        if (direction == 1)
+        {
+            for (auto it = pitchOrder.crbegin(); it != pitchOrder.crend(); ++it)
+                sequence.push_back(*it);
+        }
+        else
+        {
+            sequence = pitchOrder;
+            if (direction == 2)
+            {
+                for (int index = pitchOrder.size() - 2; index > 0; --index)
+                    sequence.push_back(pitchOrder[index]);
+            }
+        }
+
         const QVector<MidiNote> before = notes;
         quint64 id = nextId();
         notes.erase(std::remove_if(notes.begin(), notes.end(), [this](const MidiNote& note)
@@ -261,10 +294,10 @@ public:
             const double noteStart = startBeat + step * snap;
             if (noteStart >= endBeat)
                 break;
-            MidiNote arpNote = chord[step % chord.size()];
+            MidiNote arpNote = sequence[step % sequence.size()];
             arpNote.id = id++;
             arpNote.startBeat = noteStart;
-            arpNote.lengthBeats = std::min(snap, endBeat - noteStart);
+            arpNote.lengthBeats = std::min(snap * gatePercent / 100.0, endBeat - noteStart);
             notes.push_back(arpNote);
             selected.insert(arpNote.id);
         }
@@ -927,9 +960,9 @@ bool MidiEditor::addChordToSelection(const QVector<int>& semitoneIntervals)
     return canvas->addChordToSelection(semitoneIntervals);
 }
 
-bool MidiEditor::arpeggiateSelectedChord()
+bool MidiEditor::arpeggiateSelectedChord(int direction, int octaveRange, int gatePercent)
 {
-    return canvas->arpeggiateSelectedChord();
+    return canvas->arpeggiateSelectedChord(direction, octaveRange, gatePercent);
 }
 
 bool MidiEditor::strumSelectedChord()

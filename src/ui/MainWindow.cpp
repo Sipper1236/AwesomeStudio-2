@@ -16,6 +16,8 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QDockWidget>
 #include <QDir>
@@ -35,6 +37,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QSettings>
 #include <QSlider>
 #include <QStatusBar>
@@ -1143,10 +1146,39 @@ void MainWindow::createMenus()
     addChordAction(tr("Dominant 7th"), {0, 4, 7, 10});
     addChordAction(tr("Major 7th"), {0, 4, 7, 11});
     addChordAction(tr("Minor 7th"), {0, 3, 7, 10});
-    QAction* arpeggiateAction = editMenu->addAction(tr("Arpeggiate selected chord upward"));
+    QAction* arpeggiateAction = editMenu->addAction(tr("Arpeggiate selected chord…"));
     connect(arpeggiateAction, &QAction::triggered, this, [this]
     {
-        if (midiEditor->arpeggiateSelectedChord())
+        QDialog dialog(this);
+        dialog.setWindowTitle(tr("Arpeggiator"));
+        auto* form = new QFormLayout(&dialog);
+        auto* directionControl = new QComboBox(&dialog);
+        directionControl->addItem(tr("Up"), 0);
+        directionControl->addItem(tr("Down"), 1);
+        directionControl->addItem(tr("Up and down"), 2);
+        form->addRow(tr("Direction"), directionControl);
+
+        auto* octaveControl = new QSpinBox(&dialog);
+        octaveControl->setRange(1, 4);
+        octaveControl->setValue(1);
+        octaveControl->setSuffix(tr(" octaves"));
+        form->addRow(tr("Range"), octaveControl);
+
+        auto* gateControl = new QSpinBox(&dialog);
+        gateControl->setRange(10, 100);
+        gateControl->setValue(90);
+        gateControl->setSuffix(QStringLiteral("%"));
+        form->addRow(tr("Gate"), gateControl);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        form->addRow(buttons);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+
+        if (midiEditor->arpeggiateSelectedChord(directionControl->currentData().toInt(),
+                                                octaveControl->value(), gateControl->value()))
             statusBar()->showMessage(tr("Arpeggiated the selected chord on the current grid"), 2000);
         else
             statusBar()->showMessage(tr("Select chord notes with the same start and length"), 2400);
