@@ -7689,16 +7689,22 @@ void MainWindow::importMidi()
 
 void MainWindow::exportMidi()
 {
+    const QString format1Filter = tr("Format 1 multitrack MIDI (*.mid *.midi)");
+    const QString format0Filter = tr("Format 0 single-track MIDI (*.mid *.midi)");
+    QString selectedFilter = format1Filter;
     QString path = QFileDialog::getSaveFileName(this, tr("Export arrangement to MIDI"),
                                                  project.title + QStringLiteral(".mid"),
-                                                 tr("Standard MIDI files (*.mid *.midi)"));
+                                                 format1Filter + QStringLiteral(";;") + format0Filter,
+                                                 &selectedFilter);
     if (path.isEmpty())
         return;
     if (QFileInfo(path).suffix().isEmpty())
         path += QStringLiteral(".mid");
 
     QString error;
-    if (!MidiFile::save(path, project, &error))
+    const MidiExportFormat format = selectedFilter == format0Filter
+        ? MidiExportFormat::Format0 : MidiExportFormat::Format1;
+    if (!MidiFile::save(path, project, &error, format))
     {
         QMessageBox::critical(this, tr("Could not export MIDI"), error);
         return;

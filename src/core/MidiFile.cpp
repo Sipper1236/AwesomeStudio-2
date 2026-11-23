@@ -571,6 +571,130 @@ QByteArray makeInstrumentTrack(const InstrumentTrack& instrument, int channel,
     appendMeta(track, 0x2f, {});
     return track;
 }
+
+bool mergeMidiTracks(const QVector<QByteArray>& sourceTracks, qint64 songEndTick,
+                     QByteArray& mergedTrack, QString* error)
+{
+    struct TimedEvent
+    {
+        qint64 tick = 0;
+        int priority = 0;
+        QByteArray bytes;
+    };
+
+    QVector<TimedEvent> events;
+    for (qsizetype trackIndex = 0; trackIndex < sourceTracks.size(); ++trackIndex)
+    {
+        const QByteArray& source = sourceTracks[trackIndex];
+        int position = 0;
+        qint64 absoluteTick = 0;
+        while (position < source.size())
+        {
+            quint32 delta = 0;
+            if (!readVariableLength(source, position, source.size(), delta) ||
+                absoluteTick > std::numeric_limits<qint64>::max() - delta)
+            {
+                setError(error, QStringLiteral("A generated MIDI track contains an invalid delta."));
+                return false;
+            }
+            absoluteTick += delta;
+            const int eventStart = position;
+            quint8 status = 0;
+            if (!readByte(source, position, source.size(), status) || status < 0x80)
+            {
+                setError(error, QStringLiteral("A generated MIDI track contains an invalid event."));
+                return false;
+            }
+
+            int priority = 2;
+            if (status == 0xff)
+            {
+                quint8 type = 0;
+                quint32 payloadSize = 0;
+                if (!readByte(source, position, source.size(), type) ||
+                    !readVariableLength(source, position, source.size(), payloadSize) ||
+                    payloadSize > static_cast<quint32>(source.size() - position))
+                {
+                    setError(error, QStringLiteral("A generated MIDI track contains malformed metadata."));
+                    return false;
+                }
+                if (type == 0x2f)
+                {
+                    position += static_cast<int>(payloadSize);
+                    break;
+                }
+                if (trackIndex > 0 && type == 0x03)
+                {
+                    position += static_cast<int>(payloadSize);
+                    continue;
+                }
+                position += static_cast<int>(payloadSize);
+                priority = 0;
+            }
+            else if (status < 0xf0)
+            {
+                const quint8 type = status & 0xf0;
+                const int dataBytes = type == 0xc0 || type == 0xd0 ? 1 : 2;
+                quint8 firstData = 0;
+                quint8 secondData = 0;
+                if (!readByte(source, position, source.size(), firstData) || firstData >= 0x80 ||
+                    (dataBytes == 2 &&
+                     (!readByte(source, position, source.size(), secondData) || secondData >= 0x80)))
+                {
+                    setError(error, QStringLiteral("A generated MIDI track contains malformed channel data."));
+                    return false;
+                }
+                if (type == 0xb0)
+                    priority = 1;
+                else if (type == 0x80 || (type == 0x90 && secondData == 0))
+                    priority = 3;
+                else if (type == 0x90)
+                    priority = 4;
+                else
+                    priority = 2;
+            }
+            else
+            {
+                setError(error, QStringLiteral("A generated MIDI track contains an unsupported event."));
+                return false;
+            }
+
+            events.push_back({absoluteTick, priority,
+                              source.mid(eventStart, position - eventStart)});
+        }
+    }
+
+    std::stable_sort(events.begin(), events.end(), [](const TimedEvent& left, const TimedEvent& right)
+    {
+        if (left.tick != right.tick) return left.tick < right.tick;
+        return left.priority < right.priority;
+    });
+
+    mergedTrack.clear();
+    qint64 previousTick = 0;
+    for (const TimedEvent& event : events)
+    {
+        const qint64 tick = std::max(previousTick, event.tick);
+        if (tick - previousTick > 0x0fffffff)
+        {
+            setError(error, QStringLiteral("The MIDI file contains an event gap that is too long."));
+            return false;
+        }
+        appendVariableLength(mergedTrack, static_cast<quint32>(tick - previousTick));
+        mergedTrack.append(event.bytes);
+        previousTick = tick;
+    }
+
+    const qint64 finalTick = std::max(previousTick, songEndTick);
+    if (finalTick - previousTick > 0x0fffffff)
+    {
+        setError(error, QStringLiteral("The MIDI file is too long to encode in one track."));
+        return false;
+    }
+    appendVariableLength(mergedTrack, static_cast<quint32>(finalTick - previousTick));
+    appendMeta(mergedTrack, 0x2f, {});
+    return true;
+}
 }
 
 bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
@@ -944,8 +1068,14 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     return true;
 }
 
-bool MidiFile::save(const QString& path, const ProjectData& project, QString* error)
+bool MidiFile::save(const QString& path, const ProjectData& project, QString* error,
+                    MidiExportFormat format)
 {
+    if (format != MidiExportFormat::Format0 && format != MidiExportFormat::Format1)
+    {
+        setError(error, QStringLiteral("Choose MIDI format 0 or format 1."));
+        return false;
+    }
     ProjectData safeProject = project;
     safeProject.normalize();
     const double tempoMapEndBeat = safeProject.tempoChanges.isEmpty() ? 0.0 :
@@ -953,16 +1083,9 @@ bool MidiFile::save(const QString& path, const ProjectData& project, QString* er
     const qint64 songEndTick = std::llround(
         std::max(safeProject.songLengthBeats(), tempoMapEndBeat) * exportPpqn);
 
-    QByteArray file;
-    file.append("MThd", 4);
-    appendBigEndian32(file, 6);
-    appendBigEndian16(file, 1);
-    int midiTrackCount = 1;
-    for (const InstrumentTrack& track : safeProject.tracks)
-        if (track.instrumentType != InstrumentType::Audio) ++midiTrackCount;
-    appendBigEndian16(file, static_cast<quint16>(midiTrackCount));
-    appendBigEndian16(file, exportPpqn);
-    appendTrackChunk(file, makeConductorTrack(safeProject, songEndTick));
+    QVector<QByteArray> midiTracks;
+    midiTracks.reserve(safeProject.tracks.size() + 1);
+    midiTracks.push_back(makeConductorTrack(safeProject, songEndTick));
     int synthChannel = 0;
     for (const InstrumentTrack& track : safeProject.tracks)
     {
@@ -974,8 +1097,28 @@ bool MidiFile::save(const QString& path, const ProjectData& project, QString* er
             const int channelSlot = synthChannel++ % 15;
             channel = channelSlot < 9 ? channelSlot : channelSlot + 1;
         }
-        appendTrackChunk(file, makeInstrumentTrack(track, channel,
+        midiTracks.push_back(makeInstrumentTrack(track, channel,
             safeProject.pitchBendRangeSemitones, songEndTick));
+    }
+
+    QByteArray file;
+    file.append("MThd", 4);
+    appendBigEndian32(file, 6);
+    appendBigEndian16(file, static_cast<quint16>(format));
+    appendBigEndian16(file, static_cast<quint16>(format == MidiExportFormat::Format0
+        ? 1 : midiTracks.size()));
+    appendBigEndian16(file, exportPpqn);
+    if (format == MidiExportFormat::Format0)
+    {
+        QByteArray mergedTrack;
+        if (!mergeMidiTracks(midiTracks, songEndTick, mergedTrack, error))
+            return false;
+        appendTrackChunk(file, mergedTrack);
+    }
+    else
+    {
+        for (const QByteArray& track : midiTracks)
+            appendTrackChunk(file, track);
     }
 
     QSaveFile output(path);
