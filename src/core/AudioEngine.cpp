@@ -31,6 +31,15 @@ float oscillatorSample(SynthWaveform waveform, double phase)
             return static_cast<float>(std::sin(phase * twoPi));
     }
 }
+
+int drumPadForPitch(int pitch)
+{
+    if (pitch == 35 || pitch == 36) return 0;
+    if (pitch == 38 || pitch == 40) return 1;
+    if (pitch == 42 || pitch == 44) return 2;
+    if (pitch == 46) return 3;
+    return -1;
+}
 }
 
 class AudioEngine::AudioStream final : public QIODevice
@@ -217,6 +226,232 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
     }
 }
 
+void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity,
+                                        const InstrumentTrack& track)
+{
+    if (track.instrumentType == InstrumentType::Audio)
+        return;
+
+    LiveMidiEvent event;
+    event.noteOn = true;
+    event.channel = std::clamp(channel, 0, 15);
+    event.pitch = std::clamp(midiPitch, 0, 127);
+    event.velocity = std::clamp(velocity, 1, 127);
+    event.percussion = track.instrumentType == InstrumentType::DrumRack;
+    event.waveform = track.waveform;
+    event.gain = track.muted ? 0.0f : std::clamp(track.gain, 0.0f, 1.0f);
+    event.pan = std::clamp(track.pan, -1.0f, 1.0f);
+    event.attackSeconds = std::clamp(track.attackSeconds, 0.0f, 5.0f);
+    event.decaySeconds = std::clamp(track.decaySeconds, 0.0f, 5.0f);
+    event.sustainLevel = std::clamp(track.sustainLevel, 0.0f, 1.0f);
+    event.releaseSeconds = std::clamp(track.releaseSeconds, 0.001f, 5.0f);
+    if (event.percussion)
+    {
+        const int pad = drumPadForPitch(event.pitch);
+        if (pad >= 0)
+            event.sample = track.drumSamples[static_cast<size_t>(pad)].source;
+    }
+    enqueueLiveMidiEvent(event);
+}
+
+void AudioEngine::triggerLiveMidiNoteOff(int channel, int midiPitch)
+{
+    LiveMidiEvent event;
+    event.channel = std::clamp(channel, 0, 15);
+    event.pitch = std::clamp(midiPitch, 0, 127);
+    enqueueLiveMidiEvent(event);
+}
+
+void AudioEngine::stopLiveMidiNotes()
+{
+    liveMidiPanic.store(true, std::memory_order_release);
+}
+
+bool AudioEngine::enqueueLiveMidiEvent(const LiveMidiEvent& event)
+{
+    const size_t writeIndex = liveMidiWriteIndex.load(std::memory_order_relaxed);
+    const size_t nextWriteIndex = (writeIndex + 1) % liveMidiQueueCapacity;
+    if (nextWriteIndex == liveMidiReadIndex.load(std::memory_order_acquire))
+    {
+        // Discard queued events and release every voice on the audio thread so a lost note-off
+        // cannot leave a key hanging indefinitely.
+        liveMidiPanic.store(true, std::memory_order_release);
+        return false;
+    }
+
+    liveMidiEvents[writeIndex] = event;
+    liveMidiWriteIndex.store(nextWriteIndex, std::memory_order_release);
+    return true;
+}
+
+void AudioEngine::clearLiveMidiVoices()
+{
+    for (LiveMidiVoice& voice : liveMidiVoices)
+        voice = LiveMidiVoice{};
+}
+
+void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
+{
+    if (!event.noteOn)
+    {
+        LiveMidiVoice* matchedVoice = nullptr;
+        for (LiveMidiVoice& voice : liveMidiVoices)
+        {
+            if (!voice.active || !voice.held || voice.channel != event.channel || voice.pitch != event.pitch)
+                continue;
+            if (matchedVoice == nullptr || voice.serial > matchedVoice->serial)
+                matchedVoice = &voice;
+        }
+        if (matchedVoice == nullptr || matchedVoice->percussion)
+            return;
+
+        const qint64 minimumGateFrames = std::min(matchedVoice->attackFrames,
+            std::max<qint64>(1, static_cast<qint64>(std::llround(outputSampleRate * 0.02))));
+        const qint64 releaseFrame = std::max(frame, matchedVoice->startFrame + minimumGateFrames);
+        const qint64 age = std::max<qint64>(0, releaseFrame - matchedVoice->startFrame);
+        float envelope = 1.0f;
+        if (age < matchedVoice->attackFrames)
+            envelope = static_cast<float>(age) / static_cast<float>(matchedVoice->attackFrames);
+        else if (matchedVoice->decayFrames > 0 &&
+                 age - matchedVoice->attackFrames < matchedVoice->decayFrames)
+        {
+            const float progress = static_cast<float>(age - matchedVoice->attackFrames) /
+                                   static_cast<float>(matchedVoice->decayFrames);
+            envelope = 1.0f - progress * (1.0f - matchedVoice->sustainLevel);
+        }
+        else
+            envelope = matchedVoice->sustainLevel;
+        matchedVoice->held = false;
+        matchedVoice->releaseFrame = releaseFrame;
+        matchedVoice->releaseStartLevel = envelope;
+        return;
+    }
+
+    LiveMidiVoice* target = nullptr;
+    for (LiveMidiVoice& voice : liveMidiVoices)
+    {
+        if (!voice.active)
+        {
+            target = &voice;
+            break;
+        }
+        if (target == nullptr || voice.serial < target->serial)
+            target = &voice;
+    }
+    if (target == nullptr)
+        return;
+
+    const double panAngle = (static_cast<double>(event.pan) + 1.0) * 0.7853981633974483;
+    *target = LiveMidiVoice{};
+    target->active = true;
+    target->held = true;
+    target->percussion = event.percussion;
+    target->channel = event.channel;
+    target->pitch = event.pitch;
+    target->startFrame = frame;
+    target->attackFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+        event.attackSeconds * outputSampleRate)));
+    target->decayFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
+        event.decaySeconds * outputSampleRate)));
+    target->releaseFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+        event.releaseSeconds * outputSampleRate)));
+    target->serial = nextLiveMidiSerial++;
+    target->frequency = 440.0 * std::pow(2.0, (event.pitch - 69) / 12.0);
+    target->amplitude = (event.percussion ? 0.48f : 0.22f) *
+                        static_cast<float>(event.velocity) / 127.0f * event.gain;
+    target->sustainLevel = event.sustainLevel;
+    target->leftGain = static_cast<float>(std::cos(panAngle));
+    target->rightGain = static_cast<float>(std::sin(panAngle));
+    target->waveform = event.waveform;
+    target->sample = event.sample;
+}
+
+void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
+{
+    for (LiveMidiVoice& voice : liveMidiVoices)
+    {
+        if (!voice.active)
+            continue;
+
+        const qint64 age = frame - voice.startFrame;
+        if (age < 0)
+            continue;
+
+        if (voice.sample != nullptr)
+        {
+            const double sourcePosition = static_cast<double>(age) * voice.sample->sampleRate /
+                                          outputSampleRate;
+            const qint64 firstFrame = static_cast<qint64>(sourcePosition);
+            if (firstFrame >= voice.sample->frameCount())
+            {
+                voice = LiveMidiVoice{};
+                continue;
+            }
+            if (firstFrame < 0 || voice.sample->channelCount < 1 || voice.sample->channelCount > 2)
+                continue;
+            const qint64 secondFrame = std::min(firstFrame + 1, voice.sample->frameCount() - 1);
+            const float fraction = static_cast<float>(sourcePosition - firstFrame);
+            const int channels = voice.sample->channelCount;
+            const auto sampleAt = [&](qint64 sampleFrame, int channel)
+            {
+                const int sourceChannel = channels == 1 ? 0 : channel;
+                return voice.sample->samples[
+                    static_cast<qsizetype>(sampleFrame * channels + sourceChannel)];
+            };
+            const float left = sampleAt(firstFrame, 0) * (1.0f - fraction) +
+                               sampleAt(secondFrame, 0) * fraction;
+            const float right = channels == 1 ? left :
+                sampleAt(firstFrame, 1) * (1.0f - fraction) + sampleAt(secondFrame, 1) * fraction;
+            mixed.left += left * voice.amplitude * voice.leftGain;
+            mixed.right += right * voice.amplitude * voice.rightGain;
+            continue;
+        }
+
+        float envelope = 1.0f;
+        if (voice.percussion)
+        {
+            envelope = std::min(1.0f, static_cast<float>(age) /
+                                       std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
+            const double duration = voice.pitch == 46 ? 0.72 :
+                (voice.pitch == 42 || voice.pitch == 44 ? 0.22 : 0.48);
+            if (age >= static_cast<qint64>(outputSampleRate * duration))
+            {
+                voice = LiveMidiVoice{};
+                continue;
+            }
+        }
+        else if (voice.releaseFrame >= 0 && frame >= voice.releaseFrame)
+        {
+            const qint64 releaseAge = frame - voice.releaseFrame;
+            if (releaseAge >= voice.releaseFrames)
+            {
+                voice = LiveMidiVoice{};
+                continue;
+            }
+            envelope = voice.releaseStartLevel * std::max(0.0f, 1.0f -
+                static_cast<float>(releaseAge) / static_cast<float>(voice.releaseFrames));
+        }
+        else if (age < voice.attackFrames)
+            envelope = static_cast<float>(age) / static_cast<float>(voice.attackFrames);
+        else if (voice.decayFrames > 0 && age - voice.attackFrames < voice.decayFrames)
+        {
+            const float progress = static_cast<float>(age - voice.attackFrames) /
+                                   static_cast<float>(voice.decayFrames);
+            envelope = 1.0f - progress * (1.0f - voice.sustainLevel);
+        }
+        else
+            envelope = voice.sustainLevel;
+
+        const float voiceSample = voice.percussion
+            ? renderPercussionSample(voice.pitch, age, voice.startFrame, outputSampleRate) *
+                  voice.amplitude * envelope
+            : oscillatorSample(voice.waveform, static_cast<double>(age) * voice.frequency / outputSampleRate) *
+                  voice.amplitude * envelope;
+        mixed.left += voiceSample * voice.leftGain;
+        mixed.right += voiceSample * voice.rightGain;
+    }
+}
+
 void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform waveform, float pan,
                                  bool percussion)
 {
@@ -314,6 +549,23 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     const qint64 clockStart = audioClockFrames.load(std::memory_order_relaxed);
     const auto sampleFormat = outputFormat->sampleFormat();
 
+    if (liveMidiPanic.exchange(false, std::memory_order_acq_rel))
+    {
+        clearLiveMidiVoices();
+        const size_t writeIndex = liveMidiWriteIndex.load(std::memory_order_acquire);
+        liveMidiReadIndex.store(writeIndex, std::memory_order_release);
+    }
+    size_t midiReadIndex = liveMidiReadIndex.load(std::memory_order_relaxed);
+    size_t midiWriteIndex = liveMidiWriteIndex.load(std::memory_order_acquire);
+    while (midiReadIndex != midiWriteIndex)
+    {
+        const LiveMidiEvent event = liveMidiEvents[midiReadIndex];
+        midiReadIndex = (midiReadIndex + 1) % liveMidiQueueCapacity;
+        liveMidiReadIndex.store(midiReadIndex, std::memory_order_release);
+        applyLiveMidiEvent(event, clockStart);
+        midiWriteIndex = liveMidiWriteIndex.load(std::memory_order_acquire);
+    }
+
     for (int frameIndex = 0; frameIndex < frames; ++frameIndex)
     {
         if (playingState && !project->loopEnabled && playbackFrame >= patternFrames + releaseTailFrames)
@@ -327,6 +579,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
 
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;
+        renderLiveMidiVoices(mixed, clockFrame);
         const int preview = previewPitch.load(std::memory_order_acquire);
         const qint64 previewStart = previewStartFrame.load(std::memory_order_acquire);
         const qint64 previewEnd = previewEndFrame.load(std::memory_order_acquire);

@@ -14,7 +14,7 @@ Status describes the executable built by the repository's CMake target. Source f
 | Step sequencing | 16-step per-bar editor with kick, snare, closed-hat, and open-hat lanes; note edits share the piano-roll undo history; each pad can load a WAV or use its synthesized voice | Variable step divisions, pattern chaining, per-step probability/ratchets, velocity layers, sample start/loop controls |
 | Mixer | Per-track level, pan, mute, solo, and master level; track volume/pan automation is applied to playback and WAV export | Buses, sends, inserts, meters, routing graph, groups, effects |
 | Audio recording | Select an input device, record mono/stereo WAV takes, and add them as new Playlist audio tracks; uses count-in when output is available, works without output, and respects project and WAV size limits | Input monitoring, latency compensation, armed tracks, punch recording, take comping |
-| MIDI input | ALSA input device enumeration and note recording on Linux; note on/off, overlapping same-pitch notes, count-in, loop timing, pattern assignment, and undo/redo | Native MIDI backends on other platforms, live monitoring, channel preservation, controller mapping |
+| MIDI input | ALSA input device enumeration, polyphonic live monitoring for synth and sampled drum-rack notes, and note recording on Linux; note on/off, overlapping same-pitch notes, count-in, loop timing, pattern assignment, and undo/redo | Native MIDI backends on other platforms, channel preservation in clips, controller mapping |
 | Plugins and effects | Not implemented in the executable | VST3/CLAP hosting, parameter automation, bundled effects |
 | Automation | Per-track volume and pan keyframes with graphical Playlist lanes, click-to-add and drag-to-edit points, right-click/Delete removal, undo/redo, linear playback/render interpolation, and touch recording from Mixer controls during playback | Latch/trim modes, curved segments, plugin parameter automation |
 | Collaboration and notation | Not implemented | Score view, collaboration, session interchange |
@@ -22,7 +22,7 @@ Status describes the executable built by the repository's CMake target. Source f
 ## Next slices
 
 1. Add automation latch/trim modes and plugin parameter automation with plugin hosting.
-2. Add live MIDI monitoring, controller mapping, and native input backends for other platforms; add audio monitoring, latency compensation, punch recording, and take comping.
+2. Add controller mapping and native MIDI input backends for other platforms; add audio monitoring, latency compensation, punch recording, and take comping.
 3. Add audio fade curves, crossfades, markers, and portable media packaging or relinking.
 4. Add mixer buses, sends, meters, effects inserts, and a real-time routing graph.
 5. Add recovery, platform packaging, and a test suite.

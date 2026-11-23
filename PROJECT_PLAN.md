@@ -6,7 +6,7 @@ Build a pattern-first digital audio workstation with a fast MIDI workflow and a 
 
 ## Shipped foundation
 
-The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, Linux ALSA MIDI input recording, per-track Synth ADSR envelopes and volume/pan keyframe automation, per-clip piano rolls, waveform display, audio edge trimming and linear fades, a 16-step drum sequencer with four assignable sample pads, editable MIDI clip lengths and common time signatures, MIDI import/export, basic track mixing, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
+The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, Linux ALSA MIDI input monitoring and recording, per-track Synth ADSR envelopes and volume/pan keyframe automation, per-clip piano rolls, waveform display, audio edge trimming and linear fades, a 16-step drum sequencer with four assignable sample pads, editable MIDI clip lengths and common time signatures, MIDI import/export, basic track mixing, project save/open, and WAV export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
 
 ## Roadmap
 
@@ -28,8 +28,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Per-track Synth ADSR envelope controls in live playback and render
 - [x] Undoable per-track volume and pan keyframes with linear interpolation in live playback and WAV render
 - [x] Basic mono/stereo WAV input recording to a new audio track, aligned after count-in when playback is available
-- [x] Basic MIDI note recording from ALSA input on Linux
-- [ ] MIDI input monitoring, controller mapping, and native input backends for other platforms
+- [x] Live MIDI monitoring and basic note recording from ALSA input on Linux
+- [ ] Controller mapping and native input backends for other platforms
 
 ### 2. Arrangement and mixing
 
@@ -45,7 +45,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 
 - [ ] VST3 and CLAP discovery, loading, state, and editor lifecycle
 - [ ] Plugin parameter automation and preset handling
-- [ ] MIDI device management and controller mapping
+- [ ] MIDI device management, controller mapping, and native input backends for other platforms
 - [ ] Autosave, backups, project recovery, and migrations
 - [ ] Multi-format export, stems, batch rendering, and progress reporting
 - [ ] Cross-platform packaging and a focused automated test suite

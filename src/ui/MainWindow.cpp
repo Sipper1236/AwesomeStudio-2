@@ -533,6 +533,11 @@ void MainWindow::createActions()
             finishMidiRecording(true);
     });
 
+    midiMonitorAction = new QAction(tr("Monitor MIDI"), this);
+    midiMonitorAction->setCheckable(true);
+    midiMonitorAction->setToolTip(tr("Play incoming MIDI on the selected synth or drum rack without recording"));
+    connect(midiMonitorAction, &QAction::toggled, this, &MainWindow::setMidiMonitorEnabled);
+
     loopAction = new QAction(tr("Loop"), this);
     loopAction->setCheckable(true);
     loopAction->setChecked(project.loopEnabled);
@@ -746,10 +751,11 @@ void MainWindow::createToolBars()
     recordingBar->addWidget(audioInputControl);
     recordingBar->addSeparator();
     recordingBar->addAction(midiRecordAction);
+    recordingBar->addAction(midiMonitorAction);
     recordingBar->addWidget(new QLabel(tr("MIDI INPUT"), recordingBar));
     midiInputControl = new QComboBox(recordingBar);
     midiInputControl->setMinimumWidth(190);
-    midiInputControl->setToolTip(tr("MIDI device used for live note recording"));
+    midiInputControl->setToolTip(tr("MIDI device used for live monitoring and recording"));
     recordingBar->addWidget(midiInputControl);
     mediaDevices = new QMediaDevices(this);
     connect(mediaDevices, &QMediaDevices::audioInputsChanged,
@@ -1045,6 +1051,7 @@ void MainWindow::createMenus()
     transportMenu->addAction(stopAction);
     transportMenu->addAction(recordAction);
     transportMenu->addAction(midiRecordAction);
+    transportMenu->addAction(midiMonitorAction);
     transportMenu->addAction(loopAction);
     transportMenu->addAction(metronomeAction);
 
@@ -2233,9 +2240,88 @@ void MainWindow::refreshMidiInputs()
         midiInputControl->setCurrentIndex(selectedIndex >= 0 ? selectedIndex : 0);
     }
     midiInputControl->setEnabled(!ports.isEmpty() && !audioRecorder && !recordingPending &&
+                                 !midiMonitorAction->isChecked() &&
                                  !midiRecordingActive && !midiRecordingPending);
     midiRecordAction->setEnabled(!audioRecorder && !recordingPending &&
                                  (midiRecordingActive || midiRecordingPending || MidiInput::isSupported()));
+    midiMonitorAction->setEnabled((!audioRecorder && !recordingPending) ||
+                                  midiMonitorAction->isChecked());
+}
+
+void MainWindow::setMidiMonitorEnabled(bool enabled)
+{
+    const auto rejectEnable = [this](const QString& message)
+    {
+        const QSignalBlocker blocker(midiMonitorAction);
+        midiMonitorAction->setChecked(false);
+        statusBar()->showMessage(message, 5000);
+        refreshMidiInputs();
+    };
+
+    if (!enabled)
+    {
+        audioEngine.stopLiveMidiNotes();
+        if (!midiRecordingActive && !midiRecordingPending)
+        {
+            if (midiInputPollTimer != nullptr)
+                midiInputPollTimer->stop();
+            if (midiInput != nullptr)
+                midiInput->disconnect();
+            activeMidiInputPortId.clear();
+        }
+        refreshMidiInputs();
+        statusBar()->showMessage(tr("MIDI monitoring stopped"), 1800);
+        return;
+    }
+
+    if (audioRecorder || recordingPending)
+    {
+        rejectEnable(tr("Stop audio recording before enabling MIDI monitoring."));
+        return;
+    }
+    const InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType == InstrumentType::Audio)
+    {
+        rejectEnable(tr("Select a synth or drum rack track before monitoring MIDI."));
+        return;
+    }
+    const QString portId = midiInputControl->currentData().toString();
+    if (portId.isEmpty())
+    {
+        rejectEnable(MidiInput::isSupported()
+            ? tr("No MIDI input devices are available. Connect a device and try again.")
+            : tr("MIDI monitoring requires an ALSA enabled Linux build."));
+        return;
+    }
+    if (!audioEngine.isAudioAvailable() && !audioEngine.initialize())
+    {
+        rejectEnable(audioEngine.errorMessage());
+        return;
+    }
+    if (midiInput == nullptr)
+        midiInput = std::make_unique<MidiInput>();
+    if (midiInput->isConnected() && activeMidiInputPortId != portId)
+    {
+        if (midiRecordingActive || midiRecordingPending)
+        {
+            rejectEnable(tr("The MIDI recording is using a different input device."));
+            return;
+        }
+        midiInput->disconnect();
+    }
+    if (!midiInput->isConnected())
+    {
+        QString error;
+        if (!midiInput->connectTo(portId, &error))
+        {
+            rejectEnable(tr("Could not open MIDI input: %1").arg(error));
+            return;
+        }
+    }
+    activeMidiInputPortId = portId;
+    midiInputPollTimer->start();
+    refreshMidiInputs();
+    statusBar()->showMessage(tr("Monitoring MIDI on %1").arg(track->name), 2500);
 }
 
 void MainWindow::startAudioRecording()
@@ -2535,7 +2621,8 @@ void MainWindow::startMidiRecording()
     }
 
     QString error;
-    if (!midiInput->connectTo(portId, &error))
+    if ((!midiInput->isConnected() || activeMidiInputPortId != portId) &&
+        !midiInput->connectTo(portId, &error))
     {
         statusBar()->showMessage(tr("Could not open MIDI input: %1").arg(error), 6000);
         QSignalBlocker blocker(midiRecordAction);
@@ -2543,6 +2630,7 @@ void MainWindow::startMidiRecording()
         refreshMidiInputs();
         return;
     }
+    activeMidiInputPortId = portId;
 
     midiRecordingTrackId = track->id;
     midiRecordingClipId = targetClipId;
@@ -2604,11 +2692,27 @@ void MainWindow::pollMidiInput()
     if (midiInput == nullptr || !midiInput->isConnected())
         return;
     const QVector<MidiInputEvent> events = midiInput->readAvailable();
-    if (!midiRecordingActive || events.isEmpty())
+    if (events.isEmpty())
         return;
 
     for (const MidiInputEvent& event : events)
     {
+        if (midiMonitorAction->isChecked())
+        {
+            if (event.noteOn)
+            {
+                const InstrumentTrack* track = selectedTrack();
+                if (track != nullptr && track->instrumentType != InstrumentType::Audio)
+                    audioEngine.triggerLiveMidiNoteOn(event.channel, event.pitch, event.velocity, *track);
+            }
+            else
+            {
+                audioEngine.triggerLiveMidiNoteOff(event.channel, event.pitch);
+            }
+        }
+
+        if (!midiRecordingActive)
+            continue;
         const int key = event.channel * 128 + event.pitch;
         if (event.noteOn)
         {
@@ -2675,10 +2779,19 @@ void MainWindow::finishMidiRecording(bool keepTake)
 
     midiRecordingActive = false;
     midiRecordingPending = false;
-    if (midiInputPollTimer != nullptr)
-        midiInputPollTimer->stop();
-    if (midiInput != nullptr)
-        midiInput->disconnect();
+    if (!midiMonitorAction->isChecked())
+    {
+        if (midiInputPollTimer != nullptr)
+            midiInputPollTimer->stop();
+        if (midiInput != nullptr)
+            midiInput->disconnect();
+        activeMidiInputPortId.clear();
+        audioEngine.stopLiveMidiNotes();
+    }
+    else if (midiInputPollTimer != nullptr)
+    {
+        midiInputPollTimer->start();
+    }
     openMidiNotes.clear();
     midiOpenNoteCount = 0;
     if (midiTransportActive)

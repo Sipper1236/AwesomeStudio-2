@@ -29,6 +29,9 @@ public:
     double positionBeats() const;
     void setLiveTrackMixOverride(quint64 trackId, int parameter, float value);
     void clearLiveTrackMixOverride(quint64 trackId, int parameter);
+    void triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity, const InstrumentTrack& track);
+    void triggerLiveMidiNoteOff(int channel, int midiPitch);
+    void stopLiveMidiNotes();
     void triggerPreview(int midiPitch, int velocity = 96,
                         SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
                         bool percussion = false);
@@ -38,10 +41,56 @@ public:
 
 private:
     static constexpr size_t maximumTrackCount = 256;
+    static constexpr size_t liveMidiQueueCapacity = 1024;
+    static constexpr size_t maximumLiveMidiVoices = 128;
     class AudioStream;
+
+    struct LiveMidiEvent
+    {
+        bool noteOn = false;
+        int channel = 0;
+        int pitch = 0;
+        int velocity = 0;
+        bool percussion = false;
+        SynthWaveform waveform = SynthWaveform::Sine;
+        float gain = 1.0f;
+        float pan = 0.0f;
+        float attackSeconds = 0.008f;
+        float decaySeconds = 0.0f;
+        float sustainLevel = 1.0f;
+        float releaseSeconds = 0.06f;
+        std::shared_ptr<const AudioAsset> sample;
+    };
+
+    struct LiveMidiVoice
+    {
+        bool active = false;
+        bool held = false;
+        bool percussion = false;
+        int channel = 0;
+        int pitch = 0;
+        qint64 startFrame = 0;
+        qint64 releaseFrame = -1;
+        qint64 attackFrames = 1;
+        qint64 decayFrames = 0;
+        qint64 releaseFrames = 1;
+        quint64 serial = 0;
+        double frequency = 440.0;
+        float amplitude = 0.0f;
+        float sustainLevel = 1.0f;
+        float releaseStartLevel = 1.0f;
+        float leftGain = 0.70710678f;
+        float rightGain = 0.70710678f;
+        SynthWaveform waveform = SynthWaveform::Sine;
+        std::shared_ptr<const AudioAsset> sample;
+    };
 
     qint64 renderAudio(char* destination, qint64 maxBytes);
     void prepareNotes(const std::shared_ptr<const ProjectData>& project);
+    bool enqueueLiveMidiEvent(const LiveMidiEvent& event);
+    void applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame);
+    void renderLiveMidiVoices(StereoSample& mixed, qint64 frame);
+    void clearLiveMidiVoices();
 
     std::shared_ptr<const ProjectData> projectSnapshot;
     std::shared_ptr<const ProjectData> preparedProject;
@@ -62,6 +111,12 @@ private:
     std::atomic<float> masterGain{0.8f};
     std::array<std::atomic<float>, maximumTrackCount> liveTrackVolumes;
     std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
+    std::array<LiveMidiEvent, liveMidiQueueCapacity> liveMidiEvents;
+    std::array<LiveMidiVoice, maximumLiveMidiVoices> liveMidiVoices;
+    std::atomic<size_t> liveMidiWriteIndex{0};
+    std::atomic<size_t> liveMidiReadIndex{0};
+    std::atomic<bool> liveMidiPanic{false};
+    quint64 nextLiveMidiSerial = 1;
     std::atomic<int> previewPitch{-1};
     std::atomic<int> previewVelocity{96};
     std::atomic<double> previewFrequency{440.0};

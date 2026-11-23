@@ -96,6 +96,7 @@ private:
     void finishMidiRecording(bool keepTake = true);
     void refreshMidiInputs();
     void pollMidiInput();
+    void setMidiMonitorEnabled(bool enabled);
     double currentMidiRecordingBeat();
 
     AudioEngine& audioEngine;
@@ -154,6 +155,7 @@ private:
     QComboBox* audioInputControl = nullptr;
     QAction* recordAction = nullptr;
     QAction* midiRecordAction = nullptr;
+    QAction* midiMonitorAction = nullptr;
     QAction* automationViewAction = nullptr;
     QAction* automationWriteAction = nullptr;
     QComboBox* automationLaneParameterControl = nullptr;
@@ -161,6 +163,7 @@ private:
     std::unique_ptr<MidiInput> midiInput;
     QComboBox* midiInputControl = nullptr;
     QTimer* midiInputPollTimer = nullptr;
+    QString activeMidiInputPortId;
     QString pendingRecordingPath;
     QByteArray pendingRecordingDeviceId;
     QString pendingRecordingDeviceName;
