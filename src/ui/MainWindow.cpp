@@ -1023,19 +1023,23 @@ QString rotateProjectBackups(const QString& projectPath, const QString& stagedPa
 }
 
 bool chooseAudioExportOptions(QWidget* parent, WavExportOptions& options,
-                              bool flac = false, bool oggVorbis = false)
+                              bool flac = false, bool oggVorbis = false, bool mp3 = false)
 {
     QDialog dialog(parent);
-    dialog.setWindowTitle(oggVorbis ? QObject::tr("Ogg Vorbis export format")
+    dialog.setWindowTitle(mp3 ? QObject::tr("MP3 export format")
+        : oggVorbis ? QObject::tr("Ogg Vorbis export format")
         : flac ? QObject::tr("FLAC export format") : QObject::tr("WAV export format"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
     auto* sampleRateControl = new QComboBox(&dialog);
     sampleRateControl->addItem(QObject::tr("44.1 kHz"), 44100);
     sampleRateControl->addItem(QObject::tr("48 kHz"), 48000);
-    sampleRateControl->addItem(QObject::tr("88.2 kHz"), 88200);
-    sampleRateControl->addItem(QObject::tr("96 kHz"), 96000);
-    sampleRateControl->addItem(QObject::tr("192 kHz"), 192000);
+    if (!mp3)
+    {
+        sampleRateControl->addItem(QObject::tr("88.2 kHz"), 88200);
+        sampleRateControl->addItem(QObject::tr("96 kHz"), 96000);
+        sampleRateControl->addItem(QObject::tr("192 kHz"), 192000);
+    }
     const int sampleRateIndex = sampleRateControl->findData(options.sampleRate);
     if (sampleRateIndex >= 0)
         sampleRateControl->setCurrentIndex(sampleRateIndex);
@@ -1044,19 +1048,29 @@ bool chooseAudioExportOptions(QWidget* parent, WavExportOptions& options,
     QComboBox* formatControl = nullptr;
     QCheckBox* ditherControl = nullptr;
     QComboBox* qualityControl = nullptr;
-    if (oggVorbis)
+    if (oggVorbis || mp3)
     {
         qualityControl = new QComboBox(&dialog);
-        qualityControl->addItem(QObject::tr("Small file · 0.4"), 0.4);
-        qualityControl->addItem(QObject::tr("Balanced · 0.6"), 0.6);
-        qualityControl->addItem(QObject::tr("High quality · 0.8"), 0.8);
-        qualityControl->addItem(QObject::tr("Very high quality · 1.0"), 1.0);
+        if (mp3)
+        {
+            qualityControl->addItem(QObject::tr("128 kbit/s"), 128);
+            qualityControl->addItem(QObject::tr("192 kbit/s"), 192);
+            qualityControl->addItem(QObject::tr("256 kbit/s"), 256);
+            qualityControl->addItem(QObject::tr("320 kbit/s"), 320);
+        }
+        else
+        {
+            qualityControl->addItem(QObject::tr("Small file · 0.4"), 0.4);
+            qualityControl->addItem(QObject::tr("Balanced · 0.6"), 0.6);
+            qualityControl->addItem(QObject::tr("High quality · 0.8"), 0.8);
+            qualityControl->addItem(QObject::tr("Very high quality · 1.0"), 1.0);
+        }
         int closestIndex = 0;
         double closestDistance = std::numeric_limits<double>::max();
         for (int index = 0; index < qualityControl->count(); ++index)
         {
-            const double distance = std::abs(qualityControl->itemData(index).toDouble() -
-                                             options.vorbisQuality);
+            const double requestedValue = mp3 ? options.mp3BitrateKbps : options.vorbisQuality;
+            const double distance = std::abs(qualityControl->itemData(index).toDouble() - requestedValue);
             if (distance < closestDistance)
             {
                 closestDistance = distance;
@@ -1064,7 +1078,7 @@ bool chooseAudioExportOptions(QWidget* parent, WavExportOptions& options,
             }
         }
         qualityControl->setCurrentIndex(closestIndex);
-        form->addRow(QObject::tr("Encoding quality"), qualityControl);
+        form->addRow(mp3 ? QObject::tr("Bitrate") : QObject::tr("Encoding quality"), qualityControl);
     }
     else
     {
@@ -1106,6 +1120,8 @@ bool chooseAudioExportOptions(QWidget* parent, WavExportOptions& options,
     options.sampleRate = sampleRateControl->currentData().toInt();
     if (oggVorbis)
         options.vorbisQuality = static_cast<float>(qualityControl->currentData().toDouble());
+    else if (mp3)
+        options.mp3BitrateKbps = qualityControl->currentData().toInt();
     else
     {
         options.sampleFormat = static_cast<WavSampleFormat>(formatControl->currentData().toInt());
@@ -1210,6 +1226,12 @@ WavExportOptions& previousFlacExportOptions()
 }
 
 WavExportOptions& previousOggExportOptions()
+{
+    static WavExportOptions options;
+    return options;
+}
+
+WavExportOptions& previousMp3ExportOptions()
 {
     static WavExportOptions options;
     return options;
@@ -3509,6 +3531,9 @@ void MainWindow::createMenus()
 #endif
 #if defined(AWESOME_STUDIO_HAS_SNDFILE)
     fileMenu->addAction(tr("Export arrangement to Ogg Vorbis…"), this, &MainWindow::exportAudioOgg);
+#endif
+#if defined(AWESOME_STUDIO_HAS_LAME)
+    fileMenu->addAction(tr("Export arrangement to MP3…"), this, &MainWindow::exportAudioMp3);
 #endif
     fileMenu->addAction(tr("Export track stems…"), this, &MainWindow::exportStems);
     fileMenu->addSeparator();
@@ -7357,6 +7382,43 @@ void MainWindow::exportAudioOgg()
     if (!success)
     {
         QMessageBox::critical(this, tr("Could not export Ogg Vorbis"), error);
+        return;
+    }
+    statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
+}
+
+void MainWindow::exportAudioMp3()
+{
+    WavExportOptions& exportOptions = previousMp3ExportOptions();
+    if (!chooseAudioExportOptions(this, exportOptions, false, false, true))
+        return;
+    bool useRange = false;
+    double startBeat = 0.0;
+    double endBeat = 0.0;
+    if (!chooseExportRange(this, project.songLengthBeats(), useRange, startBeat, endBeat))
+        return;
+    QString path = QFileDialog::getSaveFileName(this, tr("Export arrangement to MP3"),
+        project.title + QStringLiteral(".mp3"), tr("MP3 audio (*.mp3)"));
+    if (path.isEmpty())
+        return;
+    if (QFileInfo(path).suffix().isEmpty())
+        path += QStringLiteral(".mp3");
+    else if (QFileInfo(path).suffix().compare(QStringLiteral("mp3"), Qt::CaseInsensitive) != 0)
+    {
+        QMessageBox::warning(this, tr("Unsupported export filename"),
+                             tr("Choose an .mp3 filename for MP3 export."));
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString error;
+    const bool success = WavExporter::exportProject(project, path, &error,
+        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0, exportOptions,
+        AudioExportContainer::Mp3);
+    QApplication::restoreOverrideCursor();
+    if (!success)
+    {
+        QMessageBox::critical(this, tr("Could not export MP3"), error);
         return;
     }
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);

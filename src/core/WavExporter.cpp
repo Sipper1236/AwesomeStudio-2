@@ -23,6 +23,9 @@
 #if defined(AWESOME_STUDIO_HAS_SNDFILE)
 #include <sndfile.h>
 #endif
+#if defined(AWESOME_STUDIO_HAS_LAME)
+#include <lame/lame.h>
+#endif
 
 namespace
 {
@@ -80,6 +83,28 @@ struct SndfileEncoderGuard
     }
 
     SNDFILE* encoder = nullptr;
+};
+#endif
+
+#if defined(AWESOME_STUDIO_HAS_LAME)
+struct LameEncoderGuard
+{
+    ~LameEncoderGuard()
+    {
+        if (encoder != nullptr)
+            lame_close(encoder);
+    }
+
+    bool finish()
+    {
+        if (encoder == nullptr)
+            return false;
+        const int status = lame_close(encoder);
+        encoder = nullptr;
+        return status == 0;
+    }
+
+    lame_global_flags* encoder = nullptr;
 };
 #endif
 
@@ -240,7 +265,7 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         return false;
     }
     if (container != AudioExportContainer::Wav && container != AudioExportContainer::Flac &&
-        container != AudioExportContainer::OggVorbis)
+        container != AudioExportContainer::OggVorbis && container != AudioExportContainer::Mp3)
     {
         setError(error, QStringLiteral("Choose a supported audio container."));
         return false;
@@ -248,6 +273,18 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     const bool wavContainer = container == AudioExportContainer::Wav;
     const bool flacContainer = container == AudioExportContainer::Flac;
     const bool oggContainer = container == AudioExportContainer::OggVorbis;
+    const bool mp3Container = container == AudioExportContainer::Mp3;
+    if (mp3Container && sampleRate != 44100 && sampleRate != 48000)
+    {
+        setError(error, QStringLiteral("MP3 export supports 44.1 kHz and 48 kHz input."));
+        return false;
+    }
+    if (mp3Container && options.mp3BitrateKbps != 128 && options.mp3BitrateKbps != 192 &&
+        options.mp3BitrateKbps != 256 && options.mp3BitrateKbps != 320)
+    {
+        setError(error, QStringLiteral("Choose a supported MP3 bitrate."));
+        return false;
+    }
     if (flacContainer && options.sampleFormat == WavSampleFormat::Float32)
     {
         setError(error, QStringLiteral("FLAC export supports 16-bit or 24-bit integer PCM."));
@@ -267,8 +304,15 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         return false;
     }
 #endif
+#if !defined(AWESOME_STUDIO_HAS_LAME)
+    if (mp3Container)
+    {
+        setError(error, QStringLiteral("MP3 export is unavailable because this build has no LAME support."));
+        return false;
+    }
+#endif
     const bool integerPcm = formatInfo.formatTag == 1;
-    if (options.dither && !integerPcm && !oggContainer)
+    if (options.dither && !integerPcm && !oggContainer && !mp3Container)
     {
         setError(error, QStringLiteral("Dither is available for integer PCM output only."));
         return false;
@@ -315,11 +359,16 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".awesome-studio-flac-XXXXXX")));
     QTemporaryFile oggTemporaryFile(
         QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".awesome-studio-ogg-XXXXXX")));
+    QTemporaryFile mp3TemporaryFile(
+        QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".awesome-studio-mp3-XXXXXX")));
 #if defined(AWESOME_STUDIO_HAS_FLAC)
     FlacEncoderGuard flacEncoder;
 #endif
 #if defined(AWESOME_STUDIO_HAS_SNDFILE)
     SndfileEncoderGuard oggEncoder;
+#endif
+#if defined(AWESOME_STUDIO_HAS_LAME)
+    LameEncoderGuard mp3Encoder;
 #endif
     if (wavContainer)
     {
@@ -416,10 +465,34 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         }
     }
 #endif
+#if defined(AWESOME_STUDIO_HAS_LAME)
+    if (mp3Container)
+    {
+        if (!mp3TemporaryFile.open())
+        {
+            setError(error, mp3TemporaryFile.errorString());
+            return false;
+        }
+        mp3Encoder.encoder = lame_init();
+        if (mp3Encoder.encoder == nullptr ||
+            lame_set_num_channels(mp3Encoder.encoder, channelCount) < 0 ||
+            lame_set_in_samplerate(mp3Encoder.encoder, static_cast<int>(sampleRate)) < 0 ||
+            lame_set_out_samplerate(mp3Encoder.encoder, static_cast<int>(sampleRate)) < 0 ||
+            lame_set_brate(mp3Encoder.encoder, options.mp3BitrateKbps) < 0 ||
+            lame_set_quality(mp3Encoder.encoder, 2) < 0 ||
+            lame_set_VBR(mp3Encoder.encoder, vbr_off) < 0 ||
+            lame_init_params(mp3Encoder.encoder) < 0)
+        {
+            setError(error, QStringLiteral("Could not configure the MP3 encoder."));
+            return false;
+        }
+    }
+#endif
 
     constexpr int framesPerChunk = 2048;
     QByteArray audio(framesPerChunk * bytesPerSampleFrame, Qt::Uninitialized);
     std::vector<float> oggAudio(static_cast<size_t>(framesPerChunk) * channelCount);
+    std::vector<unsigned char> mp3Buffer(static_cast<size_t>(framesPerChunk) * 5 / 4 + 7200);
 #if defined(AWESOME_STUDIO_HAS_FLAC)
     std::vector<FLAC__int32> flacAudio(static_cast<size_t>(framesPerChunk) * channelCount);
 #endif
@@ -443,15 +516,17 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             char* frame = wavContainer ? audio.data() + index * bytesPerSampleFrame : nullptr;
             const float output[2] = {
                 outputSample(rendered.left, safeProject.masterGain,
-                             oggContainer || options.sampleFormat != WavSampleFormat::Float32),
+                             oggContainer || mp3Container ||
+                                 options.sampleFormat != WavSampleFormat::Float32),
                 outputSample(rendered.right, safeProject.masterGain,
-                             oggContainer || options.sampleFormat != WavSampleFormat::Float32)
+                             oggContainer || mp3Container ||
+                                 options.sampleFormat != WavSampleFormat::Float32)
             };
             for (int channel = 0; channel < 2; ++channel)
             {
                 char* destination = !wavContainer
                     ? nullptr : frame + channel * formatInfo.bytesPerSample;
-                if (oggContainer)
+                if (oggContainer || mp3Container)
                 {
                     oggAudio[static_cast<size_t>(index) * channelCount + channel] = output[channel];
                     continue;
@@ -506,6 +581,25 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             }
 #endif
         }
+        else if (mp3Container)
+        {
+#if defined(AWESOME_STUDIO_HAS_LAME)
+            const int encodedBytes = lame_encode_buffer_interleaved_ieee_float(
+                mp3Encoder.encoder, oggAudio.data(), frames, mp3Buffer.data(),
+                static_cast<int>(mp3Buffer.size()));
+            if (encodedBytes < 0)
+            {
+                setError(error, QStringLiteral("MP3 encoding failed while rendering audio."));
+                return false;
+            }
+            if (mp3TemporaryFile.write(reinterpret_cast<const char*>(mp3Buffer.data()),
+                                       encodedBytes) != encodedBytes)
+            {
+                setError(error, mp3TemporaryFile.errorString());
+                return false;
+            }
+#endif
+        }
         else if (wavFile.write(audio.constData(), bytes) != bytes)
         {
             setError(error, wavFile.errorString());
@@ -536,6 +630,31 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             return false;
         }
         return installEncodedFile(oggTemporaryFile.fileName(), path, error);
+#else
+        return false;
+#endif
+    }
+    if (mp3Container)
+    {
+#if defined(AWESOME_STUDIO_HAS_LAME)
+        const int encodedBytes = lame_encode_flush(mp3Encoder.encoder, mp3Buffer.data(),
+                                                    static_cast<int>(mp3Buffer.size()));
+        if (encodedBytes < 0 ||
+            mp3TemporaryFile.write(reinterpret_cast<const char*>(mp3Buffer.data()),
+                                   encodedBytes) != encodedBytes ||
+            !mp3TemporaryFile.flush())
+        {
+            setError(error, encodedBytes < 0 ? QStringLiteral("Could not finalize the MP3 stream.")
+                                             : mp3TemporaryFile.errorString());
+            return false;
+        }
+        mp3TemporaryFile.close();
+        if (!mp3Encoder.finish())
+        {
+            setError(error, QStringLiteral("Could not close the MP3 encoder."));
+            return false;
+        }
+        return installEncodedFile(mp3TemporaryFile.fileName(), path, error);
 #else
         return false;
 #endif

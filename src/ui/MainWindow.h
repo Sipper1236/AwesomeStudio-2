@@ -168,6 +168,7 @@ private:
     void exportAudio();
     void exportAudioFlac();
     void exportAudioOgg();
+    void exportAudioMp3();
     void exportStems();
     void importAudio();
     void importMidi();
