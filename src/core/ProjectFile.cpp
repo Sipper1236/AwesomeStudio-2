@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 23;
+constexpr int currentProjectVersion = 24;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -367,6 +367,9 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("secondOscillatorWaveform"), static_cast<int>(track.secondOscillatorWaveform)},
         {QStringLiteral("secondOscillatorDetuneCents"), track.secondOscillatorDetuneCents},
         {QStringLiteral("secondOscillatorMix"), track.secondOscillatorMix},
+        {QStringLiteral("synthFilterEnabled"), track.synthFilterEnabled},
+        {QStringLiteral("synthFilterCutoffHz"), track.synthFilterCutoffHz},
+        {QStringLiteral("synthFilterResonance"), track.synthFilterResonance},
         {QStringLiteral("attackSeconds"), track.attackSeconds},
         {QStringLiteral("decaySeconds"), track.decaySeconds},
         {QStringLiteral("sustainLevel"), track.sustainLevel},
@@ -487,6 +490,14 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
             object.value(QStringLiteral("secondOscillatorDetuneCents")).toDouble(0.0));
         track.secondOscillatorMix = static_cast<float>(
             object.value(QStringLiteral("secondOscillatorMix")).toDouble(0.5));
+    }
+    if (version >= 24)
+    {
+        track.synthFilterEnabled = object.value(QStringLiteral("synthFilterEnabled")).toBool(false);
+        track.synthFilterCutoffHz = static_cast<float>(
+            object.value(QStringLiteral("synthFilterCutoffHz")).toDouble(20000.0));
+        track.synthFilterResonance = static_cast<float>(
+            object.value(QStringLiteral("synthFilterResonance")).toDouble(0.707));
     }
     track.attackSeconds = static_cast<float>(
         object.value(QStringLiteral("attackSeconds")).toDouble(track.attackSeconds));

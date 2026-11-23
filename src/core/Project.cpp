@@ -422,6 +422,12 @@ void ProjectData::normalize()
             track.secondOscillatorMix = 0.5f;
         track.secondOscillatorDetuneCents = std::clamp(track.secondOscillatorDetuneCents, -100.0f, 100.0f);
         track.secondOscillatorMix = std::clamp(track.secondOscillatorMix, 0.0f, 1.0f);
+        if (!std::isfinite(track.synthFilterCutoffHz))
+            track.synthFilterCutoffHz = 20000.0f;
+        if (!std::isfinite(track.synthFilterResonance))
+            track.synthFilterResonance = 0.707f;
+        track.synthFilterCutoffHz = std::clamp(track.synthFilterCutoffHz, 20.0f, 20000.0f);
+        track.synthFilterResonance = std::clamp(track.synthFilterResonance, 0.1f, 10.0f);
         if (!std::isfinite(track.attackSeconds)) track.attackSeconds = 0.008f;
         if (!std::isfinite(track.decaySeconds)) track.decaySeconds = 0.0f;
         if (!std::isfinite(track.sustainLevel)) track.sustainLevel = 1.0f;

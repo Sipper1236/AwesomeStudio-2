@@ -96,6 +96,7 @@ private:
     void applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades);
     void setSelectedSynthEnvelope(int parameter, double value);
     void setSelectedSynthOscillator(int parameter, double value);
+    void setSelectedSynthFilter(int parameter, double value);
     void setSelectedTrackEqualizer(int band, double gainDb);
     void refreshAutomationEditor();
     void addAutomationPoint();
@@ -181,6 +182,9 @@ private:
     QComboBox* secondOscillatorWaveformControl = nullptr;
     QDoubleSpinBox* secondOscillatorDetuneControl = nullptr;
     QDoubleSpinBox* secondOscillatorMixControl = nullptr;
+    QCheckBox* synthFilterEnabledControl = nullptr;
+    QDoubleSpinBox* synthFilterCutoffControl = nullptr;
+    QDoubleSpinBox* synthFilterResonanceControl = nullptr;
     QComboBox* timeSignatureControl = nullptr;
     QComboBox* countInControl = nullptr;
     QComboBox* snapControl = nullptr;
@@ -188,6 +192,7 @@ private:
     QSlider* masterControl = nullptr;
     QWidget* audioRegionControls = nullptr;
     QWidget* oscillatorPanel = nullptr;
+    QWidget* synthFilterPanel = nullptr;
     QWidget* synthEnvelopePanel = nullptr;
     QWidget* equalizerControls = nullptr;
     QWidget* automationEditorPanel = nullptr;

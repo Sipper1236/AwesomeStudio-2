@@ -156,6 +156,8 @@ private:
     std::vector<LiveTrackMixOverride> liveTrackMixOverrides;
     std::vector<std::array<float, 3>> trackEqualizerGains;
     std::vector<TrackEqualizerState> trackEqualizerStates;
+    std::vector<std::vector<EffectState>> trackInstrumentFilterStates;
+    std::vector<unsigned char> trackInstrumentFilterHasTail;
     std::vector<std::vector<EffectState>> trackEffectStates;
     std::vector<unsigned char> trackEffectHasTail;
     std::vector<size_t> activeEqualizerTailTracks;

@@ -134,6 +134,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     liveTrackMixOverrides.clear();
     trackEqualizerGains.clear();
     trackEqualizerStates.clear();
+    trackInstrumentFilterStates.clear();
+    trackInstrumentFilterHasTail.clear();
     trackEffectStates.clear();
     trackEffectHasTail.clear();
     activeEqualizerTailTracks.clear();
@@ -172,6 +174,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackPitchBends.assign(static_cast<size_t>(project->tracks.size()), {});
     trackEqualizerGains.reserve(static_cast<size_t>(project->tracks.size()));
     trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
+    trackInstrumentFilterStates.resize(static_cast<size_t>(project->tracks.size()));
+    trackInstrumentFilterHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackEffectStates.resize(static_cast<size_t>(project->tracks.size()));
     trackEffectHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackBusIndices.resize(static_cast<size_t>(project->tracks.size()), -1);
@@ -208,6 +212,14 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             static_cast<float>(std::pow(10.0, track.eqMidDb / 20.0)),
             static_cast<float>(std::pow(10.0, track.eqHighDb / 20.0))
         });
+        if (track.instrumentType == InstrumentType::Synth && track.synthFilterEnabled)
+        {
+            MixerEffect instrumentFilter = defaultMixerEffect(MixerEffectType::LowPass);
+            instrumentFilter.cutoffHz = track.synthFilterCutoffHz;
+            instrumentFilter.resonance = track.synthFilterResonance;
+            QVector<MixerEffect> instrumentFilterChain{instrumentFilter};
+            prepareEffectChain(instrumentFilterChain, trackInstrumentFilterStates[trackIndex]);
+        }
         prepareEffectChain(track.effects, trackEffectStates[trackIndex]);
     }
 
@@ -507,10 +519,13 @@ void SynthRenderer::resetTransport()
     resetTrackEqualizers();
     for (std::vector<EffectState>& effects : trackEffectStates)
         resetEffectChain(effects);
+    for (std::vector<EffectState>& effects : trackInstrumentFilterStates)
+        resetEffectChain(effects);
     for (std::vector<EffectState>& effects : busEffectStates)
         resetEffectChain(effects);
     resetEffectChain(masterEffectStates);
     std::fill(trackEffectHasTail.begin(), trackEffectHasTail.end(), 0);
+    std::fill(trackInstrumentFilterHasTail.begin(), trackInstrumentFilterHasTail.end(), 0);
     std::fill(busEffectHasTail.begin(), busEffectHasTail.end(), 0);
     std::fill(trackFrameSamples.begin(), trackFrameSamples.end(), StereoSample{});
     std::fill(trackFrameTouched.begin(), trackFrameTouched.end(), 0);
@@ -546,8 +561,8 @@ StereoSample SynthRenderer::finishMixerFrame()
 
     for (size_t trackIndex = 0; trackIndex < trackEffectHasTail.size(); ++trackIndex)
     {
-        if (trackEffectHasTail[trackIndex] != 0 && trackIndex < trackFrameTouched.size() &&
-            trackFrameTouched[trackIndex] == 0)
+        if ((trackEffectHasTail[trackIndex] != 0 || trackInstrumentFilterHasTail[trackIndex] != 0) &&
+            trackIndex < trackFrameTouched.size() && trackFrameTouched[trackIndex] == 0)
             addTrackSample(trackIndex, 0.0f, 0.0f);
     }
     for (const size_t trackIndex : activeEqualizerTailTracks)
@@ -558,7 +573,14 @@ StereoSample SynthRenderer::finishMixerFrame()
 
     for (const size_t trackIndex : touchedTrackIndices)
     {
-        StereoSample trackSample = applyTrackEqualizer(trackIndex, trackFrameSamples[trackIndex]);
+        StereoSample trackSample = trackFrameSamples[trackIndex];
+        if (!trackInstrumentFilterStates[trackIndex].empty())
+        {
+            trackSample = processEffectChain(trackInstrumentFilterStates[trackIndex], trackSample);
+            trackInstrumentFilterHasTail[trackIndex] =
+                effectChainHasTail(trackInstrumentFilterStates[trackIndex]) ? 1 : 0;
+        }
+        trackSample = applyTrackEqualizer(trackIndex, trackSample);
         TrackEqualizerState& equalizerState = trackEqualizerStates[trackIndex];
         if (!equalizerState.tailActive &&
             std::max({std::abs(equalizerState.lowLeft), std::abs(equalizerState.lowRight),
@@ -969,7 +991,17 @@ double SynthRenderer::effectTailSeconds() const
     };
     double longestTrackTail = 0.0;
     for (const InstrumentTrack& track : project->tracks)
-        longestTrackTail = std::max(longestTrackTail, chainTail(track.effects));
+    {
+        double instrumentFilterTail = 0.0;
+        if (track.instrumentType == InstrumentType::Synth && track.synthFilterEnabled)
+        {
+            const double cutoff = std::max(20.0,
+                std::min<double>(track.synthFilterCutoffHz, sampleRate * 0.49));
+            instrumentFilterTail = std::min(4.0,
+                7.0 * track.synthFilterResonance / (3.14159265358979323846 * cutoff));
+        }
+        longestTrackTail = std::max(longestTrackTail, instrumentFilterTail + chainTail(track.effects));
+    }
     double busTail = 0.0;
     for (const MixerBus& bus : project->buses)
         busTail += chainTail(bus.effects);
@@ -1044,6 +1076,9 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         activeNotes.clear();
         activeAudioRegions.clear();
         resetTrackEqualizers();
+        for (std::vector<EffectState>& effects : trackInstrumentFilterStates)
+            resetEffectChain(effects);
+        std::fill(trackInstrumentFilterHasTail.begin(), trackInstrumentFilterHasTail.end(), 0);
         nextStartIndex = 0;
         nextPitchBendIndex = 0;
         nextAudioStartIndex = 0;

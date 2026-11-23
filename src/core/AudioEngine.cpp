@@ -601,7 +601,9 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame)
 void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform waveform, float pan,
                                  bool percussion, bool secondOscillatorEnabled,
                                  SynthWaveform secondOscillatorWaveform,
-                                 float secondOscillatorDetuneCents, float secondOscillatorMix)
+                                 float secondOscillatorDetuneCents, float secondOscillatorMix,
+                                 bool synthFilterEnabled, float synthFilterCutoffHz,
+                                 float synthFilterResonance)
 {
     std::atomic_store_explicit(&previewSampleAsset, std::shared_ptr<const AudioAsset>{},
                                std::memory_order_release);
@@ -616,6 +618,24 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
                                              std::memory_order_relaxed);
     previewSecondOscillatorMix.store(std::clamp(secondOscillatorMix, 0.0f, 1.0f),
                                      std::memory_order_relaxed);
+    const bool filterEnabled = synthFilterEnabled && !percussion;
+    const double safeCutoff = std::isfinite(synthFilterCutoffHz) ? synthFilterCutoffHz : 20000.0f;
+    const double cutoff = std::clamp(safeCutoff, 20.0, std::max(20.0, outputSampleRate * 0.49));
+    const double safeResonance = std::isfinite(synthFilterResonance) ? synthFilterResonance : 0.707f;
+    const double resonance = std::clamp(safeResonance, 0.1, 10.0);
+    const double omega = 6.28318530717958647692 * cutoff / outputSampleRate;
+    const double cosine = std::cos(omega);
+    const double alpha = std::sin(omega) / (2.0 * resonance);
+    const double a0 = 1.0 + alpha;
+    previewFilterB0.store(static_cast<float>(((1.0 - cosine) * 0.5) / a0),
+                          std::memory_order_relaxed);
+    previewFilterB1.store(static_cast<float>((1.0 - cosine) / a0), std::memory_order_relaxed);
+    previewFilterB2.store(static_cast<float>(((1.0 - cosine) * 0.5) / a0),
+                          std::memory_order_relaxed);
+    previewFilterA1.store(static_cast<float>((-2.0 * cosine) / a0), std::memory_order_relaxed);
+    previewFilterA2.store(static_cast<float>((1.0 - alpha) / a0), std::memory_order_relaxed);
+    previewSynthFilterEnabled.store(filterEnabled, std::memory_order_relaxed);
+    previewFilterResetSerial.fetch_add(1, std::memory_order_release);
     previewPercussion.store(percussion, std::memory_order_relaxed);
     previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
     previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
@@ -624,7 +644,12 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
     previewStartFrame.store(start, std::memory_order_release);
     const double previewSeconds = percussion && clampedPitch == 46 ? 0.72 :
                                   percussion && (clampedPitch == 42 || clampedPitch == 44) ? 0.22 : 0.48;
-    previewEndFrame.store(start + static_cast<qint64>(outputSampleRate * previewSeconds), std::memory_order_release);
+    const qint64 noteEnd = start + static_cast<qint64>(outputSampleRate * previewSeconds);
+    previewNoteEndFrame.store(noteEnd, std::memory_order_release);
+    const double filterTailSeconds = filterEnabled
+        ? std::min(4.0, 7.0 * resonance / (3.14159265358979323846 * cutoff)) : 0.0;
+    previewEndFrame.store(noteEnd + static_cast<qint64>(outputSampleRate * filterTailSeconds),
+                          std::memory_order_release);
 }
 
 void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity,
@@ -637,6 +662,8 @@ void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample,
     const double panAngle = (std::clamp(static_cast<double>(pan), -1.0, 1.0) + 1.0) *
                             0.7853981633974483;
     previewVelocity.store(std::clamp(velocity, 1, 127), std::memory_order_relaxed);
+    previewSynthFilterEnabled.store(false, std::memory_order_relaxed);
+    previewFilterResetSerial.fetch_add(1, std::memory_order_release);
     previewSampleGain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
     previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
     previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
@@ -644,7 +671,9 @@ void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample,
     const qint64 duration = static_cast<qint64>(std::ceil(
         static_cast<double>(sample->frameCount()) * outputSampleRate / sample->sampleRate));
     previewStartFrame.store(start, std::memory_order_release);
-    previewEndFrame.store(start + std::max<qint64>(1, duration), std::memory_order_release);
+    const qint64 end = start + std::max<qint64>(1, duration);
+    previewNoteEndFrame.store(end, std::memory_order_release);
+    previewEndFrame.store(end, std::memory_order_release);
     std::atomic_store_explicit(&previewSampleAsset, std::move(sample), std::memory_order_release);
     previewPitch.store(0, std::memory_order_release);
 }
@@ -880,24 +909,57 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                 }
                 else
                 {
-                    const double frequency = previewFrequency.load(std::memory_order_relaxed);
-                    const double phase = static_cast<double>(age) * frequency / outputSampleRate;
-                    float oscillator = oscillatorSample(
-                        static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase);
-                    if (previewSecondOscillatorEnabled.load(std::memory_order_relaxed))
+                    const quint64 filterResetSerial =
+                        previewFilterResetSerial.load(std::memory_order_acquire);
+                    if (filterResetSerial != previewFilterSeenSerial)
                     {
-                        const double detuneRatio = std::pow(2.0,
-                            static_cast<double>(previewSecondOscillatorDetuneCents.load(
-                                std::memory_order_relaxed)) / 1200.0);
-                        const float secondOscillator = oscillatorSample(
-                            static_cast<SynthWaveform>(previewSecondOscillatorWaveform.load(
-                                std::memory_order_relaxed)), phase * detuneRatio);
-                        const float mix = previewSecondOscillatorMix.load(std::memory_order_relaxed);
-                        oscillator = oscillator * (1.0f - mix) + secondOscillator * mix;
+                        previewFilterSeenSerial = filterResetSerial;
+                        previewFilterX1 = 0.0f;
+                        previewFilterX2 = 0.0f;
+                        previewFilterY1 = 0.0f;
+                        previewFilterY2 = 0.0f;
+                        previewFilterActive = previewSynthFilterEnabled.load(std::memory_order_relaxed);
+                        previewFilterCachedB0 = previewFilterB0.load(std::memory_order_relaxed);
+                        previewFilterCachedB1 = previewFilterB1.load(std::memory_order_relaxed);
+                        previewFilterCachedB2 = previewFilterB2.load(std::memory_order_relaxed);
+                        previewFilterCachedA1 = previewFilterA1.load(std::memory_order_relaxed);
+                        previewFilterCachedA2 = previewFilterA2.load(std::memory_order_relaxed);
                     }
-                    const float release = std::min(1.0f, static_cast<float>(previewEnd - clockFrame) /
-                                                           std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
-                    preview = oscillator * (0.2f * velocity) * attack * release;
+                    const qint64 noteEnd = previewNoteEndFrame.load(std::memory_order_relaxed);
+                    if (clockFrame < noteEnd)
+                    {
+                        const double frequency = previewFrequency.load(std::memory_order_relaxed);
+                        const double phase = static_cast<double>(age) * frequency / outputSampleRate;
+                        float oscillator = oscillatorSample(
+                            static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase);
+                        if (previewSecondOscillatorEnabled.load(std::memory_order_relaxed))
+                        {
+                            const double detuneRatio = std::pow(2.0,
+                                static_cast<double>(previewSecondOscillatorDetuneCents.load(
+                                    std::memory_order_relaxed)) / 1200.0);
+                            const float secondOscillator = oscillatorSample(
+                                static_cast<SynthWaveform>(previewSecondOscillatorWaveform.load(
+                                    std::memory_order_relaxed)), phase * detuneRatio);
+                            const float mix = previewSecondOscillatorMix.load(std::memory_order_relaxed);
+                            oscillator = oscillator * (1.0f - mix) + secondOscillator * mix;
+                        }
+                        const float release = std::min(1.0f, static_cast<float>(noteEnd - clockFrame) /
+                                                               std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
+                        preview = oscillator * (0.2f * velocity) * attack * release;
+                    }
+                    if (previewFilterActive)
+                    {
+                        const float inputSample = preview;
+                        preview = previewFilterCachedB0 * inputSample +
+                                  previewFilterCachedB1 * previewFilterX1 +
+                                  previewFilterCachedB2 * previewFilterX2 -
+                                  previewFilterCachedA1 * previewFilterY1 -
+                                  previewFilterCachedA2 * previewFilterY2;
+                        previewFilterX2 = previewFilterX1;
+                        previewFilterX1 = inputSample;
+                        previewFilterY2 = previewFilterY1;
+                        previewFilterY1 = preview;
+                    }
                 }
                 mixed.left += preview * previewLeftGain.load(std::memory_order_relaxed);
                 mixed.right += preview * previewRightGain.load(std::memory_order_relaxed);

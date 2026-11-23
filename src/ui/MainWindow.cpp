@@ -412,7 +412,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                                        track->secondOscillatorEnabled,
                                    track == nullptr ? SynthWaveform::Saw : track->secondOscillatorWaveform,
                                    track == nullptr ? 0.0f : track->secondOscillatorDetuneCents,
-                                   track == nullptr ? 0.5f : track->secondOscillatorMix);
+                                   track == nullptr ? 0.5f : track->secondOscillatorMix,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth &&
+                                       track->synthFilterEnabled,
+                                   track == nullptr ? 20000.0f : track->synthFilterCutoffHz,
+                                   track == nullptr ? 0.707f : track->synthFilterResonance);
     });
     connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
     {
@@ -438,7 +442,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                                        track->secondOscillatorEnabled,
                                    track == nullptr ? SynthWaveform::Saw : track->secondOscillatorWaveform,
                                    track == nullptr ? 0.0f : track->secondOscillatorDetuneCents,
-                                   track == nullptr ? 0.5f : track->secondOscillatorMix);
+                                   track == nullptr ? 0.5f : track->secondOscillatorMix,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth &&
+                                       track->synthFilterEnabled,
+                                   track == nullptr ? 20000.0f : track->synthFilterCutoffHz,
+                                   track == nullptr ? 0.707f : track->synthFilterResonance);
     });
     connect(arrangementEditor, &ArrangementEditor::clipActivated, this,
             [this](quint64 trackId, quint64 clipId) { selectClip(trackId, clipId, true); });
@@ -1191,6 +1199,34 @@ void MainWindow::createDocks()
             [this](double value) { setSelectedSynthOscillator(3, value); });
     browserLayout->addWidget(oscillatorGroup);
 
+    auto* synthFilterGroup = new QGroupBox(tr("SYNTH FILTER"), browser);
+    synthFilterPanel = synthFilterGroup;
+    auto* synthFilterForm = new QFormLayout(synthFilterGroup);
+    synthFilterEnabledControl = new QCheckBox(tr("Enable low-pass filter"), synthFilterGroup);
+    synthFilterForm->addRow(synthFilterEnabledControl);
+    synthFilterCutoffControl = new QDoubleSpinBox(synthFilterGroup);
+    synthFilterCutoffControl->setRange(20.0, 20000.0);
+    synthFilterCutoffControl->setDecimals(0);
+    synthFilterCutoffControl->setSingleStep(100.0);
+    synthFilterCutoffControl->setSuffix(tr(" Hz"));
+    synthFilterForm->addRow(tr("Cutoff"), synthFilterCutoffControl);
+    synthFilterResonanceControl = new QDoubleSpinBox(synthFilterGroup);
+    synthFilterResonanceControl->setRange(0.1, 10.0);
+    synthFilterResonanceControl->setDecimals(2);
+    synthFilterResonanceControl->setSingleStep(0.1);
+    synthFilterForm->addRow(tr("Resonance (Q)"), synthFilterResonanceControl);
+    connect(synthFilterEnabledControl, &QCheckBox::toggled, this,
+            [this](bool enabled) { setSelectedSynthFilter(0, enabled ? 1.0 : 0.0); });
+    connect(synthFilterEnabledControl, &QCheckBox::toggled,
+            synthFilterCutoffControl, &QWidget::setEnabled);
+    connect(synthFilterEnabledControl, &QCheckBox::toggled,
+            synthFilterResonanceControl, &QWidget::setEnabled);
+    connect(synthFilterCutoffControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double value) { setSelectedSynthFilter(1, value); });
+    connect(synthFilterResonanceControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double value) { setSelectedSynthFilter(2, value); });
+    browserLayout->addWidget(synthFilterGroup);
+
     auto* synthEnvelopeGroup = new QGroupBox(tr("SYNTH ENVELOPE"), browser);
     synthEnvelopePanel = synthEnvelopeGroup;
     auto* synthEnvelopeForm = new QFormLayout(synthEnvelopeGroup);
@@ -1629,6 +1665,9 @@ void MainWindow::refreshProjectUi()
     const QSignalBlocker secondOscillatorWaveformBlocker(secondOscillatorWaveformControl);
     const QSignalBlocker secondOscillatorDetuneBlocker(secondOscillatorDetuneControl);
     const QSignalBlocker secondOscillatorMixBlocker(secondOscillatorMixControl);
+    const QSignalBlocker synthFilterEnabledBlocker(synthFilterEnabledControl);
+    const QSignalBlocker synthFilterCutoffBlocker(synthFilterCutoffControl);
+    const QSignalBlocker synthFilterResonanceBlocker(synthFilterResonanceControl);
     const int waveformIndex = track == nullptr ? 0 :
         waveformControl->findData(static_cast<int>(track->waveform));
     waveformControl->setCurrentIndex(std::max(0, waveformIndex));
@@ -1647,6 +1686,14 @@ void MainWindow::refreshProjectUi()
     secondOscillatorDetuneControl->setEnabled(secondOscillatorEnabled);
     secondOscillatorMixControl->setEnabled(secondOscillatorEnabled);
     synthEnvelopePanel->setVisible(synthTrackSelected);
+    synthFilterPanel->setVisible(synthTrackSelected);
+    const bool synthFilterEnabled = synthTrackSelected && track->synthFilterEnabled;
+    synthFilterEnabledControl->setChecked(synthFilterEnabled);
+    synthFilterEnabledControl->setEnabled(synthTrackSelected);
+    synthFilterCutoffControl->setValue(track == nullptr ? 20000.0 : track->synthFilterCutoffHz);
+    synthFilterResonanceControl->setValue(track == nullptr ? 0.707 : track->synthFilterResonance);
+    synthFilterCutoffControl->setEnabled(synthFilterEnabled);
+    synthFilterResonanceControl->setEnabled(synthFilterEnabled);
     const std::array<float, 4> envelopeValues = track == nullptr
         ? std::array<float, 4>{0.008f, 0.0f, 1.0f, 0.06f}
         : std::array<float, 4>{track->attackSeconds, track->decaySeconds,
@@ -3253,6 +3300,23 @@ void MainWindow::setSelectedSynthOscillator(int parameter, double value)
                     std::clamp(value, -100.0, 100.0)); break;
         case 3: track->secondOscillatorMix = static_cast<float>(
                     std::clamp(value / 100.0, 0.0, 1.0)); break;
+        default: return;
+    }
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::setSelectedSynthFilter(int parameter, double value)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::Synth)
+        return;
+    switch (parameter)
+    {
+        case 0: track->synthFilterEnabled = value >= 0.5; break;
+        case 1: track->synthFilterCutoffHz = static_cast<float>(std::clamp(value, 20.0, 20000.0)); break;
+        case 2: track->synthFilterResonance = static_cast<float>(std::clamp(value, 0.1, 10.0)); break;
         default: return;
     }
     audioEngine.setProject(project);

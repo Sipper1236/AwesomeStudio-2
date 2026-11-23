@@ -42,7 +42,10 @@ public:
                         bool percussion = false, bool secondOscillatorEnabled = false,
                         SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw,
                         float secondOscillatorDetuneCents = 0.0f,
-                        float secondOscillatorMix = 0.5f);
+                        float secondOscillatorMix = 0.5f,
+                        bool synthFilterEnabled = false,
+                        float synthFilterCutoffHz = 20000.0f,
+                        float synthFilterResonance = 0.707f);
     void triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity = 96,
                               float pan = 0.0f, float gain = 1.0f);
     void setMasterGain(float gain);
@@ -180,10 +183,29 @@ private:
     std::atomic<int> previewSecondOscillatorWaveform{static_cast<int>(SynthWaveform::Saw)};
     std::atomic<float> previewSecondOscillatorDetuneCents{0.0f};
     std::atomic<float> previewSecondOscillatorMix{0.5f};
+    std::atomic<bool> previewSynthFilterEnabled{false};
+    std::atomic<float> previewFilterB0{1.0f};
+    std::atomic<float> previewFilterB1{0.0f};
+    std::atomic<float> previewFilterB2{0.0f};
+    std::atomic<float> previewFilterA1{0.0f};
+    std::atomic<float> previewFilterA2{0.0f};
+    std::atomic<quint64> previewFilterResetSerial{0};
+    quint64 previewFilterSeenSerial = 0;
+    bool previewFilterActive = false;
+    float previewFilterX1 = 0.0f;
+    float previewFilterX2 = 0.0f;
+    float previewFilterY1 = 0.0f;
+    float previewFilterY2 = 0.0f;
+    float previewFilterCachedB0 = 1.0f;
+    float previewFilterCachedB1 = 0.0f;
+    float previewFilterCachedB2 = 0.0f;
+    float previewFilterCachedA1 = 0.0f;
+    float previewFilterCachedA2 = 0.0f;
     std::atomic<bool> previewPercussion{false};
     std::atomic<float> previewLeftGain{0.70710678f};
     std::atomic<float> previewRightGain{0.70710678f};
     std::atomic<qint64> previewStartFrame{0};
+    std::atomic<qint64> previewNoteEndFrame{0};
     std::atomic<qint64> previewEndFrame{0};
     std::shared_ptr<const AudioAsset> previewSampleAsset;
     std::atomic<float> previewSampleGain{1.0f};
