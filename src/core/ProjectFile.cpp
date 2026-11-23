@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 24;
+constexpr int currentProjectVersion = 25;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -399,7 +399,11 @@ QJsonObject saveTrack(const InstrumentTrack& track)
          {
              QJsonArray samples;
              for (const DrumPadSample& sample : track.drumSamples)
-                 samples.push_back(sample.path);
+                 samples.push_back(QJsonObject{
+                     {QStringLiteral("path"), sample.path},
+                     {QStringLiteral("tuningSemitones"), sample.tuningSemitones},
+                     {QStringLiteral("startPositionPercent"), sample.startPositionPercent}
+                 });
              return samples;
          }()},
         {QStringLiteral("clips"), clips}
@@ -584,14 +588,38 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         }
         for (qsizetype index = 0; index < drumSamples.size(); ++index)
         {
-            if (!drumSamples[index].isString())
+            DrumPadSample& sample = track.drumSamples[static_cast<size_t>(index)];
+            if (version >= 25)
             {
-                setError(error, QStringLiteral("The drum rack contains an invalid sample path."));
-                return false;
+                if (!drumSamples[index].isObject())
+                {
+                    setError(error, QStringLiteral("The drum rack contains an invalid sample assignment."));
+                    return false;
+                }
+                const QJsonObject sampleObject = drumSamples[index].toObject();
+                sample.path = sampleObject.value(QStringLiteral("path")).toString();
+                const double tuningSemitones = sampleObject.value(QStringLiteral("tuningSemitones")).toDouble(
+                    std::numeric_limits<double>::quiet_NaN());
+                const double startPositionPercent = sampleObject.value(
+                    QStringLiteral("startPositionPercent")).toDouble(std::numeric_limits<double>::quiet_NaN());
+                if (!std::isfinite(tuningSemitones) || !std::isfinite(startPositionPercent))
+                {
+                    setError(error, QStringLiteral("The drum rack contains invalid sample controls."));
+                    return false;
+                }
+                sample.tuningSemitones = static_cast<float>(tuningSemitones);
+                sample.startPositionPercent = static_cast<float>(startPositionPercent);
             }
-            track.drumSamples[static_cast<size_t>(index)].path = drumSamples[index].toString();
-            loadAudioReference(track.drumSamples[static_cast<size_t>(index)].path,
-                               mediaBaseDir, media, track.drumSamples[static_cast<size_t>(index)].source);
+            else
+            {
+                if (!drumSamples[index].isString())
+                {
+                    setError(error, QStringLiteral("The drum rack contains an invalid sample path."));
+                    return false;
+                }
+                sample.path = drumSamples[index].toString();
+            }
+            loadAudioReference(sample.path, mediaBaseDir, media, sample.source);
         }
     }
     else if (!drumSampleValue.isUndefined() && !drumSampleValue.isNull())

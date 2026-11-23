@@ -317,7 +317,18 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
     {
         const int pad = drumPadForPitch(event.pitch);
         if (pad >= 0)
-            event.sample = track.drumSamples[static_cast<size_t>(pad)].source;
+        {
+            const DrumPadSample& sample = track.drumSamples[static_cast<size_t>(pad)];
+            event.sample = sample.source;
+            if (event.sample != nullptr && event.sample->frameCount() > 0)
+            {
+                event.sampleStartFrame = static_cast<qint64>(std::llround(
+                    static_cast<double>(event.sample->frameCount() - 1) *
+                    sample.startPositionPercent / 100.0));
+                event.samplePlaybackRate = std::pow(2.0,
+                    static_cast<double>(sample.tuningSemitones) / 12.0);
+            }
+        }
     }
     enqueueLiveMidiEvent(event);
 }
@@ -466,6 +477,8 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     target->secondOscillatorMix = event.secondOscillatorMix;
     target->secondOscillatorEnabled = event.secondOscillatorEnabled && !event.percussion;
     target->sample = event.sample;
+    target->sampleStartFrame = event.sampleStartFrame;
+    target->samplePlaybackRate = event.samplePlaybackRate;
 }
 
 void AudioEngine::renderLiveMidiVoices(qint64 frame)
@@ -495,8 +508,8 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame)
 
         if (voice.sample != nullptr)
         {
-            const double sourcePosition = static_cast<double>(age) * voice.sample->sampleRate /
-                                          outputSampleRate;
+            const double sourcePosition = voice.sampleStartFrame + static_cast<double>(age) *
+                voice.sample->sampleRate * voice.samplePlaybackRate / outputSampleRate;
             const qint64 firstFrame = static_cast<qint64>(sourcePosition);
             if (firstFrame >= voice.sample->frameCount())
             {
@@ -653,7 +666,8 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
 }
 
 void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity,
-                                       float pan, float gain)
+                                       float pan, float gain, float startPositionPercent,
+                                       float tuningSemitones)
 {
     if (sample == nullptr || sample->sampleRate <= 0 || sample->channelCount < 1 ||
         sample->channelCount > 2 || sample->frameCount() <= 0)
@@ -665,11 +679,18 @@ void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample,
     previewSynthFilterEnabled.store(false, std::memory_order_relaxed);
     previewFilterResetSerial.fetch_add(1, std::memory_order_release);
     previewSampleGain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
+    const double startFrame = static_cast<double>(sample->frameCount() - 1) *
+                              std::clamp(static_cast<double>(startPositionPercent), 0.0, 99.0) / 100.0;
+    const double playbackRate = std::pow(2.0,
+        std::clamp(static_cast<double>(tuningSemitones), -24.0, 24.0) / 12.0);
+    previewSampleStartFrame.store(startFrame, std::memory_order_relaxed);
+    previewSamplePlaybackRate.store(playbackRate, std::memory_order_relaxed);
     previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
     previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
     const qint64 start = audioClockFrames.load(std::memory_order_acquire);
     const qint64 duration = static_cast<qint64>(std::ceil(
-        static_cast<double>(sample->frameCount()) * outputSampleRate / sample->sampleRate));
+        (sample->frameCount() - startFrame) * outputSampleRate /
+        (sample->sampleRate * playbackRate)));
     previewStartFrame.store(start, std::memory_order_release);
     const qint64 end = start + std::max<qint64>(1, duration);
     previewNoteEndFrame.store(end, std::memory_order_release);
@@ -870,8 +891,9 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             const float velocity = static_cast<float>(previewVelocity.load(std::memory_order_relaxed)) / 127.0f;
             if (previewSample != nullptr)
             {
-                const double sourcePosition = static_cast<double>(age) * previewSample->sampleRate /
-                                              outputSampleRate;
+                const double sourcePosition = previewSampleStartFrame.load(std::memory_order_relaxed) +
+                    static_cast<double>(age) * previewSample->sampleRate *
+                    previewSamplePlaybackRate.load(std::memory_order_relaxed) / outputSampleRate;
                 const qint64 firstFrame = static_cast<qint64>(sourcePosition);
                 if (firstFrame >= 0 && firstFrame < previewSample->frameCount())
                 {

@@ -445,8 +445,17 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                 (clip.startBeat + note.startBeat) * sampleRate * 60.0 / project->tempoBpm));
                             region.source = source;
                             region.trackIndex = trackIndex;
+                            region.drumSamplePlayback = true;
+                            const DrumPadSample& padSample = track.drumSamples[static_cast<size_t>(pad)];
+                            region.sourceStartFrame = static_cast<qint64>(std::llround(
+                                static_cast<double>(source->frameCount() - 1) *
+                                padSample.startPositionPercent / 100.0));
+                            region.playbackRate = std::pow(2.0,
+                                static_cast<double>(padSample.tuningSemitones) / 12.0);
+                            const qint64 remainingSourceFrames = source->frameCount() - region.sourceStartFrame;
                             const qint64 duration = static_cast<qint64>(std::ceil(
-                                static_cast<double>(source->frameCount()) * sampleRate / source->sampleRate));
+                                static_cast<double>(remainingSourceFrames) * sampleRate /
+                                (source->sampleRate * region.playbackRate)));
                             region.endFrame = region.startFrame + std::max<qint64>(1, duration);
                             const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
                             region.sourceGain = velocityGain;
@@ -990,6 +999,14 @@ double SynthRenderer::effectTailSeconds() const
         return seconds;
     };
     double longestTrackTail = 0.0;
+    double sampleOverrunSeconds = 0.0;
+    const double songEndFrame = project->songLengthBeats() * sampleRate * 60.0 / project->tempoBpm;
+    for (const AudioRegion& region : audioRegions)
+    {
+        if (region.drumSamplePlayback)
+            sampleOverrunSeconds = std::max(sampleOverrunSeconds,
+                std::max(0.0, region.endFrame - songEndFrame) / sampleRate);
+    }
     for (const InstrumentTrack& track : project->tracks)
     {
         double instrumentFilterTail = 0.0;
@@ -1000,8 +1017,10 @@ double SynthRenderer::effectTailSeconds() const
             instrumentFilterTail = std::min(4.0,
                 7.0 * track.synthFilterResonance / (3.14159265358979323846 * cutoff));
         }
-        longestTrackTail = std::max(longestTrackTail, instrumentFilterTail + chainTail(track.effects));
+        longestTrackTail = std::max(longestTrackTail,
+            instrumentFilterTail + chainTail(track.effects));
     }
+    longestTrackTail += sampleOverrunSeconds;
     double busTail = 0.0;
     for (const MixerBus& bus : project->buses)
         busTail += chainTail(bus.effects);
@@ -1194,7 +1213,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         const AudioRegion& region = audioRegions[index];
         const qint64 age = projectFrame - region.startFrame;
         const double sourcePosition = region.sourceStartFrame +
-            static_cast<double>(age) * region.source->sampleRate / sampleRate;
+            static_cast<double>(age) * region.source->sampleRate * region.playbackRate / sampleRate;
         const qint64 firstFrame = static_cast<qint64>(sourcePosition);
         const qint64 secondFrame = std::min(firstFrame + 1, region.source->frameCount() - 1);
         if (firstFrame < 0 || firstFrame >= region.source->frameCount())

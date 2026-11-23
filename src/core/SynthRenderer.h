@@ -73,6 +73,8 @@ private:
         AudioFadeCurve fadeOutCurve = AudioFadeCurve::Linear;
         size_t trackIndex = 0;
         float sourceGain = 1.0f;
+        double playbackRate = 1.0;
+        bool drumSamplePlayback = false;
         std::shared_ptr<const AudioAsset> source;
     };
 

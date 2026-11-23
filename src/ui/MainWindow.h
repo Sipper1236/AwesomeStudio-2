@@ -113,6 +113,7 @@ private:
     void finishAutomationWrite();
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
+    void setSelectedDrumSample(int pad, int parameter, double value);
     quint64 projectAudioBytes() const;
     std::shared_ptr<const AudioAsset> findProjectAudioAsset(const QString& path) const;
     InstrumentTrack* selectedTrack();
@@ -225,6 +226,8 @@ private:
     QProgressBar* masterPeakMeter = nullptr;
     std::array<QPushButton*, 4> drumSampleButtons{};
     std::array<QPushButton*, 4> clearDrumSampleButtons{};
+    std::array<QDoubleSpinBox*, 4> drumSampleTuneControls{};
+    std::array<QDoubleSpinBox*, 4> drumSampleStartControls{};
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
     QLabel* playheadLabel = nullptr;

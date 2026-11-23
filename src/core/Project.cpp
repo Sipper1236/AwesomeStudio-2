@@ -440,6 +440,12 @@ void ProjectData::normalize()
         {
             if (drumSample.source != nullptr && drumSample.path.isEmpty())
                 drumSample.path = drumSample.source->path;
+            if (!std::isfinite(drumSample.tuningSemitones))
+                drumSample.tuningSemitones = 0.0f;
+            if (!std::isfinite(drumSample.startPositionPercent))
+                drumSample.startPositionPercent = 0.0f;
+            drumSample.tuningSemitones = std::clamp(drumSample.tuningSemitones, -24.0f, 24.0f);
+            drumSample.startPositionPercent = std::clamp(drumSample.startPositionPercent, 0.0f, 99.0f);
         }
         if (track.clips.size() > 10000)
             track.clips.resize(10000);

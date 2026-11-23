@@ -398,7 +398,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             {
                 const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
                 if (sample.source != nullptr)
-                    audioEngine.triggerSamplePreview(sample.source, 96, track->pan, track->gain);
+                    audioEngine.triggerSamplePreview(sample.source, 96, track->pan, track->gain,
+                                                     sample.startPositionPercent, sample.tuningSemitones);
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -428,7 +429,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             {
                 const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
                 if (sample.source != nullptr)
-                    audioEngine.triggerSamplePreview(sample.source, 100, track->pan, track->gain);
+                    audioEngine.triggerSamplePreview(sample.source, 100, track->pan, track->gain,
+                                                     sample.startPositionPercent, sample.tuningSemitones);
                 else
                     statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
                 return;
@@ -1389,10 +1391,33 @@ void MainWindow::createDocks()
         rowLayout->addWidget(drumSampleButtons[static_cast<size_t>(pad)], 1);
         rowLayout->addWidget(clearDrumSampleButtons[static_cast<size_t>(pad)]);
         drumSampleLayout->addWidget(row);
+        auto* parameterForm = new QFormLayout();
+        parameterForm->setContentsMargins(0, 0, 0, 0);
+        drumSampleTuneControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
+        drumSampleTuneControls[static_cast<size_t>(pad)]->setRange(-24.0, 24.0);
+        drumSampleTuneControls[static_cast<size_t>(pad)]->setDecimals(1);
+        drumSampleTuneControls[static_cast<size_t>(pad)]->setSingleStep(1.0);
+        drumSampleTuneControls[static_cast<size_t>(pad)]->setSuffix(tr(" semitones"));
+        parameterForm->addRow(tr("%1 tune").arg(drumPadNames[static_cast<size_t>(pad)]),
+                              drumSampleTuneControls[static_cast<size_t>(pad)]);
+        drumSampleStartControls[static_cast<size_t>(pad)] = new QDoubleSpinBox(drumSampleControls);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setRange(0.0, 99.0);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setDecimals(0);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setSingleStep(1.0);
+        drumSampleStartControls[static_cast<size_t>(pad)]->setSuffix(QStringLiteral("%"));
+        parameterForm->addRow(tr("%1 sample start").arg(drumPadNames[static_cast<size_t>(pad)]),
+                              drumSampleStartControls[static_cast<size_t>(pad)]);
+        drumSampleLayout->addLayout(parameterForm);
         connect(drumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
                 [this, pad] { importDrumSample(pad); });
         connect(clearDrumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
                 [this, pad] { clearDrumSample(pad); });
+        connect(drumSampleTuneControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, pad](double value) { setSelectedDrumSample(pad, 0, value); });
+        connect(drumSampleStartControls[static_cast<size_t>(pad)],
+                qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, pad](double value) { setSelectedDrumSample(pad, 1, value); });
     }
     browserLayout->addWidget(drumSampleControls);
     drumSampleControls->hide();
@@ -1757,6 +1782,14 @@ void MainWindow::refreshProjectUi()
         drumSampleButtons[pad]->setEnabled(drumRackSelected);
         clearDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
                                                 !sample->path.isEmpty());
+        const QSignalBlocker tuneBlocker(drumSampleTuneControls[pad]);
+        const QSignalBlocker startBlocker(drumSampleStartControls[pad]);
+        drumSampleTuneControls[pad]->setValue(sample == nullptr ? 0.0 : sample->tuningSemitones);
+        drumSampleStartControls[pad]->setValue(
+            sample == nullptr ? 0.0 : sample->startPositionPercent);
+        const bool sampleAssigned = drumRackSelected && sample != nullptr && !sample->path.isEmpty();
+        drumSampleTuneControls[pad]->setEnabled(sampleAssigned);
+        drumSampleStartControls[pad]->setEnabled(sampleAssigned);
     }
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
@@ -3967,6 +4000,26 @@ void MainWindow::clearDrumSample(int pad)
     settingsDirty = true;
     refreshProjectUi();
     statusBar()->showMessage(tr("Using synthesized sound for this drum pad"), 2000);
+}
+
+void MainWindow::setSelectedDrumSample(int pad, int parameter, double value)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
+        return;
+    DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+    if (sample.path.isEmpty())
+        return;
+    switch (parameter)
+    {
+        case 0: sample.tuningSemitones = static_cast<float>(std::clamp(value, -24.0, 24.0)); break;
+        case 1: sample.startPositionPercent = static_cast<float>(std::clamp(value, 0.0, 99.0)); break;
+        default: return;
+    }
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
 }
 
 quint64 MainWindow::projectAudioBytes() const

@@ -91,6 +91,8 @@ struct DrumPadSample
 {
     QString path;
     std::shared_ptr<const AudioAsset> source;
+    float tuningSemitones = 0.0f;
+    float startPositionPercent = 0.0f;
 };
 
 struct AutomationPoint

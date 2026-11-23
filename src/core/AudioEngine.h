@@ -47,7 +47,9 @@ public:
                         float synthFilterCutoffHz = 20000.0f,
                         float synthFilterResonance = 0.707f);
     void triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity = 96,
-                              float pan = 0.0f, float gain = 1.0f);
+                              float pan = 0.0f, float gain = 1.0f,
+                              float startPositionPercent = 0.0f,
+                              float tuningSemitones = 0.0f);
     void setMasterGain(float gain);
     bool setAudioInputMonitoring(bool enabled);
     void pushAudioInputMonitorFrames(const float* interleavedSamples, qsizetype frameCount,
@@ -83,6 +85,8 @@ private:
         float sustainLevel = 1.0f;
         float releaseSeconds = 0.06f;
         std::shared_ptr<const AudioAsset> sample;
+        qint64 sampleStartFrame = 0;
+        double samplePlaybackRate = 1.0;
     };
 
     struct LiveMidiVoice
@@ -112,6 +116,8 @@ private:
         float secondOscillatorMix = 0.5f;
         bool secondOscillatorEnabled = false;
         std::shared_ptr<const AudioAsset> sample;
+        qint64 sampleStartFrame = 0;
+        double samplePlaybackRate = 1.0;
     };
 
     struct AudioMonitorBufferEntry
@@ -208,6 +214,8 @@ private:
     std::atomic<qint64> previewNoteEndFrame{0};
     std::atomic<qint64> previewEndFrame{0};
     std::shared_ptr<const AudioAsset> previewSampleAsset;
+    std::atomic<double> previewSampleStartFrame{0.0};
+    std::atomic<double> previewSamplePlaybackRate{1.0};
     std::atomic<float> previewSampleGain{1.0f};
 
     qint64 playbackFrame = 0;
