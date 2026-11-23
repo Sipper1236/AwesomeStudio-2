@@ -11,6 +11,8 @@ struct StereoSample
     float right = 0.0f;
 };
 
+float renderPercussionSample(int midiPitch, qint64 ageFrames, qint64 startFrame, double sampleRate);
+
 class SynthRenderer
 {
 public:
@@ -27,6 +29,8 @@ private:
         float leftGain = 0.70710678f;
         float rightGain = 0.70710678f;
         SynthWaveform waveform = SynthWaveform::Sine;
+        int midiPitch = 60;
+        bool percussion = false;
     };
 
     std::shared_ptr<const ProjectData> project;

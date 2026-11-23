@@ -27,7 +27,8 @@ public:
     bool isPlaying() const;
     double positionBeats() const;
     void triggerPreview(int midiPitch, int velocity = 96,
-                        SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f);
+                        SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
+                        bool percussion = false);
     void setMasterGain(float gain);
 
 private:
@@ -57,6 +58,7 @@ private:
     std::atomic<int> previewVelocity{96};
     std::atomic<double> previewFrequency{440.0};
     std::atomic<int> previewWaveform{static_cast<int>(SynthWaveform::Sine)};
+    std::atomic<bool> previewPercussion{false};
     std::atomic<float> previewLeftGain{0.70710678f};
     std::atomic<float> previewRightGain{0.70710678f};
     std::atomic<qint64> previewStartFrame{0};

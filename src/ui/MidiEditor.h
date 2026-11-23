@@ -13,6 +13,7 @@ public:
 
     void setNotes(const QVector<MidiNote>& notes);
     void setPatternLengthBeats(double beats);
+    void setTimeSignature(int beatsPerBar, int beatUnit);
     void setSnap(double beatStep);
     void setPixelsPerBeat(int pixels);
     void setPlayheadBeat(double beat);

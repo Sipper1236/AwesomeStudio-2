@@ -134,6 +134,7 @@ struct ParsedTrack
     QString name;
     QVector<RawNote> notes;
     qint64 lastTick = 0;
+    bool percussion = false;
 };
 
 bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
@@ -284,6 +285,7 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
 
         if (eventType == 0x90 && dataCount == 2 && data2 > 0)
         {
+            track.percussion = track.percussion || channel == 9;
             activeNotes[{channel, data1}].push_back({absoluteTick, data2});
         }
         else if (eventType == 0x80 || (eventType == 0x90 && dataCount == 2 && data2 == 0))
@@ -485,6 +487,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
         instrument.id = loaded.nextTrackId();
         instrument.name = sourceTrack.name.isEmpty()
             ? QStringLiteral("MIDI %1").arg(instrument.id) : sourceTrack.name;
+        instrument.instrumentType = sourceTrack.percussion ? InstrumentType::DrumRack : InstrumentType::Synth;
         instrument.gain = 0.8f;
         MidiClip clip;
         clip.id = loaded.nextClipId();
@@ -538,8 +541,17 @@ bool MidiFile::save(const QString& path, const ProjectData& project, QString* er
     appendBigEndian16(file, static_cast<quint16>(safeProject.tracks.size() + 1));
     appendBigEndian16(file, exportPpqn);
     appendTrackChunk(file, makeConductorTrack(safeProject, songEndTick));
-    for (int index = 0; index < safeProject.tracks.size(); ++index)
-        appendTrackChunk(file, makeInstrumentTrack(safeProject.tracks[index], index % 16, songEndTick));
+    int synthChannel = 0;
+    for (const InstrumentTrack& track : safeProject.tracks)
+    {
+        int channel = 9;
+        if (track.instrumentType != InstrumentType::DrumRack)
+        {
+            const int channelSlot = synthChannel++ % 15;
+            channel = channelSlot < 9 ? channelSlot : channelSlot + 1;
+        }
+        appendTrackChunk(file, makeInstrumentTrack(track, channel, songEndTick));
+    }
 
     QSaveFile output(path);
     if (!output.open(QIODevice::WriteOnly))

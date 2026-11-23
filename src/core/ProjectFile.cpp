@@ -8,7 +8,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 3;
+constexpr int currentProjectVersion = 4;
 constexpr auto projectFormat = "awesome-studio-project";
 
 void setError(QString* error, const QString& message)
@@ -99,6 +99,7 @@ QJsonObject saveTrack(const InstrumentTrack& track)
     return QJsonObject{
         {QStringLiteral("id"), static_cast<qint64>(track.id)},
         {QStringLiteral("name"), track.name},
+        {QStringLiteral("instrumentType"), static_cast<int>(track.instrumentType)},
         {QStringLiteral("waveform"), static_cast<int>(track.waveform)},
         {QStringLiteral("gain"), track.gain},
         {QStringLiteral("pan"), track.pan},
@@ -152,6 +153,7 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, QString* error)
     if (!readId(object, QStringLiteral("id"), track.id, error))
         return false;
     track.name = object.value(QStringLiteral("name")).toString(QStringLiteral("Synth"));
+    track.instrumentType = static_cast<InstrumentType>(object.value(QStringLiteral("instrumentType")).toInt(0));
     track.waveform = static_cast<SynthWaveform>(object.value(QStringLiteral("waveform")).toInt(0));
     track.gain = static_cast<float>(object.value(QStringLiteral("gain")).toDouble(0.8));
     track.pan = static_cast<float>(object.value(QStringLiteral("pan")).toDouble(0.0));

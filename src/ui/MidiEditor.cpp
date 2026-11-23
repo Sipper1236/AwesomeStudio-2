@@ -75,8 +75,16 @@ public:
 
     void setLengthBeats(double beats)
     {
-        patternLength = std::max(1.0, beats);
+        patternLength = std::max(0.25, beats);
         updateCanvasSize();
+    }
+
+    void setTimeSignature(int numerator, int denominator)
+    {
+        denominator = denominator == 1 || denominator == 2 || denominator == 4 ||
+                      denominator == 8 || denominator == 16 ? denominator : 4;
+        quarterNotesPerBar = std::clamp(numerator, 1, 12) * 4.0 / denominator;
+        update();
     }
 
     void setSnap(double beatStep)
@@ -138,15 +146,27 @@ protected:
         for (int beat = 0; beat <= totalBeats; ++beat)
         {
             const int x = sidebarWidth + beat * pixelsPerBeat;
-            const bool barLine = beat % 4 == 0;
-            painter.setPen(barLine ? QColor(QStringLiteral("#56616e")) : QColor(QStringLiteral("#303944")));
+            const double barOffset = std::fmod(beat, quarterNotesPerBar);
+            if (std::min(barOffset, quarterNotesPerBar - barOffset) > 0.02)
+            {
+                painter.setPen(QColor(QStringLiteral("#303944")));
+                painter.drawLine(x, rulerHeight, x, velocityTop + velocityHeight);
+            }
+        }
+        const int totalBars = static_cast<int>(std::ceil(patternLength / quarterNotesPerBar));
+        for (int bar = 0; bar <= totalBars; ++bar)
+        {
+            const double beat = bar * quarterNotesPerBar;
+            const int x = sidebarWidth + static_cast<int>(std::round(beat * pixelsPerBeat));
+            painter.setPen(QColor(QStringLiteral("#56616e")));
             painter.drawLine(x, rulerHeight, x, velocityTop + velocityHeight);
-            if (barLine && beat < patternLength)
+            if (beat < patternLength)
             {
                 painter.setPen(QColor(QStringLiteral("#e3e9ef")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
-                painter.drawText(QRect(x + 6, 0, pixelsPerBeat * 4 - 12, rulerHeight), Qt::AlignVCenter,
-                                 QString::number(beat / 4 + 1));
+                painter.drawText(QRect(x + 6, 0,
+                                       static_cast<int>(std::round(pixelsPerBeat * quarterNotesPerBar)) - 12,
+                                       rulerHeight), Qt::AlignVCenter, QString::number(bar + 1));
             }
         }
 
@@ -468,6 +488,7 @@ private:
     DragMode dragMode = DragMode::None;
     quint64 draggedNoteId = 0;
     double patternLength = 16.0;
+    double quarterNotesPerBar = 4.0;
     double snap = 0.25;
     double playheadBeat = -1.0;
     int pixelsPerBeat = 84;
@@ -493,6 +514,11 @@ void MidiEditor::setNotes(const QVector<MidiNote>& notes)
 void MidiEditor::setPatternLengthBeats(double beats)
 {
     canvas->setLengthBeats(beats);
+}
+
+void MidiEditor::setTimeSignature(int beatsPerBar, int beatUnit)
+{
+    canvas->setTimeSignature(beatsPerBar, beatUnit);
 }
 
 void MidiEditor::setSnap(double beatStep)

@@ -167,19 +167,23 @@ double AudioEngine::positionBeats() const
         : 0.0;
 }
 
-void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform waveform, float pan)
+void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform waveform, float pan,
+                                 bool percussion)
 {
     const int clampedPitch = std::clamp(midiPitch, 0, 127);
     const double panAngle = (std::clamp(static_cast<double>(pan), -1.0, 1.0) + 1.0) * 0.7853981633974483;
     previewVelocity.store(std::clamp(velocity, 1, 127), std::memory_order_relaxed);
     previewFrequency.store(440.0 * std::pow(2.0, (clampedPitch - 69) / 12.0), std::memory_order_relaxed);
     previewWaveform.store(static_cast<int>(waveform), std::memory_order_relaxed);
+    previewPercussion.store(percussion, std::memory_order_relaxed);
     previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
     previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
     previewPitch.store(clampedPitch, std::memory_order_release);
     const qint64 start = audioClockFrames.load(std::memory_order_acquire);
     previewStartFrame.store(start, std::memory_order_release);
-    previewEndFrame.store(start + static_cast<qint64>(outputSampleRate * 0.45), std::memory_order_release);
+    const double previewSeconds = percussion && clampedPitch == 46 ? 0.72 :
+                                  percussion && (clampedPitch == 42 || clampedPitch == 44) ? 0.22 : 0.48;
+    previewEndFrame.store(start + static_cast<qint64>(outputSampleRate * previewSeconds), std::memory_order_release);
 }
 
 void AudioEngine::setMasterGain(float gain)
@@ -239,15 +243,26 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         if (preview >= 0 && clockFrame >= previewStart && clockFrame < previewEnd)
         {
             const qint64 age = clockFrame - previewStart;
-            const double frequency = previewFrequency.load(std::memory_order_relaxed);
-            const double phase = static_cast<double>(age) * frequency / outputSampleRate;
+            const bool percussion = previewPercussion.load(std::memory_order_relaxed);
+            const float velocity = static_cast<float>(previewVelocity.load(std::memory_order_relaxed)) / 127.0f;
             const float attack = std::min(1.0f, static_cast<float>(age) /
                                                   std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
-            const float release = std::min(1.0f, static_cast<float>(previewEnd - clockFrame) /
-                                                   std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
-            const float preview = oscillatorSample(static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase) *
-                                  (0.2f * static_cast<float>(previewVelocity.load(std::memory_order_relaxed)) / 127.0f) *
-                                  attack * release;
+            float preview = 0.0f;
+            if (percussion)
+            {
+                preview = renderPercussionSample(previewPitch.load(std::memory_order_relaxed), age,
+                                                 previewStart, outputSampleRate) *
+                          (0.48f * velocity) * attack;
+            }
+            else
+            {
+                const double frequency = previewFrequency.load(std::memory_order_relaxed);
+                const double phase = static_cast<double>(age) * frequency / outputSampleRate;
+                const float release = std::min(1.0f, static_cast<float>(previewEnd - clockFrame) /
+                                                       std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
+                preview = oscillatorSample(static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase) *
+                          (0.2f * velocity) * attack * release;
+            }
             mixed.left += preview * previewLeftGain.load(std::memory_order_relaxed);
             mixed.right += preview * previewRightGain.load(std::memory_order_relaxed);
         }

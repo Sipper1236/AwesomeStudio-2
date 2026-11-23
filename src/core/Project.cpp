@@ -129,6 +129,8 @@ void ProjectData::normalize()
             track.id = trackCandidate++;
         }
         usedTrackIds.insert(track.id);
+        track.instrumentType = static_cast<InstrumentType>(
+            std::clamp(static_cast<int>(track.instrumentType), 0, 1));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));

@@ -18,6 +18,7 @@ class QTabWidget;
 class QTimer;
 class MidiEditor;
 class ArrangementEditor;
+class StepSequencer;
 
 class MainWindow final : public QMainWindow
 {
@@ -41,6 +42,7 @@ private:
     void selectTrack(quint64 trackId);
     void selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll);
     void addTrack();
+    void addDrumTrack();
     void addClipAt(quint64 trackId, double startBeat);
     void addNewPattern();
     void removeClip(quint64 trackId, quint64 clipId);
@@ -63,6 +65,7 @@ private:
 
     MidiEditor* midiEditor = nullptr;
     ArrangementEditor* arrangementEditor = nullptr;
+    StepSequencer* stepSequencer = nullptr;
     QTabWidget* editorTabs = nullptr;
     QDockWidget* browserDock = nullptr;
     QDockWidget* mixerDock = nullptr;
@@ -82,6 +85,7 @@ private:
     QAction* stopAction = nullptr;
     QAction* loopAction = nullptr;
     QAction* addTrackAction = nullptr;
+    QAction* addDrumTrackAction = nullptr;
     QAction* addPatternAction = nullptr;
     QAction* undoAction = nullptr;
     QAction* redoAction = nullptr;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace
 {
@@ -23,6 +24,47 @@ float oscillatorSample(SynthWaveform waveform, double phase)
             return static_cast<float>(std::sin(phase * twoPi));
     }
 }
+
+float noiseSample(qint64 ageFrames, qint64 startFrame, int midiPitch)
+{
+    std::uint32_t value = static_cast<std::uint32_t>(ageFrames) ^
+                          static_cast<std::uint32_t>(startFrame >> 4) ^
+                          static_cast<std::uint32_t>(midiPitch * 0x9e3779b9u);
+    value += 0x9e3779b9u;
+    value = (value ^ (value >> 16)) * 0x21f0aaadu;
+    value = (value ^ (value >> 15)) * 0x735a2d97u;
+    value ^= value >> 15;
+    return static_cast<float>(value & 0x00ffffffu) / 8388607.5f - 1.0f;
+}
+}
+
+float renderPercussionSample(int midiPitch, qint64 ageFrames, qint64 startFrame, double sampleRate)
+{
+    if (ageFrames < 0 || sampleRate <= 0.0)
+        return 0.0f;
+    const double time = static_cast<double>(ageFrames) / sampleRate;
+    constexpr double twoPi = 6.28318530717958647692;
+    if (midiPitch == 35 || midiPitch == 36)
+    {
+        const double phase = 42.0 * time + (118.0 / 17.0) * (1.0 - std::exp(-17.0 * time));
+        return static_cast<float>(std::sin(phase * twoPi) * std::exp(-time * 9.0));
+    }
+    if (midiPitch == 38 || midiPitch == 40)
+    {
+        const float noise = noiseSample(ageFrames, startFrame, midiPitch);
+        const float body = static_cast<float>(std::sin(time * twoPi * 185.0) * std::exp(-time * 18.0));
+        return noise * static_cast<float>(std::exp(-time * 22.0)) * 0.72f + body * 0.28f;
+    }
+    if (midiPitch == 42 || midiPitch == 44 || midiPitch == 46)
+    {
+        const float current = noiseSample(ageFrames, startFrame, midiPitch);
+        const float previous = ageFrames == 0 ? 0.0f : noiseSample(ageFrames - 1, startFrame, midiPitch);
+        const double decay = midiPitch == 46 ? 7.0 : 34.0;
+        return (current - previous) * 0.42f * static_cast<float>(std::exp(-time * decay));
+    }
+
+    const double frequency = 70.0 + 12.0 * std::clamp(midiPitch - 48, 0, 24);
+    return static_cast<float>(std::sin(time * twoPi * frequency) * std::exp(-time * 12.0));
 }
 
 void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, double newSampleRate)
@@ -61,10 +103,20 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                                                           project->tempoBpm));
                 voice.endFrame = voice.startFrame + std::max<qint64>(duration, 1);
                 voice.frequency = 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0);
-                voice.amplitude = 0.22f * static_cast<float>(note.velocity) / 127.0f * track.gain;
+                voice.amplitude = (track.instrumentType == InstrumentType::DrumRack ? 0.48f : 0.22f) *
+                                  static_cast<float>(note.velocity) / 127.0f * track.gain;
                 voice.leftGain = leftGain;
                 voice.rightGain = rightGain;
                 voice.waveform = track.waveform;
+                voice.midiPitch = note.pitch;
+                voice.percussion = track.instrumentType == InstrumentType::DrumRack;
+                if (voice.percussion)
+                {
+                    const double decaySeconds = note.pitch == 46 ? 0.72 :
+                        (note.pitch == 35 || note.pitch == 36 ? 0.48 :
+                         (note.pitch == 42 || note.pitch == 44 ? 0.22 : 0.36));
+                    voice.endFrame = voice.startFrame + static_cast<qint64>(sampleRate * decaySeconds);
+                }
                 notes.push_back(voice);
             }
         }
@@ -89,7 +141,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     lastFrame = projectFrame;
 
     StereoSample sample;
-    const qint64 releaseFrames = static_cast<qint64>(sampleRate * 0.06);
+        const qint64 releaseFrames = static_cast<qint64>(sampleRate * 0.06);
     const qint64 attackFrames = std::max<qint64>(1, static_cast<qint64>(sampleRate * 0.008));
     while (nextStartIndex < notes.size() && notes[nextStartIndex].startFrame <= projectFrame)
         activeNotes.push_back(nextStartIndex++);
@@ -109,6 +161,14 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         float envelope = age < attackFrames
             ? static_cast<float>(age) / static_cast<float>(attackFrames)
             : 1.0f;
+        if (note.percussion)
+        {
+            const float voice = renderPercussionSample(note.midiPitch, age, note.startFrame, sampleRate) *
+                                note.amplitude * envelope;
+            sample.left += voice * note.leftGain;
+            sample.right += voice * note.rightGain;
+            continue;
+        }
         if (projectFrame >= note.endFrame)
         {
             const qint64 releaseAge = projectFrame - note.endFrame;

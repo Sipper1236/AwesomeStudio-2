@@ -12,6 +12,12 @@ enum class SynthWaveform
     Square
 };
 
+enum class InstrumentType
+{
+    Synth,
+    DrumRack
+};
+
 struct MidiNote
 {
     quint64 id = 0;
@@ -36,6 +42,7 @@ struct InstrumentTrack
 {
     quint64 id = 0;
     QString name = QStringLiteral("Synth");
+    InstrumentType instrumentType = InstrumentType::Synth;
     SynthWaveform waveform = SynthWaveform::Sine;
     float gain = 0.8f;
     float pan = 0.0f;

@@ -26,6 +26,8 @@ add_executable(AwesomeStudio
     src/ui/MainWindow.h
     src/ui/ArrangementEditor.cpp
     src/ui/ArrangementEditor.h
+    src/ui/StepSequencer.cpp
+    src/ui/StepSequencer.h
     src/ui/MidiEditor.cpp
     src/ui/MidiEditor.h
 )

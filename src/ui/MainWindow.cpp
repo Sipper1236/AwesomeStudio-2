@@ -5,6 +5,7 @@
 #include "core/WavExporter.h"
 #include "ui/ArrangementEditor.h"
 #include "ui/MidiEditor.h"
+#include "ui/StepSequencer.h"
 
 #include <QAction>
 #include <QApplication>
@@ -88,8 +89,10 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     editorTabs = new QTabWidget(this);
     arrangementEditor = new ArrangementEditor(editorTabs);
     midiEditor = new MidiEditor(editorTabs);
+    stepSequencer = new StepSequencer(editorTabs);
     editorTabs->addTab(arrangementEditor, tr("Playlist"));
     editorTabs->addTab(midiEditor, tr("Piano roll"));
+    editorTabs->addTab(stepSequencer, tr("Step sequencer"));
     setCentralWidget(editorTabs);
 
     createActions();
@@ -97,8 +100,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     createDocks();
     createMenus();
 
-    connect(midiEditor, &MidiEditor::notesEdited, this,
-            [this](const QVector<MidiNote>& before, const QVector<MidiNote>& after)
+    const auto applyEditedNotes = [this](const QVector<MidiNote>& before, const QVector<MidiNote>& after)
     {
         MidiClip* clip = selectedClip();
         if (clip == nullptr || selectedTrackId == 0)
@@ -107,16 +109,30 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         audioEngine.setProject(project);
         arrangementEditor->setProject(project);
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+        midiEditor->setNotes(after);
+        stepSequencer->setPattern(after, clip->lengthBeats, project.quarterNotesPerBar(),
+                                  project.nextNoteId(), true);
         undoStack.push(new NoteEditCommand(this, selectedTrackId, selectedClipId, before, after));
         refreshDirtyState();
         statusBar()->showMessage(tr("MIDI clip updated"), 1600);
-    });
+    };
+    connect(midiEditor, &MidiEditor::notesEdited, this, applyEditedNotes);
+    connect(stepSequencer, &StepSequencer::notesEdited, this, applyEditedNotes);
     connect(midiEditor, &MidiEditor::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
         audioEngine.triggerPreview(pitch, 96,
                                    track == nullptr ? SynthWaveform::Sine : track->waveform,
-                                   track == nullptr ? 0.0f : track->pan);
+                                   track == nullptr ? 0.0f : track->pan,
+                                   track != nullptr && track->instrumentType == InstrumentType::DrumRack);
+    });
+    connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
+    {
+        const InstrumentTrack* track = selectedTrack();
+        audioEngine.triggerPreview(pitch, 100,
+                                   track == nullptr ? SynthWaveform::Sine : track->waveform,
+                                   track == nullptr ? 0.0f : track->pan,
+                                   track != nullptr && track->instrumentType == InstrumentType::DrumRack);
     });
     connect(arrangementEditor, &ArrangementEditor::clipActivated, this,
             [this](quint64 trackId, quint64 clipId) { selectClip(trackId, clipId, true); });
@@ -262,6 +278,8 @@ void MainWindow::createActions()
 
     addTrackAction = new QAction(tr("Add track"), this);
     connect(addTrackAction, &QAction::triggered, this, &MainWindow::addTrack);
+    addDrumTrackAction = new QAction(tr("Add drum track"), this);
+    connect(addDrumTrackAction, &QAction::triggered, this, &MainWindow::addDrumTrack);
     addPatternAction = new QAction(tr("New pattern"), this);
     connect(addPatternAction, &QAction::triggered, this, &MainWindow::addNewPattern);
 
@@ -336,6 +354,7 @@ void MainWindow::createToolBars()
     arrangementBar->setObjectName(QStringLiteral("arrangementToolbar"));
     arrangementBar->setMovable(false);
     arrangementBar->addAction(addTrackAction);
+    arrangementBar->addAction(addDrumTrackAction);
     arrangementBar->addAction(addPatternAction);
     arrangementBar->addSeparator();
     arrangementBar->addWidget(new QLabel(tr("CLIP LENGTH"), arrangementBar));
@@ -357,6 +376,9 @@ void MainWindow::createToolBars()
         const MidiClip* updatedClip = selectedClip();
         midiEditor->setPatternLengthBeats(updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats);
         midiEditor->setNotes(updatedClip == nullptr ? QVector<MidiNote>{} : updatedClip->notes);
+        stepSequencer->setPattern(updatedClip == nullptr ? QVector<MidiNote>{} : updatedClip->notes,
+                                  updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats,
+                                  project.quarterNotesPerBar(), project.nextNoteId(), updatedClip != nullptr);
         arrangementEditor->setProject(project);
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
         audioEngine.setProject(project);
@@ -410,7 +432,11 @@ void MainWindow::createToolBars()
         project.beatUnit = meter[1].toInt();
         project.normalize();
         const MidiClip* clip = selectedClip();
+        midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
         midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
+        stepSequencer->setPattern(clip == nullptr ? QVector<MidiNote>{} : clip->notes,
+                                  clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
+                                  project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr);
         arrangementEditor->setProject(project);
         audioEngine.setProject(project);
         settingsDirty = true;
@@ -473,6 +499,9 @@ void MainWindow::createDocks()
     buttonRow->addWidget(addTrackButton);
     buttonRow->addWidget(addPatternButton);
     browserLayout->addLayout(buttonRow);
+    auto* addDrumButton = new QPushButton(tr("Add drum rack"), browser);
+    connect(addDrumButton, &QPushButton::clicked, this, &MainWindow::addDrumTrack);
+    browserLayout->addWidget(addDrumButton);
 
     auto* instrumentHeading = new QLabel(tr("SELECTED INSTRUMENT"), browser);
     instrumentHeading->setStyleSheet(QStringLiteral("color: #8d9aa7; font-size: 10px; font-weight: 700; margin-top: 10px;"));
@@ -493,7 +522,7 @@ void MainWindow::createDocks()
         refreshDirtyState();
     });
     browserLayout->addStretch();
-    auto* hint = new QLabel(tr("Click an empty Playlist row to add a pattern. Double-click a clip to edit its MIDI."), browser);
+    auto* hint = new QLabel(tr("Click an empty Playlist row to add a pattern. Double-click an instrument clip for the piano roll or a drum clip for its step grid."), browser);
     hint->setWordWrap(true);
     hint->setStyleSheet(QStringLiteral("color: #8996a2; font-size: 11px;"));
     browserLayout->addWidget(hint);
@@ -553,6 +582,7 @@ void MainWindow::createMenus()
 
     QMenu* patternMenu = menuBar()->addMenu(tr("&Track"));
     patternMenu->addAction(addTrackAction);
+    patternMenu->addAction(addDrumTrackAction);
     patternMenu->addAction(addPatternAction);
 
     QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
@@ -610,11 +640,18 @@ void MainWindow::refreshProjectUi()
     const int waveformIndex = track == nullptr ? 0 :
         waveformControl->findData(static_cast<int>(track->waveform));
     waveformControl->setCurrentIndex(std::max(0, waveformIndex));
-    waveformControl->setEnabled(track != nullptr);
+    waveformControl->setEnabled(track != nullptr && track->instrumentType == InstrumentType::Synth);
 
     const MidiClip* clip = selectedClip();
+    midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     midiEditor->setNotes(clip == nullptr ? QVector<MidiNote>{} : clip->notes);
+    const bool drumTrack = track != nullptr && track->instrumentType == InstrumentType::DrumRack;
+    editorTabs->setTabEnabled(editorTabs->indexOf(stepSequencer), drumTrack);
+    stepSequencer->setEnabled(drumTrack);
+    stepSequencer->setPattern(clip == nullptr ? QVector<MidiNote>{} : clip->notes,
+                              clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
+                              project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
 
@@ -764,6 +801,8 @@ void MainWindow::selectTrack(quint64 trackId)
     selectedTrackId = trackId;
     selectedClipId = track->clips.isEmpty() ? 0 : track->clips.first().id;
     refreshProjectUi();
+    if (track->instrumentType == InstrumentType::DrumRack)
+        editorTabs->setCurrentWidget(stepSequencer);
 }
 
 void MainWindow::selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll)
@@ -774,7 +813,12 @@ void MainWindow::selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll)
     selectedClipId = clipId;
     refreshProjectUi();
     if (openPianoRoll)
-        editorTabs->setCurrentWidget(midiEditor);
+    {
+        const InstrumentTrack* track = project.findTrack(trackId);
+        editorTabs->setCurrentWidget(track != nullptr && track->instrumentType == InstrumentType::DrumRack
+                                         ? static_cast<QWidget*>(stepSequencer)
+                                         : static_cast<QWidget*>(midiEditor));
+    }
 }
 
 void MainWindow::addTrack()
@@ -793,6 +837,32 @@ void MainWindow::addTrack()
     settingsDirty = true;
     refreshProjectUi();
     statusBar()->showMessage(tr("Added %1").arg(track.name), 1800);
+}
+
+void MainWindow::addDrumTrack()
+{
+    if (project.tracks.size() >= 256)
+    {
+        statusBar()->showMessage(tr("The project has reached the 256-track limit"), 3000);
+        return;
+    }
+    InstrumentTrack track;
+    track.id = project.nextTrackId();
+    track.name = tr("Drum Rack %1").arg(track.id);
+    track.instrumentType = InstrumentType::DrumRack;
+    track.gain = 0.8f;
+    MidiClip clip;
+    clip.id = project.nextClipId();
+    clip.name = tr("Beat %1").arg(clip.id);
+    clip.lengthBeats = project.patternLengthBeats();
+    track.clips.push_back(std::move(clip));
+    project.tracks.push_back(std::move(track));
+    selectedTrackId = project.tracks.last().id;
+    selectedClipId = project.tracks.last().clips.first().id;
+    settingsDirty = true;
+    refreshProjectUi();
+    editorTabs->setCurrentWidget(stepSequencer);
+    statusBar()->showMessage(tr("Added a drum rack with kick, snare, closed-hat, and open-hat sounds"), 2500);
 }
 
 void MainWindow::addClipAt(quint64 trackId, double startBeat)
@@ -967,6 +1037,10 @@ void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector
     clip->notes = notes;
     if (selectedTrackId == trackId && selectedClipId == clipId)
         midiEditor->setNotes(notes);
+    const MidiClip* currentClip = selectedClip();
+    stepSequencer->setPattern(currentClip == nullptr ? QVector<MidiNote>{} : currentClip->notes,
+                              currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
+                              project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     audioEngine.setProject(project);

@@ -96,7 +96,10 @@ protected:
             painter.setPen(QColor(QStringLiteral("#85919d")));
             painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
             painter.drawText(QRect(12, y + 31, trackHeaderWidth - 20, 18), Qt::AlignLeft | Qt::AlignVCenter,
-                             track.muted ? tr("MUTED") : tr("MIDI · %1 clips").arg(track.clips.size()));
+                             track.muted ? tr("MUTED") :
+                                 track.instrumentType == InstrumentType::DrumRack
+                                     ? tr("DRUM · %1 clips").arg(track.clips.size())
+                                     : tr("MIDI · %1 clips").arg(track.clips.size()));
         }
 
         const int totalBeats = static_cast<int>(std::ceil(visibleBeats));
