@@ -324,6 +324,7 @@ private:
         quint64 trackId = 0;
         int parameter = 0;
         float initialValue = 0.0f;
+        float baseValue = 0.0f;
         float lastValue = 0.0f;
         double lastSampleBeat = -1.0;
         double lastPointBeat = -1.0;
