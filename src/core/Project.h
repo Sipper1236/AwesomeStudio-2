@@ -181,6 +181,7 @@ struct MixerEffect
     QString pluginUri;
     QString pluginName;
     QVector<float> pluginParameterValues;
+    QVector<QVector<AutomationPoint>> pluginParameterAutomation;
 };
 
 MixerEffect defaultMixerEffect(MixerEffectType type);

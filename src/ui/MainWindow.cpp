@@ -226,6 +226,89 @@ bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options)
     return true;
 }
 
+bool editPluginParameterAutomation(QWidget* parent, const QString& title,
+                                   float minimum, float maximum,
+                                   QVector<AutomationPoint>& points)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* list = new QListWidget(&dialog);
+    auto* form = new QFormLayout;
+    auto* beat = new QDoubleSpinBox(&dialog);
+    beat->setRange(0.0, 16384.0);
+    beat->setDecimals(3);
+    beat->setSingleStep(1.0);
+    beat->setSuffix(QObject::tr(" beats"));
+    auto* value = new QDoubleSpinBox(&dialog);
+    value->setRange(minimum, maximum);
+    value->setDecimals(std::max(0, maximum - minimum > 100.0f ? 2 : 4));
+    value->setSingleStep(std::max(0.001, static_cast<double>(maximum - minimum) / 100.0));
+    form->addRow(QObject::tr("Position"), beat);
+    form->addRow(QObject::tr("Value"), value);
+    auto* keyframeButtons = new QHBoxLayout;
+    auto* setPoint = new QPushButton(QObject::tr("Add / replace keyframe"), &dialog);
+    auto* removePoint = new QPushButton(QObject::tr("Remove keyframe"), &dialog);
+    keyframeButtons->addWidget(setPoint);
+    keyframeButtons->addWidget(removePoint);
+    layout->addWidget(list);
+    layout->addLayout(form);
+    layout->addLayout(keyframeButtons);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+
+    const auto refreshList = [list, removePoint, &points]
+    {
+        list->clear();
+        for (const AutomationPoint& point : points)
+            list->addItem(QObject::tr("Beat %1  —  %2")
+                .arg(point.beat, 0, 'f', 3).arg(point.value, 0, 'g', 6));
+        removePoint->setEnabled(list->currentRow() >= 0);
+    };
+    refreshList();
+    QObject::connect(list, &QListWidget::currentRowChanged, &dialog,
+                     [list, beat, value, removePoint, &points](int row)
+    {
+        const bool selected = row >= 0 && row < points.size();
+        removePoint->setEnabled(selected);
+        if (!selected)
+            return;
+        beat->setValue(points[row].beat);
+        value->setValue(points[row].value);
+    });
+    QObject::connect(setPoint, &QPushButton::clicked, &dialog,
+                     [list, beat, value, &points, refreshList]
+    {
+        const double targetBeat = beat->value();
+        auto position = std::lower_bound(points.begin(), points.end(), targetBeat,
+            [](const AutomationPoint& point, double target) { return point.beat < target; });
+        if (position != points.end() && std::abs(position->beat - targetBeat) < 0.001)
+            position->value = static_cast<float>(value->value());
+        else if (position != points.begin() && std::abs((position - 1)->beat - targetBeat) < 0.001)
+            (position - 1)->value = static_cast<float>(value->value());
+        else if (points.size() < 10000)
+            points.insert(position, {targetBeat, static_cast<float>(value->value())});
+        refreshList();
+        const auto selected = std::lower_bound(points.cbegin(), points.cend(), targetBeat,
+            [](const AutomationPoint& point, double target) { return point.beat < target; });
+        if (selected != points.cend())
+            list->setCurrentRow(static_cast<int>(selected - points.cbegin()));
+    });
+    QObject::connect(removePoint, &QPushButton::clicked, &dialog,
+                     [list, &points, refreshList]
+    {
+        const int row = list->currentRow();
+        if (row < 0 || row >= points.size())
+            return;
+        points.removeAt(row);
+        refreshList();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.resize(440, 360);
+    return dialog.exec() == QDialog::Accepted;
+}
+
 WavExportOptions& previousWavExportOptions()
 {
     static WavExportOptions options;
@@ -2569,6 +2652,31 @@ void MainWindow::refreshMixer()
                             while (target.pluginParameterValues.size() <= parameterIndex)
                                 target.pluginParameterValues.push_back(defaultValue);
                             target.pluginParameterValues[parameterIndex] = newValue;
+                        });
+                        QVector<AutomationPoint> curve =
+                            parameterIndex < effect.pluginParameterAutomation.size()
+                                ? effect.pluginParameterAutomation[parameterIndex]
+                                : QVector<AutomationPoint>{};
+                        auto* automation = new QPushButton(
+                            tr("Automation (%1 keyframes)").arg(curve.size()), effectBox);
+                        effectForm->addRow(QString(), automation);
+                        connect(automation, &QPushButton::clicked, this,
+                                [this, automation, index, parameterIndex, parameter,
+                                 updateEffect, curve = std::move(curve)]() mutable
+                        {
+                            QVector<AutomationPoint> edited = curve;
+                            if (!editPluginParameterAutomation(this,
+                                    tr("%1 automation").arg(parameter.name),
+                                    parameter.minimum, parameter.maximum, edited))
+                                return;
+                            updateEffect(index, [parameterIndex, edited](MixerEffect& target)
+                            {
+                                while (target.pluginParameterAutomation.size() <= parameterIndex)
+                                    target.pluginParameterAutomation.push_back({});
+                                target.pluginParameterAutomation[parameterIndex] = edited;
+                            });
+                            curve = std::move(edited);
+                            automation->setText(tr("Automation (%1 keyframes)").arg(curve.size()));
                         });
                     }
                 }

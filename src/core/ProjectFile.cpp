@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 34;
+constexpr int currentProjectVersion = 35;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -129,6 +129,9 @@ QJsonArray saveEffects(const QVector<MixerEffect>& effects)
         QJsonArray pluginParameters;
         for (float value : effect.pluginParameterValues)
             pluginParameters.push_back(value);
+        QJsonArray pluginParameterAutomation;
+        for (const QVector<AutomationPoint>& points : effect.pluginParameterAutomation)
+            pluginParameterAutomation.push_back(saveAutomation(points));
         result.push_back(QJsonObject{
             {QStringLiteral("type"), static_cast<int>(effect.type)},
             {QStringLiteral("enabled"), effect.enabled},
@@ -146,11 +149,15 @@ QJsonArray saveEffects(const QVector<MixerEffect>& effects)
             {QStringLiteral("resonance"), effect.resonance},
             {QStringLiteral("pluginUri"), effect.pluginUri},
             {QStringLiteral("pluginName"), effect.pluginName},
-            {QStringLiteral("pluginParameterValues"), pluginParameters}
+            {QStringLiteral("pluginParameterValues"), pluginParameters},
+            {QStringLiteral("pluginParameterAutomation"), pluginParameterAutomation}
         });
     }
     return result;
 }
+
+bool loadAutomation(const QJsonValue& value, QVector<AutomationPoint>& points,
+                    const QString& parameterName, QString* error);
 
 bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
                  const QString& ownerName, int version, QString* error)
@@ -246,6 +253,24 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
                 setError(error, QStringLiteral("The %1 contains a plugin effect without a URI.")
                                     .arg(ownerName));
                 return false;
+            }
+        }
+        if (version >= 35)
+        {
+            const QJsonValue automationValue =
+                object.value(QStringLiteral("pluginParameterAutomation"));
+            if (!automationValue.isArray() || automationValue.toArray().size() > 256)
+            {
+                setError(error, QStringLiteral("The %1 contains invalid plugin automation data.")
+                                    .arg(ownerName));
+                return false;
+            }
+            for (const QJsonValue& curveValue : automationValue.toArray())
+            {
+                QVector<AutomationPoint> points;
+                if (!loadAutomation(curveValue, points, QStringLiteral("plugin parameter"), error))
+                    return false;
+                effect.pluginParameterAutomation.push_back(std::move(points));
             }
         }
         effects.push_back(effect);

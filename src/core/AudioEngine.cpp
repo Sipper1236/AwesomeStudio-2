@@ -1002,6 +1002,8 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         if (project->loopEnabled && playbackFrame >= 0)
             currentFrame %= patternFrames;
 
+        renderer.setCurrentBeat(static_cast<double>(currentFrame) * project->tempoBpm /
+                                (60.0 * outputSampleRate));
         renderer.beginMixerFrame();
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;

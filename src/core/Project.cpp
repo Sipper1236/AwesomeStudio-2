@@ -90,6 +90,10 @@ void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBud
             effect.pluginParameterValues.resize(256);
         for (float& value : effect.pluginParameterValues)
             if (!std::isfinite(value)) value = 0.0f;
+        if (effect.pluginParameterAutomation.size() > 256)
+            effect.pluginParameterAutomation.resize(256);
+        for (QVector<AutomationPoint>& points : effect.pluginParameterAutomation)
+            normalizeAutomation(points, -1.0e9f, 1.0e9f);
     }
 }
 }

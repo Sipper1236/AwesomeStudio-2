@@ -153,6 +153,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
 {
     project = std::move(newProject);
     sampleRate = std::max(1.0, newSampleRate);
+    currentBeat = 0.0;
     notes.clear();
     pitchBendEvents.clear();
     trackPitchBends.clear();
@@ -652,6 +653,11 @@ void SynthRenderer::beginMixerFrame()
     std::fill(lastBusOutputSamples.begin(), lastBusOutputSamples.end(), StereoSample{});
 }
 
+void SynthRenderer::setCurrentBeat(double beat)
+{
+    currentBeat = std::isfinite(beat) ? std::clamp(beat, 0.0, 16384.0) : 0.0;
+}
+
 StereoSample SynthRenderer::addLiveTrackSample(size_t trackIndex, StereoSample input)
 {
     if (trackIndex >= trackAudible.size() || trackAudible[trackIndex] == 0)
@@ -1040,6 +1046,15 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
         else if (effect.type == MixerEffectType::Lv2Plugin &&
                  state.lv2Effect != nullptr && state.lv2Effect->isValid())
         {
+            for (qsizetype parameterIndex = 0;
+                 parameterIndex < effect.pluginParameterAutomation.size(); ++parameterIndex)
+            {
+                const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
+                    ? effect.pluginParameterValues[parameterIndex] : 0.0f;
+                const float value = automationValue(
+                    effect.pluginParameterAutomation[parameterIndex], currentBeat, defaultValue);
+                state.lv2Effect->setParameter(parameterIndex, value);
+            }
             state.lv2Effect->process(wet.left, wet.right);
             if (!std::isfinite(wet.left) || !std::isfinite(wet.right))
                 wet = dry;
@@ -1240,6 +1255,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     lastFrame = projectFrame;
     const double projectBeat = static_cast<double>(projectFrame) * project->tempoBpm /
                                (60.0 * sampleRate);
+    setCurrentBeat(projectBeat);
 
     StereoSample sample;
     while (nextPitchBendIndex < pitchBendEvents.size() &&

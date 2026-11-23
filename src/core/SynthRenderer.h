@@ -21,6 +21,7 @@ public:
     void setProject(std::shared_ptr<const ProjectData> project, double sampleRate);
     void resetTransport();
     void beginMixerFrame();
+    void setCurrentBeat(double beat);
     StereoSample addLiveTrackSample(size_t trackIndex, StereoSample input);
     StereoSample finishMixerFrame();
     StereoSample processMasterEffects(StereoSample input);
@@ -211,6 +212,7 @@ private:
     quint64 playbackCycle = 0;
     qint64 lastFrame = -1;
     double sampleRate = 48000.0;
+    double currentBeat = 0.0;
     float lowBandCoefficient = 0.0f;
     float highBandCoefficient = 0.0f;
     bool hasBusSolo = false;

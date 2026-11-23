@@ -313,6 +313,28 @@ bool Lv2AudioEffectInstance::isValid() const
 #endif
 }
 
+void Lv2AudioEffectInstance::setParameter(qsizetype index, float value)
+{
+#if defined(AWESOME_STUDIO_HAS_LILV)
+    if (d == nullptr || d->instance == nullptr || index < 0 ||
+        index >= static_cast<qsizetype>(d->controlInputs.size()) ||
+        index >= d->descriptor.parameters.size())
+        return;
+    const Lv2EffectParameter& parameter = d->descriptor.parameters[index];
+    if (!std::isfinite(value))
+        value = parameter.defaultValue;
+    value = std::clamp(value, parameter.minimum, parameter.maximum);
+    if (parameter.toggled)
+        value = value >= 0.5f ? 1.0f : 0.0f;
+    else if (parameter.integer)
+        value = std::round(value);
+    d->controlInputs[static_cast<size_t>(index)] = value;
+#else
+    Q_UNUSED(index)
+    Q_UNUSED(value)
+#endif
+}
+
 void Lv2AudioEffectInstance::process(float& left, float& right)
 {
 #if defined(AWESOME_STUDIO_HAS_LILV)
