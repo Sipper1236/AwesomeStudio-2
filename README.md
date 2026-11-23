@@ -12,6 +12,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Set the grid to quarter, eighth, sixteenth, or thirty-second notes, edit velocity, and undo or redo note edits.
 - Play and loop the full arrangement at 20–300 BPM.
 - Enable an accented metronome and set a 1, 2, or 4 bar count-in. Count-in is included in WAV renders.
+- Select an audio input and record a WAV take; with audio output connected, the take starts after count-in, then appears as a new Playlist track. Recording also works without output, starting immediately.
 - Set a common time signature and edit MIDI clip lengths in quarter-note beats.
 - Choose sine, triangle, saw, or square per instrument track.
 - Add a drum rack with synthesized kick, snare, closed-hat, and open-hat voices, then program 16 steps per bar. Step edits and piano-roll notes share undo and redo.
@@ -44,6 +45,6 @@ On Windows, launch `build/AwesomeStudio.exe`. Qt's Multimedia backend uses the a
 
 ## Known gaps
 
-There is no audio recording, fade curves/crossfades, streaming playback, mixer buses/sends/effects, third-party plugin hosting, or automation yet. Drum pads support one sample each without velocity layers, tuning, or per-pad envelopes. MIDI format 2 and SMPTE-timed files are not supported. Older JUCE-oriented source files remain in `src/core`, but the build does not include them and they are not shipped capabilities.
+Audio recording currently writes a separate WAV file per take, stores its path in the project, and loads the take into memory after recording. There is no MIDI input/recording, input monitoring, latency compensation, punch recording, fade curves/crossfades, streaming playback, mixer buses/sends/effects, third-party plugin hosting, or automation yet. Drum pads support one sample each without velocity layers, tuning, or per-pad envelopes. MIDI format 2 and SMPTE-timed files are not supported. Older JUCE-oriented source files remain in `src/core`, but the build does not include them and they are not shipped capabilities.
 
 The project plan names GPL-3.0, but the repository currently has no `LICENSE` file. Add the official license text before distributing releases.

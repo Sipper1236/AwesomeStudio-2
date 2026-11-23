@@ -3,12 +3,15 @@
 #include "core/AudioEngine.h"
 #include "core/Project.h"
 
+#include <QByteArray>
 #include <QMainWindow>
 #include <QUndoStack>
 
 #include <array>
+#include <memory>
 
 class QCloseEvent;
+class QMediaDevices;
 class QComboBox;
 class QDoubleSpinBox;
 class QDockWidget;
@@ -22,6 +25,7 @@ class QTimer;
 class MidiEditor;
 class ArrangementEditor;
 class StepSequencer;
+class AudioRecorder;
 
 class MainWindow final : public QMainWindow
 {
@@ -30,6 +34,7 @@ class MainWindow final : public QMainWindow
 
 public:
     explicit MainWindow(AudioEngine& audioEngine, QWidget* parent = nullptr);
+    ~MainWindow() override;
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -68,6 +73,10 @@ private:
     void importAudio();
     void importMidi();
     void exportMidi();
+    void startAudioRecording();
+    bool startPendingAudioRecording(double playheadBeat);
+    void finishAudioRecording(bool keepTake = true);
+    void refreshAudioInputs();
 
     AudioEngine& audioEngine;
     ProjectData project;
@@ -111,6 +120,17 @@ private:
     QAction* redoAction = nullptr;
     QUndoStack undoStack;
     QTimer* uiTimer = nullptr;
+    QMediaDevices* mediaDevices = nullptr;
+    QComboBox* audioInputControl = nullptr;
+    QAction* recordAction = nullptr;
+    std::unique_ptr<AudioRecorder> audioRecorder;
+    QString pendingRecordingPath;
+    QByteArray pendingRecordingDeviceId;
+    QString pendingRecordingDeviceName;
+    double recordingStartBeat = 0.0;
+    quint64 recordingDecodedByteLimit = 0;
+    bool recordingPending = false;
+    bool recordingTransportActive = false;
     quint64 selectedTrackId = 0;
     quint64 selectedClipId = 0;
 };

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "core/AudioFile.h"
+#include "core/AudioRecorder.h"
 #include "core/ProjectFile.h"
 #include "core/MidiFile.h"
 #include "core/WavExporter.h"
@@ -10,11 +11,13 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QAudioDevice>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QDockWidget>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -24,6 +27,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMediaDevices>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
@@ -246,6 +250,28 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(uiTimer, &QTimer::timeout, this, [this]
     {
         const double beat = audioEngine.positionBeats();
+        if (recordingPending)
+        {
+            if (!audioEngine.isPlaying())
+            {
+                finishAudioRecording(false);
+                statusBar()->showMessage(tr("Playback stopped before recording could start."), 4000);
+            }
+            else if (beat >= 0.0 && !startPendingAudioRecording(beat))
+            {
+                finishAudioRecording(false);
+            }
+        }
+        if (audioRecorder)
+        {
+            const QString inputIssue = audioRecorder->errorMessage();
+            if (audioRecorder->maximumReached())
+                finishAudioRecording(true);
+            else if (!inputIssue.isEmpty())
+                finishAudioRecording(true);
+            else if (recordingTransportActive && !audioEngine.isPlaying())
+                finishAudioRecording(true);
+        }
         if (beat < 0.0)
         {
             playheadLabel->setText(tr("COUNT-IN"));
@@ -272,6 +298,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     });
     uiTimer->start();
 }
+
+MainWindow::~MainWindow() = default;
 
 void MainWindow::createActions()
 {
@@ -355,6 +383,8 @@ void MainWindow::createActions()
         }
         else
         {
+            if (audioRecorder || recordingPending)
+                finishAudioRecording(true);
             audioEngine.stopPlayback();
             midiEditor->setPlayheadBeat(0.0);
             arrangementEditor->setPlayheadBeat(0.0);
@@ -366,10 +396,24 @@ void MainWindow::createActions()
     stopAction->setShortcut(Qt::Key_Escape);
     connect(stopAction, &QAction::triggered, this, [this]
     {
+        if (audioRecorder || recordingPending)
+            finishAudioRecording(true);
         audioEngine.stopPlayback();
         playAction->setChecked(false);
         midiEditor->setPlayheadBeat(0.0);
         arrangementEditor->setPlayheadBeat(0.0);
+    });
+
+    recordAction = new QAction(tr("Record audio…"), this);
+    recordAction->setCheckable(true);
+    recordAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+    recordAction->setToolTip(tr("Record the selected audio input to a new Playlist track"));
+    connect(recordAction, &QAction::triggered, this, [this](bool enabled)
+    {
+        if (enabled)
+            startAudioRecording();
+        else
+            finishAudioRecording(true);
     });
 
     loopAction = new QAction(tr("Loop"), this);
@@ -527,6 +571,21 @@ void MainWindow::createToolBars()
         settingsDirty = true;
         refreshDirtyState();
     });
+
+    auto* recordingBar = addToolBar(tr("Recording"));
+    recordingBar->setObjectName(QStringLiteral("recordingToolbar"));
+    recordingBar->setMovable(false);
+    recordingBar->addAction(recordAction);
+    recordingBar->addSeparator();
+    recordingBar->addWidget(new QLabel(tr("INPUT"), recordingBar));
+    audioInputControl = new QComboBox(recordingBar);
+    audioInputControl->setMinimumWidth(190);
+    audioInputControl->setToolTip(tr("Audio device used for new recordings"));
+    recordingBar->addWidget(audioInputControl);
+    mediaDevices = new QMediaDevices(this);
+    connect(mediaDevices, &QMediaDevices::audioInputsChanged,
+            this, &MainWindow::refreshAudioInputs);
+    refreshAudioInputs();
 
     auto* editorBar = addToolBar(tr("Piano roll"));
     editorBar->setObjectName(QStringLiteral("pianoRollToolbar"));
@@ -728,6 +787,7 @@ void MainWindow::createMenus()
     QMenu* transportMenu = menuBar()->addMenu(tr("&Transport"));
     transportMenu->addAction(playAction);
     transportMenu->addAction(stopAction);
+    transportMenu->addAction(recordAction);
     transportMenu->addAction(loopAction);
     transportMenu->addAction(metronomeAction);
 
@@ -1185,6 +1245,8 @@ void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
 
 bool MainWindow::maybeSave()
 {
+    if (audioRecorder || recordingPending)
+        finishAudioRecording(true);
     if (!isWindowModified())
         return true;
 
@@ -1316,6 +1378,11 @@ void MainWindow::exportAudio()
 
 void MainWindow::importAudio()
 {
+    if (audioRecorder || recordingPending)
+    {
+        statusBar()->showMessage(tr("Finish the active recording before importing more audio."), 3000);
+        return;
+    }
     if (project.tracks.size() >= 256)
     {
         statusBar()->showMessage(tr("The project has reached the 256-track limit"), 3000);
@@ -1371,6 +1438,11 @@ void MainWindow::importAudio()
 
 void MainWindow::importDrumSample(int pad)
 {
+    if (audioRecorder || recordingPending)
+    {
+        statusBar()->showMessage(tr("Finish the active recording before loading more audio."), 3000);
+        return;
+    }
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
         pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
@@ -1508,6 +1580,282 @@ void MainWindow::exportMidi()
         return;
     }
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
+}
+
+void MainWindow::refreshAudioInputs()
+{
+    if (audioInputControl == nullptr)
+        return;
+
+    const QByteArray previousId = audioInputControl->currentData().toByteArray();
+    const QList<QAudioDevice> devices = QMediaDevices::audioInputs();
+    const QSignalBlocker blocker(audioInputControl);
+    audioInputControl->clear();
+
+    int selectedIndex = -1;
+    int defaultIndex = -1;
+    for (const QAudioDevice& device : devices)
+    {
+        audioInputControl->addItem(device.description(), device.id());
+        const int index = audioInputControl->count() - 1;
+        if (device.id() == previousId)
+            selectedIndex = index;
+        if (device.isDefault())
+            defaultIndex = index;
+    }
+
+    if (devices.isEmpty())
+    {
+        audioInputControl->addItem(tr("No input devices"), QByteArray{});
+        audioInputControl->setCurrentIndex(0);
+    }
+    else if (selectedIndex >= 0)
+    {
+        audioInputControl->setCurrentIndex(selectedIndex);
+    }
+    else
+    {
+        audioInputControl->setCurrentIndex(defaultIndex >= 0 ? defaultIndex : 0);
+    }
+    audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !recordingPending);
+    recordAction->setEnabled(audioRecorder || recordingPending || !devices.isEmpty());
+}
+
+void MainWindow::startAudioRecording()
+{
+    if (audioRecorder || recordingPending)
+        return;
+    if (project.tracks.size() >= 256)
+    {
+        QMessageBox::warning(this, tr("Track limit"), tr("A project can contain up to 256 tracks."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+
+    const QByteArray selectedDeviceId = audioInputControl == nullptr
+        ? QByteArray{} : audioInputControl->currentData().toByteArray();
+    QAudioDevice selectedDevice;
+    for (const QAudioDevice& device : QMediaDevices::audioInputs())
+    {
+        if (device.id() == selectedDeviceId)
+        {
+            selectedDevice = device;
+            break;
+        }
+    }
+    if (selectedDevice.isNull())
+    {
+        QMessageBox::warning(this, tr("No audio input"),
+                             tr("Connect or select an audio input device before recording."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+
+    const QString defaultDirectory = projectPath.isEmpty()
+        ? QDir::homePath() : QFileInfo(projectPath).absolutePath();
+    QString path = QFileDialog::getSaveFileName(this, tr("Save recorded take"),
+                                                 QDir(defaultDirectory).filePath(tr("Recording.wav")),
+                                                 tr("WAV audio (*.wav)"));
+    if (path.isEmpty())
+    {
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+    if (QFileInfo(path).suffix().isEmpty())
+        path += QStringLiteral(".wav");
+    else if (QFileInfo(path).suffix().compare(QStringLiteral("wav"), Qt::CaseInsensitive) != 0)
+    {
+        QMessageBox::warning(this, tr("Unsupported recording format"),
+                             tr("Recordings are saved as WAV files. Choose a .wav filename."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+    if (QFileInfo::exists(path) &&
+        QMessageBox::question(this, tr("Replace recording?"),
+                              tr("%1 already exists. Replace it when the take is saved?")
+                                  .arg(QFileInfo(path).fileName()),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+    {
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+    if (findProjectAudioAsset(path) != nullptr)
+    {
+        QMessageBox::warning(this, tr("Recording is already in use"),
+                             tr("Choose a new WAV filename. This path is already used by audio in the current project."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+
+    const bool playbackAvailable = audioEngine.isAudioAvailable() || audioEngine.initialize();
+    const quint64 usedAudioBytes = projectAudioBytes();
+    recordingDecodedByteLimit = usedAudioBytes >= AudioFile::maximumProjectDecodedBytes
+        ? 0 : AudioFile::maximumProjectDecodedBytes - usedAudioBytes;
+    if (recordingDecodedByteLimit == 0)
+    {
+        QMessageBox::warning(this, tr("Audio memory limit"),
+                             tr("This project has reached its 512 MiB decoded audio limit. Remove an audio source before recording another take."));
+        QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+        return;
+    }
+
+    pendingRecordingPath = path;
+    pendingRecordingDeviceId = selectedDevice.id();
+    pendingRecordingDeviceName = selectedDevice.description();
+    recordingPending = true;
+    recordingTransportActive = playbackAvailable;
+    audioInputControl->setEnabled(false);
+    tempoControl->setEnabled(false);
+    timeSignatureControl->setEnabled(false);
+    countInControl->setEnabled(false);
+    loopAction->setEnabled(false);
+    metronomeAction->setEnabled(false);
+    if (playbackAvailable)
+    {
+        audioEngine.setProject(project);
+        audioEngine.startPlayback();
+        playAction->setChecked(true);
+        statusBar()->showMessage(project.countInBars > 0
+            ? tr("Waiting for count-in before recording to %1…").arg(QFileInfo(path).fileName())
+            : tr("Starting recording to %1…").arg(QFileInfo(path).fileName()));
+    }
+    else
+    {
+        statusBar()->showMessage(tr("Audio output is unavailable; recording starts now without count-in or playback."), 5000);
+        if (!startPendingAudioRecording(0.0))
+            finishAudioRecording(false);
+    }
+}
+
+bool MainWindow::startPendingAudioRecording(double playheadBeat)
+{
+    QAudioDevice selectedDevice;
+    for (const QAudioDevice& device : QMediaDevices::audioInputs())
+    {
+        if (device.id() == pendingRecordingDeviceId)
+        {
+            selectedDevice = device;
+            break;
+        }
+    }
+    if (selectedDevice.isNull())
+    {
+        statusBar()->showMessage(tr("The selected audio input was disconnected."), 5000);
+        return false;
+    }
+
+    audioRecorder = std::make_unique<AudioRecorder>();
+    QString error;
+    if (!audioRecorder->start(selectedDevice, pendingRecordingPath, recordingDecodedByteLimit, &error))
+    {
+        audioRecorder.reset();
+        statusBar()->showMessage(tr("Could not start recording: %1").arg(error), 6000);
+        return false;
+    }
+
+    recordingStartBeat = std::max(0.0, playheadBeat);
+    recordingPending = false;
+    pendingRecordingPath.clear();
+    pendingRecordingDeviceId.clear();
+    recordAction->setEnabled(true);
+    statusBar()->showMessage(recordingTransportActive
+        ? tr("Recording from %1…").arg(pendingRecordingDeviceName)
+        : tr("Recording from %1 without playback…").arg(pendingRecordingDeviceName));
+    pendingRecordingDeviceName.clear();
+    return true;
+}
+
+void MainWindow::finishAudioRecording(bool keepTake)
+{
+    if (!audioRecorder && !recordingPending)
+        return;
+
+    const bool wasWaitingForCountIn = recordingPending;
+    const QString path = audioRecorder ? audioRecorder->path() : pendingRecordingPath;
+    const bool reachedLimit = audioRecorder && audioRecorder->maximumReached();
+    const QString captureIssue = audioRecorder ? audioRecorder->errorMessage() : QString{};
+    bool finished = false;
+    QString error;
+    if (audioRecorder && keepTake)
+        finished = audioRecorder->finish(&error);
+    audioRecorder.reset();
+    recordingPending = false;
+    recordingTransportActive = false;
+    pendingRecordingPath.clear();
+    pendingRecordingDeviceId.clear();
+    pendingRecordingDeviceName.clear();
+    recordingDecodedByteLimit = 0;
+    tempoControl->setEnabled(true);
+    timeSignatureControl->setEnabled(true);
+    countInControl->setEnabled(true);
+    loopAction->setEnabled(true);
+    metronomeAction->setEnabled(true);
+    audioEngine.stopPlayback();
+    playAction->setChecked(false);
+    {
+        const QSignalBlocker blocker(recordAction);
+        recordAction->setChecked(false);
+    }
+    refreshAudioInputs();
+
+    if (!keepTake)
+        return;
+    if (wasWaitingForCountIn)
+    {
+        statusBar()->showMessage(tr("Recording stopped before the count-in finished; no take was created."), 3500);
+        return;
+    }
+    if (!finished)
+    {
+        statusBar()->showMessage(tr("Recording was not saved: %1").arg(error), 6000);
+        return;
+    }
+
+    std::shared_ptr<const AudioAsset> asset;
+    if (!AudioFile::loadWav(path, asset, &error))
+    {
+        statusBar()->showMessage(tr("The take was written, but could not be added to the project: %1").arg(error), 6000);
+        return;
+    }
+
+    const QString takeName = QFileInfo(path).completeBaseName();
+    InstrumentTrack track;
+    track.id = project.nextTrackId();
+    track.name = tr("Audio · %1").arg(takeName);
+    track.instrumentType = InstrumentType::Audio;
+
+    MidiClip clip;
+    clip.id = project.nextClipId();
+    clip.name = takeName;
+    clip.startBeat = recordingStartBeat;
+    const double durationBeats = static_cast<double>(asset->frameCount()) / asset->sampleRate *
+                                 project.tempoBpm / 60.0;
+    clip.lengthBeats = std::max(0.25, durationBeats);
+    clip.audioSourcePath = asset->path;
+    clip.audioSource = asset;
+    track.clips.push_back(std::move(clip));
+    project.tracks.push_back(std::move(track));
+    project.normalize();
+    selectedTrackId = project.tracks.last().id;
+    selectedClipId = project.tracks.last().clips.first().id;
+    settingsDirty = true;
+    refreshProjectUi();
+    editorTabs->setCurrentWidget(arrangementEditor);
+    refreshDirtyState();
+
+    if (reachedLimit)
+        statusBar()->showMessage(tr("Recording stopped at the project audio memory or WAV size limit; the take was added."), 6000);
+    else if (!captureIssue.isEmpty())
+        statusBar()->showMessage(tr("A partial take was added after an input error: %1").arg(captureIssue), 6000);
+    else
+        statusBar()->showMessage(tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName()), 3500);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
