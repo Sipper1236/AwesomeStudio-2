@@ -8,6 +8,18 @@
 
 namespace
 {
+constexpr std::array<int, 7> supportedStepCounts = {8, 12, 16, 24, 32, 48, 64};
+
+int normalizedStepsPerBar(int requested)
+{
+    return *std::min_element(supportedStepCounts.cbegin(), supportedStepCounts.cend(),
+                             [requested](int left, int right)
+    {
+        return std::abs(static_cast<long long>(left) - requested) <
+               std::abs(static_cast<long long>(right) - requested);
+    });
+}
+
 void normalizeAutomation(QVector<AutomationPoint>& points, float minimum, float maximum)
 {
     if (points.size() > 10000)
@@ -466,6 +478,7 @@ void ProjectData::normalize()
             usedClipIds.insert(clip.id);
             clip.startBeat = std::clamp(clip.startBeat, 0.0, 16384.0);
             clip.lengthBeats = std::clamp(clip.lengthBeats, 0.25, 16384.0);
+            clip.stepsPerBar = normalizedStepsPerBar(clip.stepsPerBar);
             clip.audioStartFrame = std::max<qint64>(0, clip.audioStartFrame);
             if (!std::isfinite(clip.audioFadeInBeats))
                 clip.audioFadeInBeats = 0.0;

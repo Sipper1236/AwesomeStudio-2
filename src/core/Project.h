@@ -72,6 +72,7 @@ struct MidiClip
     QString name = QStringLiteral("Pattern");
     double startBeat = 0.0;
     double lengthBeats = 16.0;
+    int stepsPerBar = 16;
     QVector<MidiNote> notes;
     QVector<MidiPitchBend> pitchBends;
     QString audioSourcePath;

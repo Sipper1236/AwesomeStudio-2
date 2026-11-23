@@ -1,6 +1,7 @@
 #include "StepSequencer.h"
 
 #include <QAbstractItemView>
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -16,9 +17,19 @@
 
 namespace
 {
-constexpr int stepCount = 16;
+constexpr int maximumStepCount = 64;
+constexpr std::array<int, 7> supportedStepCounts = {8, 12, 16, 24, 32, 48, 64};
 constexpr std::array<int, 4> drumPitches = {36, 38, 42, 46};
 constexpr std::array<const char*, 4> drumNames = {"Kick", "Snare", "Closed Hat", "Open Hat"};
+
+int supportedStepCount(int requested)
+{
+    return *std::min_element(supportedStepCounts.cbegin(), supportedStepCounts.cend(),
+                             [requested](int left, int right)
+    {
+        return std::abs(left - requested) < std::abs(right - requested);
+    });
+}
 }
 
 StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
@@ -40,7 +51,15 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
     barControl->setFixedWidth(72);
     barControl->setAccessibleName(tr("Sequencer bar"));
     controls->addWidget(barControl);
-    auto* hint = new QLabel(tr("16 steps per bar · changes are written to the selected drum clip"), this);
+    controls->addWidget(new QLabel(tr("STEPS / BAR"), this));
+    divisionControl = new QComboBox(this);
+    divisionControl->setObjectName(QStringLiteral("stepDivisionControl"));
+    divisionControl->setAccessibleName(tr("Steps per bar"));
+    divisionControl->setFixedWidth(76);
+    for (const int division : supportedStepCounts)
+        divisionControl->addItem(QString::number(division), division);
+    controls->addWidget(divisionControl);
+    auto* hint = new QLabel(tr("Step edits are written to the selected drum clip · scroll for finer divisions"), this);
     hint->setStyleSheet(QStringLiteral("color: #a8b5c1;"));
     controls->addWidget(hint, 1);
     root->addLayout(controls);
@@ -51,7 +70,7 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
     emptyHint->hide();
     root->addWidget(emptyHint);
 
-    grid = new QTableWidget(4, stepCount, this);
+    grid = new QTableWidget(4, maximumStepCount, this);
     grid->setObjectName(QStringLiteral("drumStepGrid"));
     grid->setEditTriggers(QAbstractItemView::NoEditTriggers);
     grid->setSelectionMode(QAbstractItemView::NoSelection);
@@ -77,12 +96,12 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
         "QPushButton:focus { border: 2px solid #b3fff3; }"
         "QPushButton:checked { background: #56d3c0; color: #102626; border-color: #8be9dc; }"
         "QPushButton:disabled { background: #1d232a; color: #68737e; border-color: #303741; }"));
-    for (int step = 0; step < stepCount; ++step)
+    for (int step = 0; step < maximumStepCount; ++step)
         grid->setHorizontalHeaderItem(step, new QTableWidgetItem(QStringLiteral("%1").arg(step + 1, 2, 10, QLatin1Char('0'))));
     for (int row = 0; row < static_cast<int>(drumNames.size()); ++row)
     {
         grid->setVerticalHeaderItem(row, new QTableWidgetItem(tr(drumNames[row])));
-        for (int column = 0; column < stepCount; ++column)
+        for (int column = 0; column < maximumStepCount; ++column)
         {
             auto* pad = new QPushButton(grid);
             pad->setCheckable(true);
@@ -99,18 +118,33 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
     {
         refreshPads();
     });
+    connect(divisionControl, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index)
+    {
+        if (index < 0)
+            return;
+        const int requested = divisionControl->itemData(index).toInt();
+        if (requested == stepsPerBar)
+            return;
+        const int before = stepsPerBar;
+        configureDivision(requested);
+        refreshPads();
+        emit stepsPerBarChanged(before, stepsPerBar);
+    });
 }
 
 void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
-                               double barLength, quint64 noteId, bool available)
+                               double barLength, quint64 noteId, bool available,
+                               int requestedStepsPerBar)
 {
     notes = newNotes;
     clipLengthBeats = std::max(0.25, length);
     quarterNotesPerBar = std::max(0.25, barLength);
     nextNoteId = std::max<quint64>(1, noteId);
     patternAvailable = available;
+    configureDivision(requestedStepsPerBar);
     emptyHint->setVisible(!patternAvailable);
     barControl->setEnabled(patternAvailable);
+    divisionControl->setEnabled(patternAvailable);
     grid->setEnabled(patternAvailable);
     const int bars = std::clamp(static_cast<int>(std::ceil(clipLengthBeats / quarterNotesPerBar)), 1, 4096);
     const QSignalBlocker blocker(barControl);
@@ -120,20 +154,32 @@ void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
     refreshPads();
 }
 
+void StepSequencer::configureDivision(int requestedSteps)
+{
+    stepsPerBar = supportedStepCount(requestedSteps);
+    const QSignalBlocker blocker(divisionControl);
+    divisionControl->setCurrentIndex(divisionControl->findData(stepsPerBar));
+    for (int column = 0; column < maximumStepCount; ++column)
+        grid->setColumnHidden(column, column >= stepsPerBar);
+}
+
 void StepSequencer::refreshPads()
 {
     const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
-    const double stepLength = quarterNotesPerBar / stepCount;
+    const double barEnd = barStart + quarterNotesPerBar;
+    const double stepLength = quarterNotesPerBar / stepsPerBar;
     for (int row = 0; row < static_cast<int>(drumPitches.size()); ++row)
     {
-        for (int column = 0; column < stepCount; ++column)
+        for (int column = 0; column < stepsPerBar; ++column)
         {
             const double stepStart = barStart + column * stepLength;
             bool active = false;
             for (const MidiNote& note : notes)
             {
-                if (note.pitch == drumPitches[row] &&
-                    std::abs(note.startBeat - stepStart) <= stepLength * 0.45)
+                const double relativeBeat = note.startBeat - barStart;
+                if (note.pitch == drumPitches[row] && note.startBeat >= barStart && note.startBeat < barEnd &&
+                    std::clamp(static_cast<int>(std::floor(relativeBeat / stepLength + 0.5)),
+                               0, stepsPerBar - 1) == column)
                 {
                     active = true;
                     break;
@@ -151,18 +197,23 @@ void StepSequencer::refreshPads()
 
 void StepSequencer::toggleStep(int row, int column, bool enabled)
 {
-    if (row < 0 || row >= static_cast<int>(drumPitches.size()) || column < 0 || column >= stepCount)
+    if (row < 0 || row >= static_cast<int>(drumPitches.size()) || column < 0 || column >= stepsPerBar)
         return;
-    const double stepLength = quarterNotesPerBar / stepCount;
-    const double stepStart = (barControl->value() - 1) * quarterNotesPerBar + column * stepLength;
+    const double stepLength = quarterNotesPerBar / stepsPerBar;
+    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
+    const double barEnd = barStart + quarterNotesPerBar;
+    const double stepStart = barStart + column * stepLength;
     if (stepStart >= clipLengthBeats)
         return;
 
     const QVector<MidiNote> before = notes;
     const int pitch = drumPitches[row];
-    const auto matchesStep = [pitch, stepStart, stepLength](const MidiNote& note)
+    const auto matchesStep = [pitch, barStart, barEnd, stepLength, column, this](const MidiNote& note)
     {
-        return note.pitch == pitch && std::abs(note.startBeat - stepStart) <= stepLength * 0.45;
+        const double relativeBeat = note.startBeat - barStart;
+        return note.pitch == pitch && note.startBeat >= barStart && note.startBeat < barEnd &&
+               std::clamp(static_cast<int>(std::floor(relativeBeat / stepLength + 0.5)),
+                          0, stepsPerBar - 1) == column;
     };
     if (enabled)
     {

@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 25;
+constexpr int currentProjectVersion = 26;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -341,6 +341,7 @@ QJsonObject saveClip(const MidiClip& clip)
         {QStringLiteral("name"), clip.name},
         {QStringLiteral("startBeat"), clip.startBeat},
         {QStringLiteral("lengthBeats"), clip.lengthBeats},
+        {QStringLiteral("stepsPerBar"), clip.stepsPerBar},
         {QStringLiteral("notes"), saveNotes(clip.notes)},
         {QStringLiteral("pitchBends"), savePitchBends(clip.pitchBends)},
         {QStringLiteral("audioSourcePath"), clip.audioSourcePath},
@@ -436,6 +437,8 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
     clip.name = object.value(QStringLiteral("name")).toString(QStringLiteral("Pattern"));
     clip.startBeat = object.value(QStringLiteral("startBeat")).toDouble(-1.0);
     clip.lengthBeats = object.value(QStringLiteral("lengthBeats")).toDouble(-1.0);
+    if (version >= 26)
+        clip.stepsPerBar = object.value(QStringLiteral("stepsPerBar")).toInt(16);
     if (clip.startBeat < 0.0 || clip.lengthBeats <= 0.0)
     {
         setError(error, QStringLiteral("The project contains an out-of-range MIDI clip."));

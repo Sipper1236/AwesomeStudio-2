@@ -214,6 +214,42 @@ private:
     bool firstRedo = true;
 };
 
+class StepDivisionCommand final : public QUndoCommand
+{
+public:
+    StepDivisionCommand(MainWindow* window, quint64 trackId, quint64 clipId,
+                        int before, int after)
+        : window(window), trackId(trackId), clipId(clipId), before(before), after(after)
+    {
+        setText(QObject::tr("Change drum step division"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyStepDivisionHistory(trackId, clipId, before);
+    }
+
+    void redo() override
+    {
+        if (firstRedo)
+        {
+            firstRedo = false;
+            return;
+        }
+        if (window != nullptr)
+            window->applyStepDivisionHistory(trackId, clipId, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    quint64 clipId;
+    int before;
+    int after;
+    bool firstRedo = true;
+};
+
 class PitchBendRangeCommand final : public QUndoCommand
 {
 public:
@@ -363,13 +399,30 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
         midiEditor->setNotes(after);
         stepSequencer->setPattern(after, clip->lengthBeats, project.quarterNotesPerBar(),
-                                  project.nextNoteId(), true);
+                                  project.nextNoteId(), true, clip->stepsPerBar);
         undoStack.push(new NoteEditCommand(this, selectedTrackId, selectedClipId, before, after));
         refreshDirtyState();
         statusBar()->showMessage(tr("MIDI clip updated"), 1600);
     };
     connect(midiEditor, &MidiEditor::notesEdited, this, applyEditedNotes);
     connect(stepSequencer, &StepSequencer::notesEdited, this, applyEditedNotes);
+    connect(stepSequencer, &StepSequencer::stepsPerBarChanged, this,
+            [this](int before, int after)
+    {
+        MidiClip* clip = selectedClip();
+        const InstrumentTrack* track = project.findTrack(selectedTrackId);
+        if (clip == nullptr || track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+            clip->isAudioRegion() || before == after)
+            return;
+
+        const quint64 trackId = selectedTrackId;
+        const quint64 clipId = selectedClipId;
+        clip->stepsPerBar = after;
+        audioEngine.setProject(project);
+        undoStack.push(new StepDivisionCommand(this, trackId, clipId, before, after));
+        refreshDirtyState();
+        statusBar()->showMessage(tr("Drum step division updated"), 1600);
+    });
     connect(midiEditor, &MidiEditor::pitchBendsEdited, this,
             [this](const QVector<MidiPitchBend>& before, const QVector<MidiPitchBend>& after)
     {
@@ -839,7 +892,8 @@ void MainWindow::createToolBars()
         midiEditor->setPitchBendLaneEnabled(updatedClip != nullptr && !updatedClip->isAudioRegion());
         stepSequencer->setPattern(updatedClip == nullptr ? QVector<MidiNote>{} : updatedClip->notes,
                                   updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats,
-                                  project.quarterNotesPerBar(), project.nextNoteId(), updatedClip != nullptr);
+                                  project.quarterNotesPerBar(), project.nextNoteId(), updatedClip != nullptr,
+                                  updatedClip == nullptr ? 16 : updatedClip->stepsPerBar);
         arrangementEditor->setProject(project);
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
         audioEngine.setProject(project);
@@ -960,7 +1014,8 @@ void MainWindow::createToolBars()
         midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
         stepSequencer->setPattern(clip == nullptr ? QVector<MidiNote>{} : clip->notes,
                                   clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
-                                  project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr);
+                                  project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr,
+                                  clip == nullptr ? 16 : clip->stepsPerBar);
         arrangementEditor->setProject(project);
         audioEngine.setProject(project);
         settingsDirty = true;
@@ -1804,7 +1859,8 @@ void MainWindow::refreshProjectUi()
     stepSequencer->setEnabled(drumTrack);
     stepSequencer->setPattern(clip == nullptr ? QVector<MidiNote>{} : clip->notes,
                               clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
-                              project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr);
+                              project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr,
+                              clip == nullptr ? 16 : clip->stepsPerBar);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
 
@@ -3836,9 +3892,26 @@ void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector
     const MidiClip* currentClip = selectedClip();
     stepSequencer->setPattern(currentClip == nullptr ? QVector<MidiNote>{} : currentClip->notes,
                               currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
-                              project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr);
+                              project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr,
+                              currentClip == nullptr ? 16 : currentClip->stepsPerBar);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+    audioEngine.setProject(project);
+    refreshDirtyState();
+}
+
+void MainWindow::applyStepDivisionHistory(quint64 trackId, quint64 clipId, int requestedStepsPerBar)
+{
+    MidiClip* clip = project.findClip(trackId, clipId);
+    if (clip == nullptr)
+        return;
+    clip->stepsPerBar = requestedStepsPerBar;
+    project.normalize();
+    const MidiClip* currentClip = selectedClip();
+    stepSequencer->setPattern(currentClip == nullptr ? QVector<MidiNote>{} : currentClip->notes,
+                              currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
+                              project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr,
+                              currentClip == nullptr ? 16 : currentClip->stepsPerBar);
     audioEngine.setProject(project);
     refreshDirtyState();
 }
