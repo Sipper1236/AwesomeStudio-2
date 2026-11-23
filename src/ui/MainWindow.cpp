@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "core/ProjectFile.h"
+#include "core/MidiFile.h"
 #include "core/WavExporter.h"
 #include "ui/ArrangementEditor.h"
 #include "ui/MidiEditor.h"
@@ -186,8 +187,10 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(uiTimer, &QTimer::timeout, this, [this]
     {
         const double beat = audioEngine.positionBeats();
-        const int bar = static_cast<int>(beat / project.beatsPerBar) + 1;
-        const double beatInBar = std::fmod(beat, project.beatsPerBar) + 1.0;
+        const double quarterNotesPerBar = project.quarterNotesPerBar();
+        const double denominatorUnit = 4.0 / project.beatUnit;
+        const int bar = static_cast<int>(beat / quarterNotesPerBar) + 1;
+        const double beatInBar = std::fmod(beat, quarterNotesPerBar) / denominatorUnit + 1.0;
         playheadLabel->setText(tr("BAR %1  ·  BEAT %2")
                                    .arg(bar, 2, 10, QLatin1Char('0'))
                                    .arg(beatInBar, 0, 'f', 2));
@@ -334,6 +337,32 @@ void MainWindow::createToolBars()
     arrangementBar->setMovable(false);
     arrangementBar->addAction(addTrackAction);
     arrangementBar->addAction(addPatternAction);
+    arrangementBar->addSeparator();
+    arrangementBar->addWidget(new QLabel(tr("CLIP LENGTH"), arrangementBar));
+    clipLengthControl = new QDoubleSpinBox(arrangementBar);
+    clipLengthControl->setRange(0.25, 16384.0);
+    clipLengthControl->setDecimals(2);
+    clipLengthControl->setSingleStep(1.0);
+    clipLengthControl->setSuffix(tr(" beats"));
+    clipLengthControl->setFixedWidth(118);
+    clipLengthControl->setToolTip(tr("Length of the selected MIDI clip in quarter-note beats"));
+    arrangementBar->addWidget(clipLengthControl);
+    connect(clipLengthControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double length)
+    {
+        MidiClip* clip = selectedClip();
+        if (clip == nullptr)
+            return;
+        clip->lengthBeats = length;
+        project.normalize();
+        const MidiClip* updatedClip = selectedClip();
+        midiEditor->setPatternLengthBeats(updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats);
+        midiEditor->setNotes(updatedClip == nullptr ? QVector<MidiNote>{} : updatedClip->notes);
+        arrangementEditor->setProject(project);
+        arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+    });
 
     auto* transportBar = addToolBar(tr("Transport"));
     transportBar->setObjectName(QStringLiteral("transportToolbar"));
@@ -354,6 +383,35 @@ void MainWindow::createToolBars()
     connect(tempoControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value)
     {
         project.tempoBpm = value;
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+    });
+    transportBar->addSeparator();
+    transportBar->addWidget(new QLabel(tr("METER"), transportBar));
+    timeSignatureControl = new QComboBox(transportBar);
+    const QVector<QPair<int, int>> commonMeters = {
+        {4, 4}, {3, 4}, {2, 4}, {5, 4}, {6, 8}, {7, 8}, {9, 8}, {12, 8}, {2, 2}, {3, 8}
+    };
+    for (const auto& meter : commonMeters)
+        timeSignatureControl->addItem(QStringLiteral("%1/%2").arg(meter.first).arg(meter.second),
+                                      QVariantList{meter.first, meter.second});
+    timeSignatureControl->setFixedWidth(76);
+    timeSignatureControl->setToolTip(tr("Arrangement time signature"));
+    transportBar->addWidget(timeSignatureControl);
+    connect(timeSignatureControl, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index)
+    {
+        if (index < 0)
+            return;
+        const QVariantList meter = timeSignatureControl->itemData(index).toList();
+        if (meter.size() != 2)
+            return;
+        project.beatsPerBar = meter[0].toInt();
+        project.beatUnit = meter[1].toInt();
+        project.normalize();
+        const MidiClip* clip = selectedClip();
+        midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
+        arrangementEditor->setProject(project);
         audioEngine.setProject(project);
         settingsDirty = true;
         refreshDirtyState();
@@ -481,6 +539,8 @@ void MainWindow::createMenus()
         }
     });
     fileMenu->addSeparator();
+    fileMenu->addAction(tr("Import MIDI…"), this, &MainWindow::importMidi);
+    fileMenu->addAction(tr("Export arrangement to MIDI…"), this, &MainWindow::exportMidi);
     fileMenu->addAction(tr("Export arrangement to WAV…"), this, &MainWindow::exportAudio);
     fileMenu->addSeparator();
     auto* quitAction = fileMenu->addAction(tr("Quit"));
@@ -559,8 +619,21 @@ void MainWindow::refreshProjectUi()
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
 
     const QSignalBlocker tempoBlocker(tempoControl);
+    const QSignalBlocker meterBlocker(timeSignatureControl);
+    const QSignalBlocker clipLengthBlocker(clipLengthControl);
     const QSignalBlocker loopBlocker(loopAction);
     tempoControl->setValue(project.tempoBpm);
+    const QVariantList currentMeter{project.beatsPerBar, project.beatUnit};
+    int meterIndex = timeSignatureControl->findData(currentMeter);
+    if (meterIndex < 0)
+    {
+        timeSignatureControl->addItem(QStringLiteral("%1/%2").arg(project.beatsPerBar).arg(project.beatUnit),
+                                      currentMeter);
+        meterIndex = timeSignatureControl->count() - 1;
+    }
+    timeSignatureControl->setCurrentIndex(meterIndex);
+    clipLengthControl->setEnabled(clip != nullptr);
+    clipLengthControl->setValue(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     loopAction->setChecked(project.loopEnabled);
     refreshMixer();
     audioEngine.setProject(project);
@@ -754,7 +827,8 @@ void MainWindow::addNewPattern()
     double startBeat = 0.0;
     for (const MidiClip& clip : track->clips)
         startBeat = std::max(startBeat, clip.startBeat + clip.lengthBeats);
-    startBeat = std::ceil(startBeat / project.beatsPerBar) * project.beatsPerBar;
+    const double barLength = project.quarterNotesPerBar();
+    startBeat = std::ceil(startBeat / barLength) * barLength;
     addClipAt(track->id, startBeat);
 }
 
@@ -916,6 +990,46 @@ void MainWindow::exportAudio()
     if (!success)
     {
         QMessageBox::critical(this, tr("Could not export WAV"), error);
+        return;
+    }
+    statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
+}
+
+void MainWindow::importMidi()
+{
+    if (!maybeSave())
+        return;
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import MIDI file"), QString(),
+                                                       tr("Standard MIDI files (*.mid *.midi)"));
+    if (path.isEmpty())
+        return;
+
+    ProjectData imported;
+    QString error;
+    if (!MidiFile::load(path, imported, &error))
+    {
+        QMessageBox::critical(this, tr("Could not import MIDI"), error);
+        return;
+    }
+    setProject(imported);
+    statusBar()->showMessage(tr("Imported %1 MIDI tracks from %2")
+                                 .arg(project.tracks.size()).arg(QFileInfo(path).fileName()), 4000);
+}
+
+void MainWindow::exportMidi()
+{
+    QString path = QFileDialog::getSaveFileName(this, tr("Export arrangement to MIDI"),
+                                                 project.title + QStringLiteral(".mid"),
+                                                 tr("Standard MIDI files (*.mid *.midi)"));
+    if (path.isEmpty())
+        return;
+    if (QFileInfo(path).suffix().isEmpty())
+        path += QStringLiteral(".mid");
+
+    QString error;
+    if (!MidiFile::save(path, project, &error))
+    {
+        QMessageBox::critical(this, tr("Could not export MIDI"), error);
         return;
     }
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);

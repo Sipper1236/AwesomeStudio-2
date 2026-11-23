@@ -18,8 +18,10 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI cl
 - [x] Project save/open and stereo WAV export
 - [x] Playlist with multi-track MIDI clips and basic mixer controls
 - [ ] Step sequencer and drum instrument
-- [ ] Editable clip length, time signature, and count-in/metronome
-- [ ] MIDI file import/export and live MIDI recording
+- [x] Editable clip length and common time signatures
+- [x] Standard MIDI File import/export (formats 0/1, PPQN)
+- [ ] Step sequencer, drum instrument, count-in/metronome
+- [ ] Live MIDI recording
 
 ### 2. Arrangement and mixing
 

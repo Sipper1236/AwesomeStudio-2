@@ -51,12 +51,14 @@ struct ProjectData
     QString title = QStringLiteral("Untitled");
     double tempoBpm = 120.0;
     int beatsPerBar = 4;
+    int beatUnit = 4;
     int bars = 4;
     bool loopEnabled = true;
     float masterGain = 0.8f;
     QVector<InstrumentTrack> tracks;
 
     double patternLengthBeats() const;
+    double quarterNotesPerBar() const;
     double songLengthBeats() const;
     InstrumentTrack* findTrack(quint64 trackId);
     const InstrumentTrack* findTrack(quint64 trackId) const;

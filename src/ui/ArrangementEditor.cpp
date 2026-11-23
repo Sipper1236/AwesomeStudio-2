@@ -68,9 +68,9 @@ protected:
         painter.fillRect(rect(), QColor(QStringLiteral("#131820")));
 
         const int trackCount = std::max(1, static_cast<int>(project.tracks.size()));
-        const double beatsPerBar = project.beatsPerBar;
-        const double visibleBeats = std::max(project.songLengthBeats() + beatsPerBar * 4.0,
-                                             beatsPerBar * 16.0);
+        const double quarterNotesPerBar = project.quarterNotesPerBar();
+        const double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
+                                             quarterNotesPerBar * 16.0);
         const int gridWidth = static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
         painter.fillRect(QRect(trackHeaderWidth, 0, gridWidth, rulerHeight), QColor(QStringLiteral("#202630")));
         painter.fillRect(QRect(0, 0, trackHeaderWidth, rulerHeight), QColor(QStringLiteral("#252d37")));
@@ -103,15 +103,27 @@ protected:
         for (int beat = 0; beat <= totalBeats; ++beat)
         {
             const int x = trackHeaderWidth + beat * pixelsPerBeat;
-            const bool bar = beat % project.beatsPerBar == 0;
-            painter.setPen(bar ? QColor(QStringLiteral("#596572")) : QColor(QStringLiteral("#2b333d")));
+            const double barOffset = std::fmod(beat, quarterNotesPerBar);
+            if (std::min(barOffset, quarterNotesPerBar - barOffset) > 0.02)
+            {
+                painter.setPen(QColor(QStringLiteral("#2b333d")));
+                painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * trackHeight);
+            }
+        }
+        const int totalBars = static_cast<int>(std::ceil(visibleBeats / quarterNotesPerBar));
+        for (int bar = 0; bar <= totalBars; ++bar)
+        {
+            const double beat = bar * quarterNotesPerBar;
+            const int x = trackHeaderWidth + static_cast<int>(std::round(beat * pixelsPerBeat));
+            painter.setPen(QColor(QStringLiteral("#596572")));
             painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * trackHeight);
-            if (bar && beat < visibleBeats)
+            if (beat < visibleBeats)
             {
                 painter.setPen(QColor(QStringLiteral("#e2e8ee")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
-                painter.drawText(QRect(x + 5, 0, pixelsPerBeat * project.beatsPerBar - 10, rulerHeight),
-                                 Qt::AlignVCenter, QString::number(beat / project.beatsPerBar + 1));
+                painter.drawText(QRect(x + 5, 0,
+                                       static_cast<int>(std::round(pixelsPerBeat * quarterNotesPerBar)) - 10,
+                                       rulerHeight), Qt::AlignVCenter, QString::number(bar + 1));
             }
         }
 
@@ -204,7 +216,8 @@ protected:
 
         selectedClipId = 0;
         const double beat = std::max(0.0, (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat));
-        const double startBeat = std::floor(beat / project.beatsPerBar) * project.beatsPerBar;
+        const double barLength = project.quarterNotesPerBar();
+        const double startBeat = std::floor(beat / barLength) * barLength;
         emit owner->clipAdded(track.id, startBeat);
         update();
     }
@@ -215,7 +228,7 @@ protected:
             return;
         const QPoint point = event->position().toPoint();
         const double delta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
-        const double snap = std::max(0.25, project.beatsPerBar / 4.0);
+        const double snap = std::max(0.25, project.quarterNotesPerBar() / 4.0);
         const double startBeat = std::max(0.0, std::round((initialClipStart + delta) / snap) * snap);
         const int row = std::clamp((point.y() - rulerHeight) / trackHeight, 0,
                                    static_cast<int>(project.tracks.size()) - 1);
@@ -314,9 +327,9 @@ private:
 
     void updateCanvasSize()
     {
-        const double beatsPerBar = project.beatsPerBar;
-        const double visibleBeats = std::max(project.songLengthBeats() + beatsPerBar * 4.0,
-                                             beatsPerBar * 16.0);
+        const double quarterNotesPerBar = project.quarterNotesPerBar();
+        const double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
+                                             quarterNotesPerBar * 16.0);
         const int width = trackHeaderWidth + static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
         const int height = rulerHeight + std::max(1, static_cast<int>(project.tracks.size())) * trackHeight;
         setMinimumSize(width, height);

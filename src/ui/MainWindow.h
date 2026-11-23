@@ -18,7 +18,6 @@ class QTabWidget;
 class QTimer;
 class MidiEditor;
 class ArrangementEditor;
-class MidiEditor;
 
 class MainWindow final : public QMainWindow
 {
@@ -54,6 +53,8 @@ private:
     void refreshDirtyState();
     void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes);
     void exportAudio();
+    void importMidi();
+    void exportMidi();
 
     AudioEngine& audioEngine;
     ProjectData project;
@@ -68,7 +69,9 @@ private:
     QScrollArea* mixerScrollArea = nullptr;
     QListWidget* trackList = nullptr;
     QDoubleSpinBox* tempoControl = nullptr;
+    QDoubleSpinBox* clipLengthControl = nullptr;
     QComboBox* waveformControl = nullptr;
+    QComboBox* timeSignatureControl = nullptr;
     QComboBox* snapControl = nullptr;
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;

@@ -13,7 +13,12 @@ bool MidiNote::operator==(const MidiNote& other) const
 
 double ProjectData::patternLengthBeats() const
 {
-    return static_cast<double>(beatsPerBar * bars);
+    return quarterNotesPerBar() * bars;
+}
+
+double ProjectData::quarterNotesPerBar() const
+{
+    return static_cast<double>(beatsPerBar) * 4.0 / beatUnit;
 }
 
 ProjectData::ProjectData()
@@ -103,6 +108,8 @@ void ProjectData::normalize()
 {
     tempoBpm = std::clamp(tempoBpm, 20.0, 300.0);
     beatsPerBar = std::clamp(beatsPerBar, 1, 12);
+    if (beatUnit != 1 && beatUnit != 2 && beatUnit != 4 && beatUnit != 8 && beatUnit != 16)
+        beatUnit = 4;
     bars = std::clamp(bars, 1, 64);
     masterGain = std::clamp(masterGain, 0.0f, 1.0f);
     if (tracks.size() > 256)
@@ -142,8 +149,8 @@ void ProjectData::normalize()
                 clip.id = clipCandidate++;
             }
             usedClipIds.insert(clip.id);
-            clip.startBeat = std::clamp(clip.startBeat, 0.0, 100000.0);
-            clip.lengthBeats = std::clamp(clip.lengthBeats, 0.25, patternLengthBeats());
+            clip.startBeat = std::clamp(clip.startBeat, 0.0, 16384.0);
+            clip.lengthBeats = std::clamp(clip.lengthBeats, 0.25, 16384.0);
             if (clip.notes.size() > 100000)
                 clip.notes.resize(100000);
 

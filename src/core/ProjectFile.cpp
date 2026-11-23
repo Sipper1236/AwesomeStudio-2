@@ -8,7 +8,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 2;
+constexpr int currentProjectVersion = 3;
 constexpr auto projectFormat = "awesome-studio-project";
 
 void setError(QString* error, const QString& message)
@@ -189,6 +189,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("title"), safeProject.title},
         {QStringLiteral("tempoBpm"), safeProject.tempoBpm},
         {QStringLiteral("beatsPerBar"), safeProject.beatsPerBar},
+        {QStringLiteral("beatUnit"), safeProject.beatUnit},
         {QStringLiteral("bars"), safeProject.bars},
         {QStringLiteral("loopEnabled"), safeProject.loopEnabled},
         {QStringLiteral("masterGain"), safeProject.masterGain},
@@ -251,6 +252,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     loaded.title = root.value(QStringLiteral("title")).toString(QStringLiteral("Untitled"));
     loaded.tempoBpm = root.value(QStringLiteral("tempoBpm")).toDouble(120.0);
     loaded.beatsPerBar = root.value(QStringLiteral("beatsPerBar")).toInt(4);
+    loaded.beatUnit = version >= 3 ? root.value(QStringLiteral("beatUnit")).toInt(4) : 4;
     loaded.bars = root.value(QStringLiteral("bars")).toInt(4);
     loaded.loopEnabled = root.value(QStringLiteral("loopEnabled")).toBool(true);
     loaded.masterGain = static_cast<float>(root.value(QStringLiteral("masterGain")).toDouble(0.8));
