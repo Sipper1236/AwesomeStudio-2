@@ -86,6 +86,16 @@ struct TimelineMarker
     bool operator==(const TimelineMarker& other) const;
 };
 
+struct MixerBus
+{
+    quint64 id = 0;
+    QString name = QStringLiteral("Bus");
+    float gain = 1.0f;
+    float pan = 0.0f;
+    bool muted = false;
+    bool solo = false;
+};
+
 struct InstrumentTrack
 {
     quint64 id = 0;
@@ -101,6 +111,7 @@ struct InstrumentTrack
     float eqLowDb = 0.0f;
     float eqMidDb = 0.0f;
     float eqHighDb = 0.0f;
+    quint64 outputBusId = 0;
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
     bool muted = false;
@@ -123,6 +134,7 @@ struct ProjectData
     int countInBars = 0;
     float masterGain = 0.8f;
     QVector<TimelineMarker> markers;
+    QVector<MixerBus> buses;
     QVector<InstrumentTrack> tracks;
 
     double patternLengthBeats() const;
@@ -133,6 +145,7 @@ struct ProjectData
     MidiClip* findClip(quint64 trackId, quint64 clipId);
     const MidiClip* findClip(quint64 trackId, quint64 clipId) const;
     quint64 nextTrackId() const;
+    quint64 nextBusId() const;
     quint64 nextClipId() const;
     quint64 nextNoteId() const;
     void normalize();

@@ -63,6 +63,9 @@ private:
     void refreshPianoRollGhostNotes();
     void refreshMixer();
     void refreshMixerMeters();
+    void addMixerBus();
+    void removeMixerBus(quint64 busId);
+    void setTrackOutputBus(quint64 trackId, quint64 busId);
     void selectTrack(quint64 trackId);
     void selectClip(quint64 trackId, quint64 clipId, bool openPianoRoll);
     void addTrack();
@@ -182,7 +185,13 @@ private:
         quint64 trackId = 0;
         QProgressBar* meter = nullptr;
     };
+    struct MixerBusMeterWidget
+    {
+        size_t busIndex = 0;
+        QProgressBar* meter = nullptr;
+    };
     QVector<MixerTrackMeterWidget> mixerTrackMeters;
+    QVector<MixerBusMeterWidget> mixerBusMeters;
     QProgressBar* masterPeakMeter = nullptr;
     std::array<QPushButton*, 4> drumSampleButtons{};
     std::array<QPushButton*, 4> clearDrumSampleButtons{};

@@ -188,6 +188,11 @@ bool WavExporter::exportStems(const ProjectData& project, const QString& directo
             stemProject.tracks[index].muted = index != trackIndex;
             stemProject.tracks[index].solo = false;
         }
+        for (MixerBus& bus : stemProject.buses)
+        {
+            bus.muted = false;
+            bus.solo = false;
+        }
 
         QString renderError;
         if (!exportProject(stemProject, paths[trackIndex], &renderError))

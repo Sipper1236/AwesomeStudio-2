@@ -1540,6 +1540,7 @@ void MainWindow::refreshMixer()
         return;
 
     mixerTrackMeters.clear();
+    mixerBusMeters.clear();
     masterPeakMeter = nullptr;
     auto* content = new QWidget(mixerScrollArea);
     auto* layout = new QVBoxLayout(content);
@@ -1575,7 +1576,11 @@ void MainWindow::refreshMixer()
     masterPeakMeter->setObjectName(QStringLiteral("masterPeakMeter"));
     masterPeakMeter->setToolTip(tr("Master output peak level"));
     masterForm->addRow(tr("Peak"), masterPeakMeter);
+    auto* addBusButton = new QPushButton(tr("Add mixer bus"), masterBox);
+    addBusButton->setEnabled(project.buses.size() < 64);
+    masterForm->addRow(addBusButton);
     layout->addWidget(masterBox);
+    connect(addBusButton, &QPushButton::clicked, this, &MainWindow::addMixerBus);
     connect(masterControl, &QSlider::valueChanged, this, [this](int value)
     {
         project.masterGain = value / 100.0f;
@@ -1585,6 +1590,141 @@ void MainWindow::refreshMixer()
         settingsDirty = true;
         refreshDirtyState();
     });
+
+    for (qsizetype busIndex = 0; busIndex < project.buses.size(); ++busIndex)
+    {
+        const MixerBus& item = project.buses[busIndex];
+        const quint64 busId = item.id;
+        auto* group = new QGroupBox(item.name, content);
+        auto* form = new QFormLayout(group);
+        auto* busName = new QLineEdit(item.name, group);
+        form->addRow(tr("Name"), busName);
+        connect(busName, &QLineEdit::editingFinished, this, [this, busId, busName]
+        {
+            const QString newName = busName->text().trimmed().left(80);
+            if (newName.isEmpty())
+            {
+                const MixerBus* bus = nullptr;
+                for (const MixerBus& item : project.buses)
+                    if (item.id == busId) { bus = &item; break; }
+                if (bus != nullptr)
+                    busName->setText(bus->name);
+                return;
+            }
+            QTimer::singleShot(0, this, [this, busId, newName]
+            {
+                for (MixerBus& bus : project.buses)
+                {
+                    if (bus.id != busId)
+                        continue;
+                    bus.name = newName;
+                    audioEngine.setProject(project);
+                    settingsDirty = true;
+                    refreshDirtyState();
+                    refreshMixer();
+                    return;
+                }
+            });
+        });
+
+        auto* stateRow = new QWidget(group);
+        auto* stateLayout = new QHBoxLayout(stateRow);
+        stateLayout->setContentsMargins(0, 0, 0, 0);
+        auto* mute = new QCheckBox(tr("Mute"), stateRow);
+        auto* solo = new QCheckBox(tr("Solo"), stateRow);
+        mute->setChecked(item.muted);
+        solo->setChecked(item.solo);
+        stateLayout->addWidget(mute);
+        stateLayout->addWidget(solo);
+        form->addRow(stateRow);
+
+        auto* volume = new QSlider(Qt::Horizontal, group);
+        volume->setRange(0, 200);
+        volume->setValue(static_cast<int>(std::round(item.gain * 100.0f)));
+        auto* volumeLabel = new QLabel(tr("%1%").arg(volume->value()), group);
+        auto* volumeRow = new QWidget(group);
+        auto* volumeLayout = new QHBoxLayout(volumeRow);
+        volumeLayout->setContentsMargins(0, 0, 0, 0);
+        volumeLayout->addWidget(volume, 1);
+        volumeLayout->addWidget(volumeLabel);
+        form->addRow(tr("Level"), volumeRow);
+
+        auto* pan = new QSlider(Qt::Horizontal, group);
+        pan->setRange(-100, 100);
+        pan->setValue(static_cast<int>(std::round(item.pan * 100.0f)));
+        auto* panLabel = new QLabel(item.pan < -0.02f ? tr("L %1").arg(std::abs(pan->value())) :
+                                    item.pan > 0.02f ? tr("R %1").arg(pan->value()) : tr("Center"), group);
+        auto* panRow = new QWidget(group);
+        auto* panLayout = new QHBoxLayout(panRow);
+        panLayout->setContentsMargins(0, 0, 0, 0);
+        panLayout->addWidget(pan, 1);
+        panLayout->addWidget(panLabel);
+        form->addRow(tr("Pan"), panRow);
+
+        auto* peakMeter = createPeakMeter(group);
+        peakMeter->setObjectName(QStringLiteral("mixerBusPeakMeter"));
+        peakMeter->setToolTip(tr("Bus peak after bus level and pan"));
+        mixerBusMeters.push_back({static_cast<size_t>(busIndex), peakMeter});
+        form->addRow(tr("Peak"), peakMeter);
+
+        auto* removeBusButton = new QPushButton(tr("Remove bus"), group);
+        form->addRow(removeBusButton);
+        layout->addWidget(group);
+
+        connect(mute, &QCheckBox::toggled, this, [this, busId](bool enabled)
+        {
+            for (MixerBus& bus : project.buses)
+            {
+                if (bus.id != busId) continue;
+                bus.muted = enabled;
+                audioEngine.setProject(project);
+                settingsDirty = true;
+                refreshDirtyState();
+                return;
+            }
+        });
+        connect(solo, &QCheckBox::toggled, this, [this, busId](bool enabled)
+        {
+            for (MixerBus& bus : project.buses)
+            {
+                if (bus.id != busId) continue;
+                bus.solo = enabled;
+                audioEngine.setProject(project);
+                settingsDirty = true;
+                refreshDirtyState();
+                return;
+            }
+        });
+        connect(volume, &QSlider::valueChanged, this, [this, busId, volumeLabel](int value)
+        {
+            for (MixerBus& bus : project.buses)
+            {
+                if (bus.id != busId) continue;
+                bus.gain = value / 100.0f;
+                volumeLabel->setText(tr("%1%").arg(value));
+                audioEngine.setProject(project);
+                settingsDirty = true;
+                refreshDirtyState();
+                return;
+            }
+        });
+        connect(pan, &QSlider::valueChanged, this, [this, busId, panLabel](int value)
+        {
+            for (MixerBus& bus : project.buses)
+            {
+                if (bus.id != busId) continue;
+                bus.pan = value / 100.0f;
+                panLabel->setText(value < -2 ? tr("L %1").arg(-value) :
+                                  value > 2 ? tr("R %1").arg(value) : tr("Center"));
+                audioEngine.setProject(project);
+                settingsDirty = true;
+                refreshDirtyState();
+                return;
+            }
+        });
+        connect(removeBusButton, &QPushButton::clicked, this,
+                [this, busId] { removeMixerBus(busId); });
+    }
 
     for (const InstrumentTrack& item : project.tracks)
     {
@@ -1601,6 +1741,20 @@ void MainWindow::refreshMixer()
         stateLayout->addWidget(mute);
         stateLayout->addWidget(solo);
         form->addRow(stateRow);
+
+        auto* outputBus = new QComboBox(group);
+        outputBus->addItem(tr("Master"), QVariant::fromValue<qulonglong>(0));
+        for (const MixerBus& bus : project.buses)
+            outputBus->addItem(bus.name, QVariant::fromValue<qulonglong>(bus.id));
+        outputBus->setCurrentIndex(std::max(0, outputBus->findData(
+            QVariant::fromValue<qulonglong>(item.outputBusId))));
+        form->addRow(tr("Output"), outputBus);
+        connect(outputBus, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this, trackId, outputBus](int index)
+        {
+            if (index >= 0)
+                setTrackOutputBus(trackId, outputBus->currentData().toULongLong());
+        });
 
         auto* volume = new QSlider(Qt::Horizontal, group);
         volume->setObjectName(QStringLiteral("mixerTrackVolume_%1").arg(item.id));
@@ -1628,7 +1782,7 @@ void MainWindow::refreshMixer()
         form->addRow(tr("Pan"), panRow);
         auto* peakMeter = createPeakMeter(group);
         peakMeter->setObjectName(QStringLiteral("trackPeakMeter"));
-        peakMeter->setToolTip(tr("Track peak level after volume, pan, and EQ"));
+        peakMeter->setToolTip(tr("Track peak after level, pan, and EQ; before bus processing"));
         mixerTrackMeters.push_back({trackId, peakMeter});
         form->addRow(tr("Peak"), peakMeter);
         layout->addWidget(group);
@@ -1773,6 +1927,64 @@ void MainWindow::refreshMixerMeters()
         entry.meter->setValue(meterValue(peak));
         entry.meter->setToolTip(meterTip(peak));
     }
+    for (const MixerBusMeterWidget& entry : mixerBusMeters)
+    {
+        if (entry.meter == nullptr)
+            continue;
+        const float peak = audioEngine.busPeakLevel(entry.busIndex);
+        entry.meter->setValue(meterValue(peak));
+        entry.meter->setToolTip(meterTip(peak));
+    }
+}
+
+void MainWindow::addMixerBus()
+{
+    if (project.buses.size() >= 64)
+    {
+        statusBar()->showMessage(tr("This project has reached the 64-bus limit"), 3000);
+        return;
+    }
+    MixerBus bus;
+    bus.id = project.nextBusId();
+    bus.name = tr("Bus %1").arg(project.buses.size() + 1);
+    project.buses.push_back(bus);
+    project.normalize();
+    settingsDirty = true;
+    refreshProjectUi();
+    statusBar()->showMessage(tr("Added mixer bus %1").arg(bus.name), 1800);
+}
+
+void MainWindow::removeMixerBus(quint64 busId)
+{
+    const auto bus = std::find_if(project.buses.begin(), project.buses.end(), [busId](const MixerBus& item)
+    {
+        return item.id == busId;
+    });
+    if (bus == project.buses.end())
+        return;
+    const QString name = bus->name;
+    for (InstrumentTrack& track : project.tracks)
+    {
+        if (track.outputBusId == busId)
+            track.outputBusId = 0;
+    }
+    project.buses.erase(bus);
+    project.normalize();
+    settingsDirty = true;
+    refreshProjectUi();
+    statusBar()->showMessage(tr("Removed %1; routed its tracks to Master").arg(name), 2200);
+}
+
+void MainWindow::setTrackOutputBus(quint64 trackId, quint64 busId)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr || track->outputBusId == busId)
+        return;
+    track->outputBusId = busId;
+    project.normalize();
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
 }
 
 void MainWindow::selectTrack(quint64 trackId)

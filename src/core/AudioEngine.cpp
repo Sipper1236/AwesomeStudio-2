@@ -74,6 +74,8 @@ AudioEngine::AudioEngine()
         liveTrackPans[index].store(2.0f, std::memory_order_relaxed);
         trackPeakValues[index].store(0.0f, std::memory_order_relaxed);
     }
+    for (auto& peak : busPeakValues)
+        peak.store(0.0f, std::memory_order_relaxed);
     setProject(ProjectData{});
 }
 
@@ -152,6 +154,8 @@ void AudioEngine::setProject(const ProjectData& project)
         liveTrackPans[index].store(2.0f, std::memory_order_release);
         trackPeakValues[index].store(0.0f, std::memory_order_release);
     }
+    for (auto& peak : busPeakValues)
+        peak.store(0.0f, std::memory_order_release);
     masterPeakValue.store(0.0f, std::memory_order_release);
     std::atomic_store_explicit(&projectSnapshot,
                                std::make_shared<const ProjectData>(std::move(safeProject)),
@@ -217,6 +221,11 @@ float AudioEngine::trackPeakLevel(quint64 trackId) const
             return trackPeakValues[index].load(std::memory_order_acquire);
     }
     return 0.0f;
+}
+
+float AudioEngine::busPeakLevel(size_t busIndex) const
+{
+    return busIndex < maximumBusCount ? busPeakValues[busIndex].load(std::memory_order_acquire) : 0.0f;
 }
 
 float AudioEngine::masterPeakLevel() const
@@ -421,6 +430,7 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
 void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
 {
     liveMidiTouchedTrackCount = 0;
+    liveMidiTouchedBusCount = 0;
     const auto addTrackFrameSample = [this](size_t trackIndex, float left, float right)
     {
         if (trackIndex >= maximumTrackCount)
@@ -470,8 +480,6 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
                 sampleAt(firstFrame, 1) * (1.0f - fraction) + sampleAt(secondFrame, 1) * fraction;
             const float leftContribution = left * voice.amplitude * voice.leftGain;
             const float rightContribution = right * voice.amplitude * voice.rightGain;
-            mixed.left += leftContribution;
-            mixed.right += rightContribution;
             addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
             continue;
         }
@@ -518,8 +526,6 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
                   voice.amplitude * envelope;
         const float leftContribution = voiceSample * voice.leftGain;
         const float rightContribution = voiceSample * voice.rightGain;
-        mixed.left += leftContribution;
-        mixed.right += rightContribution;
         addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
     }
 
@@ -527,10 +533,33 @@ void AudioEngine::renderLiveMidiVoices(StereoSample& mixed, qint64 frame)
     {
         const size_t trackIndex = liveMidiTouchedTracks[index];
         const StereoSample& trackSample = liveMidiTrackFrameSamples[trackIndex];
+        int busIndex = -1;
+        const StereoSample routedSample = renderer.routeLiveTrackSample(trackIndex, trackSample, &busIndex);
+        mixed.left += routedSample.left;
+        mixed.right += routedSample.right;
+        if (busIndex >= 0 && static_cast<size_t>(busIndex) < maximumBusCount)
+        {
+            const size_t bus = static_cast<size_t>(busIndex);
+            if (!liveMidiBusFrameTouched[bus])
+            {
+                liveMidiBusFrameTouched[bus] = true;
+                liveMidiTouchedBuses[liveMidiTouchedBusCount++] = bus;
+            }
+            liveMidiBusFrameSamples[bus].left += routedSample.left;
+            liveMidiBusFrameSamples[bus].right += routedSample.right;
+        }
         liveMidiBlockPeaks[trackIndex] = std::max(liveMidiBlockPeaks[trackIndex],
             std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
         liveMidiTrackFrameSamples[trackIndex] = {};
         liveMidiTrackFrameTouched[trackIndex] = false;
+    }
+    for (size_t index = 0; index < liveMidiTouchedBusCount; ++index)
+    {
+        const size_t bus = liveMidiTouchedBuses[index];
+        const StereoSample& sample = liveMidiBusFrameSamples[bus];
+        renderer.addLiveBusFrameSample(bus, sample);
+        liveMidiBusFrameSamples[bus] = {};
+        liveMidiBusFrameTouched[bus] = false;
     }
 }
 
@@ -605,6 +634,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         return 0;
     prepareNotes(project);
     renderer.resetTrackPeakLevels();
+    renderer.resetBusPeakLevels();
     liveMidiBlockPeaks.fill(0.0f);
     for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
                             index < maximumTrackCount; ++index)
@@ -668,6 +698,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         if (project->loopEnabled && playbackFrame >= 0)
             currentFrame %= patternFrames;
 
+        renderer.beginMixerFrame();
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;
         renderLiveMidiVoices(mixed, clockFrame);
@@ -782,6 +813,13 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         const float blockPeak = std::max(renderer.trackPeakLevel(index), liveMidiBlockPeaks[index]);
         const float decayedPeak = trackPeakValues[index].load(std::memory_order_relaxed) * 0.82f;
         trackPeakValues[index].store(std::max(blockPeak, decayedPeak), std::memory_order_release);
+    }
+    const size_t meterBusCount = std::min(static_cast<size_t>(project->buses.size()), maximumBusCount);
+    for (size_t index = 0; index < meterBusCount; ++index)
+    {
+        const float blockPeak = renderer.busPeakLevel(index);
+        const float decayedPeak = busPeakValues[index].load(std::memory_order_relaxed) * 0.82f;
+        busPeakValues[index].store(std::max(blockPeak, decayedPeak), std::memory_order_release);
     }
     const float decayedMasterPeak = masterPeakValue.load(std::memory_order_relaxed) * 0.82f;
     masterPeakValue.store(std::max(blockMasterPeak, decayedMasterPeak), std::memory_order_release);

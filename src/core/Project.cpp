@@ -135,6 +135,14 @@ quint64 ProjectData::nextClipId() const
     return nextId;
 }
 
+quint64 ProjectData::nextBusId() const
+{
+    quint64 nextId = 1;
+    for (const MixerBus& bus : buses)
+        nextId = std::max(nextId, bus.id + 1);
+    return nextId;
+}
+
 quint64 ProjectData::nextNoteId() const
 {
     quint64 nextId = 1;
@@ -183,6 +191,27 @@ void ProjectData::normalize()
             uniqueMarkers.push_back(marker);
     }
     markers = std::move(uniqueMarkers);
+    if (buses.size() > 64)
+        buses.resize(64);
+    std::unordered_set<quint64> usedBusIds;
+    quint64 busCandidate = nextBusId();
+    for (MixerBus& bus : buses)
+    {
+        if (bus.id == 0 || usedBusIds.find(bus.id) != usedBusIds.end())
+        {
+            while (busCandidate == 0 || usedBusIds.find(busCandidate) != usedBusIds.end())
+                ++busCandidate;
+            bus.id = busCandidate++;
+        }
+        usedBusIds.insert(bus.id);
+        bus.name = bus.name.trimmed().left(80);
+        if (bus.name.isEmpty())
+            bus.name = QStringLiteral("Bus %1").arg(bus.id);
+        if (!std::isfinite(bus.gain)) bus.gain = 1.0f;
+        if (!std::isfinite(bus.pan)) bus.pan = 0.0f;
+        bus.gain = std::clamp(bus.gain, 0.0f, 2.0f);
+        bus.pan = std::clamp(bus.pan, -1.0f, 1.0f);
+    }
     if (tracks.size() > 256)
         tracks.resize(256);
 
@@ -200,6 +229,8 @@ void ProjectData::normalize()
             track.id = trackCandidate++;
         }
         usedTrackIds.insert(track.id);
+        if (track.outputBusId != 0 && usedBusIds.find(track.outputBusId) == usedBusIds.end())
+            track.outputBusId = 0;
         track.instrumentType = static_cast<InstrumentType>(
             std::clamp(static_cast<int>(track.instrumentType), 0, 2));
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);

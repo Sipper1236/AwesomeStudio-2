@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 13;
+constexpr int currentProjectVersion = 14;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -222,6 +222,7 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("eqLowDb"), track.eqLowDb},
         {QStringLiteral("eqMidDb"), track.eqMidDb},
         {QStringLiteral("eqHighDb"), track.eqHighDb},
+        {QStringLiteral("outputBusId"), static_cast<qint64>(track.outputBusId)},
         {QStringLiteral("volumeAutomation"), saveAutomation(track.volumeAutomation)},
         {QStringLiteral("panAutomation"), saveAutomation(track.panAutomation)},
         {QStringLiteral("muted"), track.muted},
@@ -312,6 +313,8 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         track.eqMidDb = static_cast<float>(object.value(QStringLiteral("eqMidDb")).toDouble(0.0));
         track.eqHighDb = static_cast<float>(object.value(QStringLiteral("eqHighDb")).toDouble(0.0));
     }
+    if (version >= 14 && !readId(object, QStringLiteral("outputBusId"), track.outputBusId, error))
+        return false;
     if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
                         QStringLiteral("volume"), error) ||
         !loadAutomation(object.value(QStringLiteral("panAutomation")), track.panAutomation,
@@ -376,6 +379,16 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
             {QStringLiteral("beat"), marker.beat},
             {QStringLiteral("name"), marker.name}
         });
+    QJsonArray buses;
+    for (const MixerBus& bus : safeProject.buses)
+        buses.push_back(QJsonObject{
+            {QStringLiteral("id"), static_cast<qint64>(bus.id)},
+            {QStringLiteral("name"), bus.name},
+            {QStringLiteral("gain"), bus.gain},
+            {QStringLiteral("pan"), bus.pan},
+            {QStringLiteral("muted"), bus.muted},
+            {QStringLiteral("solo"), bus.solo}
+        });
 
     const QJsonObject root{
         {QStringLiteral("format"), QString::fromLatin1(projectFormat)},
@@ -390,6 +403,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("countInBars"), safeProject.countInBars},
         {QStringLiteral("masterGain"), safeProject.masterGain},
         {QStringLiteral("markers"), markers},
+        {QStringLiteral("buses"), buses},
         {QStringLiteral("tracks"), tracks}
     };
 
@@ -483,6 +497,42 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
                 return false;
             }
             loaded.markers.push_back(std::move(marker));
+        }
+    }
+    if (version >= 14)
+    {
+        const QJsonValue busValue = root.value(QStringLiteral("buses"));
+        if (!busValue.isArray() || busValue.toArray().size() > 64)
+        {
+            setError(error, QStringLiteral("The project has invalid or excessive mixer bus data."));
+            return false;
+        }
+        for (const QJsonValue& busJson : busValue.toArray())
+        {
+            if (!busJson.isObject())
+            {
+                setError(error, QStringLiteral("The project contains an invalid mixer bus."));
+                return false;
+            }
+            const QJsonObject busObject = busJson.toObject();
+            MixerBus bus;
+            if (!readId(busObject, QStringLiteral("id"), bus.id, error))
+                return false;
+            bus.name = busObject.value(QStringLiteral("name")).toString().trimmed();
+            const double gain = busObject.value(QStringLiteral("gain")).toDouble(
+                std::numeric_limits<double>::quiet_NaN());
+            const double pan = busObject.value(QStringLiteral("pan")).toDouble(
+                std::numeric_limits<double>::quiet_NaN());
+            if (bus.id == 0 || bus.name.isEmpty() || !std::isfinite(gain) || !std::isfinite(pan))
+            {
+                setError(error, QStringLiteral("The project contains an invalid mixer bus setting."));
+                return false;
+            }
+            bus.gain = static_cast<float>(gain);
+            bus.pan = static_cast<float>(pan);
+            bus.muted = busObject.value(QStringLiteral("muted")).toBool(false);
+            bus.solo = busObject.value(QStringLiteral("solo")).toBool(false);
+            loaded.buses.push_back(std::move(bus));
         }
     }
 

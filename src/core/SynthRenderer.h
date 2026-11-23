@@ -19,9 +19,14 @@ class SynthRenderer
 public:
     void setProject(std::shared_ptr<const ProjectData> project, double sampleRate);
     void resetTransport();
+    void beginMixerFrame();
+    void addLiveBusFrameSample(size_t busIndex, StereoSample input);
+    StereoSample routeLiveTrackSample(size_t trackIndex, StereoSample input, int* busIndex = nullptr) const;
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
     void resetTrackPeakLevels();
+    void resetBusPeakLevels();
     float trackPeakLevel(size_t trackIndex) const;
+    float busPeakLevel(size_t busIndex) const;
     StereoSample renderSample(qint64 projectFrame);
 
 private:
@@ -83,6 +88,12 @@ private:
         bool tailActive = false;
     };
 
+    struct BusMixState
+    {
+        float leftGain = 1.0f;
+        float rightGain = 1.0f;
+    };
+
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
     void addTrackSample(size_t trackIndex, float left, float right);
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
@@ -95,6 +106,14 @@ private:
     std::vector<std::array<float, 3>> trackEqualizerGains;
     std::vector<TrackEqualizerState> trackEqualizerStates;
     std::vector<size_t> activeEqualizerTailTracks;
+    std::vector<int> trackBusIndices;
+    std::vector<unsigned char> trackAudible;
+    std::vector<BusMixState> busMixStates;
+    std::vector<StereoSample> busFrameSamples;
+    std::vector<StereoSample> lastBusOutputSamples;
+    std::vector<unsigned char> busFrameTouched;
+    std::vector<size_t> touchedBusIndices;
+    std::vector<float> busPeakLevels;
     std::vector<StereoSample> trackFrameSamples;
     std::vector<unsigned char> trackFrameTouched;
     std::vector<size_t> touchedTrackIndices;

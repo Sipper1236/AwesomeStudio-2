@@ -29,6 +29,7 @@ public:
     bool isPlaying() const;
     double positionBeats() const;
     float trackPeakLevel(quint64 trackId) const;
+    float busPeakLevel(size_t busIndex) const;
     float masterPeakLevel() const;
     void setLiveTrackMixOverride(quint64 trackId, int parameter, float value);
     void clearLiveTrackMixOverride(quint64 trackId, int parameter);
@@ -44,6 +45,7 @@ public:
 
 private:
     static constexpr size_t maximumTrackCount = 256;
+    static constexpr size_t maximumBusCount = 64;
     static constexpr size_t liveMidiQueueCapacity = 1024;
     static constexpr size_t maximumLiveMidiVoices = 128;
     class AudioStream;
@@ -123,13 +125,18 @@ private:
     std::array<StereoSample, maximumTrackCount> liveMidiTrackFrameSamples{};
     std::array<bool, maximumTrackCount> liveMidiTrackFrameTouched{};
     std::array<size_t, maximumLiveMidiVoices> liveMidiTouchedTracks{};
+    std::array<StereoSample, maximumBusCount> liveMidiBusFrameSamples{};
+    std::array<bool, maximumBusCount> liveMidiBusFrameTouched{};
+    std::array<size_t, maximumBusCount> liveMidiTouchedBuses{};
     std::array<float, maximumTrackCount> liveMidiBlockPeaks{};
     size_t liveMidiTouchedTrackCount = 0;
+    size_t liveMidiTouchedBusCount = 0;
     std::atomic<size_t> liveMidiWriteIndex{0};
     std::atomic<size_t> liveMidiReadIndex{0};
     std::atomic<bool> liveMidiPanic{false};
     quint64 nextLiveMidiSerial = 1;
     std::array<std::atomic<float>, maximumTrackCount> trackPeakValues;
+    std::array<std::atomic<float>, maximumBusCount> busPeakValues;
     std::atomic<float> masterPeakValue{0.0f};
     std::atomic<int> previewPitch{-1};
     std::atomic<int> previewVelocity{96};

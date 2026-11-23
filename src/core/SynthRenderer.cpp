@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <unordered_map>
 
 namespace
 {
@@ -132,6 +133,14 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackEqualizerGains.clear();
     trackEqualizerStates.clear();
     activeEqualizerTailTracks.clear();
+    trackBusIndices.clear();
+    trackAudible.clear();
+    busMixStates.clear();
+    busFrameSamples.clear();
+    lastBusOutputSamples.clear();
+    busFrameTouched.clear();
+    touchedBusIndices.clear();
+    busPeakLevels.clear();
     trackFrameSamples.clear();
     trackFrameTouched.clear();
     touchedTrackIndices.clear();
@@ -147,6 +156,14 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     liveTrackMixOverrides.resize(static_cast<size_t>(project->tracks.size()));
     trackEqualizerGains.reserve(static_cast<size_t>(project->tracks.size()));
     trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
+    trackBusIndices.resize(static_cast<size_t>(project->tracks.size()), -1);
+    trackAudible.assign(static_cast<size_t>(project->tracks.size()), 0);
+    busMixStates.reserve(static_cast<size_t>(project->buses.size()));
+    busFrameSamples.resize(static_cast<size_t>(project->buses.size()));
+    lastBusOutputSamples.resize(static_cast<size_t>(project->buses.size()));
+    busFrameTouched.assign(static_cast<size_t>(project->buses.size()), 0);
+    touchedBusIndices.reserve(static_cast<size_t>(project->buses.size()));
+    busPeakLevels.assign(static_cast<size_t>(project->buses.size()), 0.0f);
     trackFrameSamples.resize(static_cast<size_t>(project->tracks.size()));
     trackFrameTouched.assign(static_cast<size_t>(project->tracks.size()), 0);
     touchedTrackIndices.reserve(static_cast<size_t>(project->tracks.size()));
@@ -164,14 +181,33 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         });
     }
 
-    bool hasSolo = false;
+    std::unordered_map<quint64, int> busIndexById;
+    bool hasBusSolo = false;
+    for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
+    {
+        const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
+        busIndexById.emplace(bus.id, static_cast<int>(busIndex));
+        hasBusSolo = hasBusSolo || bus.solo;
+        const float leftBalance = bus.pan > 0.0f ? 1.0f - bus.pan : 1.0f;
+        const float rightBalance = bus.pan < 0.0f ? 1.0f + bus.pan : 1.0f;
+        busMixStates.push_back({bus.gain * leftBalance, bus.gain * rightBalance});
+    }
+
+    bool hasTrackSolo = false;
     for (const InstrumentTrack& track : project->tracks)
-        hasSolo = hasSolo || track.solo;
+        hasTrackSolo = hasTrackSolo || track.solo;
 
     for (size_t trackIndex = 0; trackIndex < static_cast<size_t>(project->tracks.size()); ++trackIndex)
     {
         const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
-        if (track.muted || (hasSolo && !track.solo))
+        const auto busPosition = busIndexById.find(track.outputBusId);
+        const int busIndex = busPosition == busIndexById.end() ? -1 : busPosition->second;
+        trackBusIndices[trackIndex] = busIndex;
+        const MixerBus* bus = busIndex >= 0 ? &project->buses[busIndex] : nullptr;
+        const bool audible = !track.muted && (!hasTrackSolo || track.solo) &&
+            (bus == nullptr || !bus->muted) && (!hasBusSolo || (bus != nullptr && bus->solo));
+        trackAudible[trackIndex] = audible ? 1 : 0;
+        if (!audible)
             continue;
 
         for (const MidiClip& clip : track.clips)
@@ -277,9 +313,43 @@ void SynthRenderer::resetTransport()
     activeNotes.clear();
     activeAudioRegions.clear();
     resetTrackEqualizers();
+    std::fill(busFrameSamples.begin(), busFrameSamples.end(), StereoSample{});
+    std::fill(lastBusOutputSamples.begin(), lastBusOutputSamples.end(), StereoSample{});
+    std::fill(busFrameTouched.begin(), busFrameTouched.end(), 0);
+    touchedBusIndices.clear();
     nextStartIndex = 0;
     nextAudioStartIndex = 0;
     lastFrame = -1;
+}
+
+void SynthRenderer::beginMixerFrame()
+{
+    std::fill(lastBusOutputSamples.begin(), lastBusOutputSamples.end(), StereoSample{});
+}
+
+void SynthRenderer::addLiveBusFrameSample(size_t busIndex, StereoSample input)
+{
+    if (busIndex >= busPeakLevels.size() || busIndex >= lastBusOutputSamples.size())
+        return;
+    const float left = lastBusOutputSamples[busIndex].left + input.left;
+    const float right = lastBusOutputSamples[busIndex].right + input.right;
+    busPeakLevels[busIndex] = std::max(busPeakLevels[busIndex], std::max(std::abs(left), std::abs(right)));
+}
+
+StereoSample SynthRenderer::routeLiveTrackSample(size_t trackIndex, StereoSample input, int* busIndexOut) const
+{
+    if (busIndexOut != nullptr)
+        *busIndexOut = -1;
+    if (trackIndex >= trackBusIndices.size() || trackIndex >= trackAudible.size() ||
+        trackAudible[trackIndex] == 0)
+        return {};
+    const int busIndex = trackBusIndices[trackIndex];
+    if (busIndex < 0 || static_cast<size_t>(busIndex) >= busMixStates.size())
+        return input;
+    if (busIndexOut != nullptr)
+        *busIndexOut = busIndex;
+    const BusMixState& bus = busMixStates[static_cast<size_t>(busIndex)];
+    return {input.left * bus.leftGain, input.right * bus.rightGain};
 }
 
 StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample input)
@@ -335,6 +405,16 @@ void SynthRenderer::resetTrackPeakLevels()
 float SynthRenderer::trackPeakLevel(size_t trackIndex) const
 {
     return trackIndex < trackPeakLevels.size() ? trackPeakLevels[trackIndex] : 0.0f;
+}
+
+void SynthRenderer::resetBusPeakLevels()
+{
+    std::fill(busPeakLevels.begin(), busPeakLevels.end(), 0.0f);
+}
+
+float SynthRenderer::busPeakLevel(size_t busIndex) const
+{
+    return busIndex < busPeakLevels.size() ? busPeakLevels[busIndex] : 0.0f;
 }
 
 void SynthRenderer::addTrackSample(size_t trackIndex, float left, float right)
@@ -485,14 +565,44 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
             equalizerState.tailActive = true;
             activeEqualizerTailTracks.push_back(trackIndex);
         }
-        sample.left += trackSample.left;
-        sample.right += trackSample.right;
+        const int busIndex = trackBusIndices[trackIndex];
+        if (busIndex < 0 || static_cast<size_t>(busIndex) >= busFrameSamples.size())
+        {
+            sample.left += trackSample.left;
+            sample.right += trackSample.right;
+        }
+        else
+        {
+            const size_t index = static_cast<size_t>(busIndex);
+            if (busFrameTouched[index] == 0)
+            {
+                busFrameTouched[index] = 1;
+                touchedBusIndices.push_back(index);
+            }
+            busFrameSamples[index].left += trackSample.left;
+            busFrameSamples[index].right += trackSample.right;
+        }
         trackPeakLevels[trackIndex] = std::max(trackPeakLevels[trackIndex],
             std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
         trackFrameSamples[trackIndex] = {};
         trackFrameTouched[trackIndex] = 0;
     }
     touchedTrackIndices.clear();
+
+    for (size_t busIndex : touchedBusIndices)
+    {
+        const BusMixState& bus = busMixStates[busIndex];
+        const float left = busFrameSamples[busIndex].left * bus.leftGain;
+        const float right = busFrameSamples[busIndex].right * bus.rightGain;
+        sample.left += left;
+        sample.right += right;
+        lastBusOutputSamples[busIndex] = {left, right};
+        busPeakLevels[busIndex] = std::max(busPeakLevels[busIndex],
+                                           std::max(std::abs(left), std::abs(right)));
+        busFrameSamples[busIndex] = {};
+        busFrameTouched[busIndex] = 0;
+    }
+    touchedBusIndices.clear();
 
     auto activeTail = activeEqualizerTailTracks.begin();
     for (size_t trackIndex : activeEqualizerTailTracks)
