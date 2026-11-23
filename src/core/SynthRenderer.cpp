@@ -240,6 +240,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixValues.resize(static_cast<size_t>(project->tracks.size()));
     liveTrackMixOverrides.resize(static_cast<size_t>(project->tracks.size()));
     liveSynthFilterCutoffOverrides.assign(static_cast<size_t>(project->tracks.size()), -1.0f);
+    liveSynthFilterResonanceOverrides.assign(static_cast<size_t>(project->tracks.size()), -1.0f);
     trackPitchBends.assign(static_cast<size_t>(project->tracks.size()), {});
     trackEqualizerGains.reserve(static_cast<size_t>(project->tracks.size()));
     trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
@@ -759,6 +760,7 @@ void SynthRenderer::resetTransport()
         {
             const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
             effects.front().settings.cutoffHz = track.synthFilterCutoffHz;
+            effects.front().settings.resonance = track.synthFilterResonance;
             configureFilter(effects.front(), track.synthFilterType);
         }
     }
@@ -929,14 +931,22 @@ StereoSample SynthRenderer::finishMixerFrame()
                     ? liveCutoff
                     : automationValue(track.synthFilterCutoffAutomation, currentBeat,
                                       track.synthFilterCutoffHz);
+                const float liveResonance = liveSynthFilterResonanceOverrides[trackIndex];
+                const float automatedResonance = std::isfinite(liveResonance) &&
+                    liveResonance >= 0.1f
+                    ? liveResonance
+                    : automationValue(track.synthFilterResonanceAutomation, currentBeat,
+                                      track.synthFilterResonance);
                 const double cutoff = std::clamp(
                     static_cast<double>(automatedCutoff) * std::exp2(
                         static_cast<double>(synthFilterEnvelopeSemitoneOffsets[trackIndex]) / 12.0),
                     20.0, std::max(20.0, sampleRate * 0.49));
                 EffectState& filter = trackInstrumentFilterStates[trackIndex].front();
-                if (std::abs(filter.settings.cutoffHz - cutoff) > 0.01)
+                if (std::abs(filter.settings.cutoffHz - cutoff) > 0.01 ||
+                    std::abs(filter.settings.resonance - automatedResonance) > 0.001f)
                 {
                     filter.settings.cutoffHz = static_cast<float>(cutoff);
+                    filter.settings.resonance = automatedResonance;
                     configureFilter(filter, track.synthFilterType);
                 }
                 synthFilterEnvelopeAppliedOffsets[trackIndex] =
@@ -1588,10 +1598,12 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
         liveTrackMixOverrides[trackIndex].pan = value;
 }
 
-void SynthRenderer::setLiveSynthFilterCutoffOverride(size_t trackIndex, float value)
+void SynthRenderer::setLiveSynthFilterOverride(size_t trackIndex, int parameter, float value)
 {
-    if (trackIndex < liveSynthFilterCutoffOverrides.size())
+    if (parameter == 0 && trackIndex < liveSynthFilterCutoffOverrides.size())
         liveSynthFilterCutoffOverrides[trackIndex] = value;
+    else if (parameter == 1 && trackIndex < liveSynthFilterResonanceOverrides.size())
+        liveSynthFilterResonanceOverrides[trackIndex] = value;
 }
 
 void SynthRenderer::setLivePluginParameterOverride(size_t trackIndex, qsizetype effectIndex,

@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 52;
+constexpr int currentProjectVersion = 53;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -600,6 +600,8 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("panAutomation"), saveAutomation(track.panAutomation)},
         {QStringLiteral("synthFilterCutoffAutomation"),
          saveAutomation(track.synthFilterCutoffAutomation)},
+        {QStringLiteral("synthFilterResonanceAutomation"),
+         saveAutomation(track.synthFilterResonanceAutomation)},
         {QStringLiteral("muted"), track.muted},
         {QStringLiteral("solo"), track.solo},
         {QStringLiteral("drumSamples"), [&track]
@@ -950,7 +952,10 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                         QStringLiteral("pan"), version, error) ||
         !loadAutomation(object.value(QStringLiteral("synthFilterCutoffAutomation")),
                         track.synthFilterCutoffAutomation,
-                        QStringLiteral("synth filter cutoff"), version, error))
+                        QStringLiteral("synth filter cutoff"), version, error) ||
+        !loadAutomation(object.value(QStringLiteral("synthFilterResonanceAutomation")),
+                        track.synthFilterResonanceAutomation,
+                        QStringLiteral("synth filter resonance"), version, error))
         return false;
     track.muted = object.value(QStringLiteral("muted")).toBool(false);
     track.solo = object.value(QStringLiteral("solo")).toBool(false);

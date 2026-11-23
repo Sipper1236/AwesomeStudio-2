@@ -408,6 +408,7 @@ struct InstrumentTrack
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
     QVector<AutomationPoint> synthFilterCutoffAutomation;
+    QVector<AutomationPoint> synthFilterResonanceAutomation;
     bool muted = false;
     bool solo = false;
     std::array<DrumPadSample, 4> drumSamples;

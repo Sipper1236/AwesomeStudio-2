@@ -20,7 +20,8 @@ constexpr int rulerHeight = 28;
 constexpr int trackHeight = 72;
 constexpr int automationLaneHeight = 50;
 constexpr int synthFilterCutoffAutomationTarget = 2;
-constexpr int pluginAutomationTargetBase = 3;
+constexpr int synthFilterResonanceAutomationTarget = 3;
+constexpr int pluginAutomationTargetBase = 4;
 constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
 constexpr int clapInstrumentAutomationTargetBase =
@@ -944,9 +945,14 @@ private:
         if (automationParameter == 1)
             return track.panAutomation;
         static const QVector<AutomationPoint> empty;
-        if (automationParameter == synthFilterCutoffAutomationTarget)
-            return track.instrumentType == InstrumentType::Synth
-                ? track.synthFilterCutoffAutomation : empty;
+        if (automationParameter == synthFilterCutoffAutomationTarget ||
+            automationParameter == synthFilterResonanceAutomationTarget)
+        {
+            if (track.instrumentType != InstrumentType::Synth)
+                return empty;
+            return automationParameter == synthFilterCutoffAutomationTarget
+                ? track.synthFilterCutoffAutomation : track.synthFilterResonanceAutomation;
+        }
         qsizetype instrumentParameterIndex = 0;
         if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
         {
@@ -977,9 +983,14 @@ private:
             return track.gain;
         if (automationParameter == 1)
             return track.pan;
-        if (automationParameter == synthFilterCutoffAutomationTarget)
-            return track.instrumentType == InstrumentType::Synth
-                ? track.synthFilterCutoffHz : automationDefaultValue;
+        if (automationParameter == synthFilterCutoffAutomationTarget ||
+            automationParameter == synthFilterResonanceAutomationTarget)
+        {
+            if (track.instrumentType != InstrumentType::Synth)
+                return automationDefaultValue;
+            return automationParameter == synthFilterCutoffAutomationTarget
+                ? track.synthFilterCutoffHz : track.synthFilterResonance;
+        }
         qsizetype instrumentParameterIndex = 0;
         if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
         {
@@ -1011,9 +1022,14 @@ private:
         if (automationParameter == 1)
             return track.panAutomation;
         static QVector<AutomationPoint> invalid;
-        if (automationParameter == synthFilterCutoffAutomationTarget)
-            return track.instrumentType == InstrumentType::Synth
-                ? track.synthFilterCutoffAutomation : invalid;
+        if (automationParameter == synthFilterCutoffAutomationTarget ||
+            automationParameter == synthFilterResonanceAutomationTarget)
+        {
+            if (track.instrumentType != InstrumentType::Synth)
+                return invalid;
+            return automationParameter == synthFilterCutoffAutomationTarget
+                ? track.synthFilterCutoffAutomation : track.synthFilterResonanceAutomation;
+        }
         qsizetype instrumentParameterIndex = 0;
         if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
         {
@@ -1044,7 +1060,8 @@ private:
     {
         if (automationParameter == 0 || automationParameter == 1)
             return true;
-        if (automationParameter == synthFilterCutoffAutomationTarget)
+        if (automationParameter == synthFilterCutoffAutomationTarget ||
+            automationParameter == synthFilterResonanceAutomationTarget)
             return track.instrumentType == InstrumentType::Synth;
         qsizetype instrumentParameterIndex = 0;
         if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))

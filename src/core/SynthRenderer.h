@@ -38,7 +38,7 @@ public:
     StereoSample processMasterEffects(StereoSample input);
     double effectTailSeconds() const;
     void setLiveTrackMixOverride(size_t trackIndex, int parameter, float value);
-    void setLiveSynthFilterCutoffOverride(size_t trackIndex, float value);
+    void setLiveSynthFilterOverride(size_t trackIndex, int parameter, float value);
     void setLivePluginParameterOverride(size_t trackIndex, qsizetype effectIndex,
                                         qsizetype parameterIndex, float value);
     void capturePluginStates(ProjectData& target) const;
@@ -241,6 +241,7 @@ private:
     std::vector<TrackMixValue> trackMixValues;
     std::vector<LiveTrackMixOverride> liveTrackMixOverrides;
     std::vector<float> liveSynthFilterCutoffOverrides;
+    std::vector<float> liveSynthFilterResonanceOverrides;
     std::vector<std::array<float, 3>> trackEqualizerGains;
     std::vector<TrackEqualizerState> trackEqualizerStates;
     std::vector<std::vector<EffectState>> trackInstrumentFilterStates;
