@@ -21,6 +21,7 @@ public:
     void quantizeNotesToGrid();
     bool addChordToSelection(const QVector<int>& semitoneIntervals);
     bool arpeggiateSelectedChord();
+    void editSelectedNoteProperties();
     void setPixelsPerBeat(int pixels);
     void setPlayheadBeat(double beat);
 

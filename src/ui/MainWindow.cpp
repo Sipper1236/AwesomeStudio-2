@@ -1112,6 +1112,7 @@ void MainWindow::createMenus()
     editMenu->addAction(undoAction);
     editMenu->addAction(redoAction);
     editMenu->addSeparator();
+    editMenu->addAction(tr("Note properties…"), midiEditor, &MidiEditor::editSelectedNoteProperties);
     editMenu->addAction(tr("Quantize note starts to grid"), midiEditor, &MidiEditor::quantizeNotesToGrid);
     QMenu* chordMenu = editMenu->addMenu(tr("Build chord from selection"));
     const auto addChordAction = [this, chordMenu](const QString& label, const QVector<int>& intervals)

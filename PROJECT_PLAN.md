@@ -19,6 +19,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Piano-roll chord insertion for common triads, suspended chords, and sevenths
 - [x] Toggleable piano-roll ghost notes from other MIDI clips on the same track
 - [x] Basic ascending arpeggiation for selected chord notes on the current grid
+- [x] Exact single-note pitch, start, duration, velocity, and channel properties
 - [ ] Arpeggiator direction, octave-range, gate, and velocity controls
 - [x] Built-in synth preview and arrangement playback
 - [x] Project save/open and stereo WAV export

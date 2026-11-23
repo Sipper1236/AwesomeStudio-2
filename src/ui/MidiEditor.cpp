@@ -1,9 +1,15 @@
 #include "MidiEditor.h"
 
 #include <QKeyEvent>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
 #include <QPainter>
 #include <QScrollBar>
 #include <QSet>
+#include <QSpinBox>
 #include <QMouseEvent>
 #include <QTimer>
 
@@ -271,6 +277,20 @@ public:
         commitIfChanged(before);
         update();
         return notes != before;
+    }
+
+    void editSelectedNoteProperties()
+    {
+        if (selected.size() != 1)
+            return;
+        for (int index = 0; index < notes.size(); ++index)
+        {
+            if (selected.contains(notes[index].id))
+            {
+                editNoteProperties(index);
+                return;
+            }
+        }
     }
 
     void setPixelsPerBeat(int pixels)
@@ -561,6 +581,21 @@ protected:
         }
     }
 
+    void mouseDoubleClickEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton)
+        {
+            const int hit = noteAt(event->position().toPoint());
+            if (hit >= 0)
+            {
+                selected = {notes[hit].id};
+                editNoteProperties(hit);
+                return;
+            }
+        }
+        QWidget::mouseDoubleClickEvent(event);
+    }
+
     void keyPressEvent(QKeyEvent* event) override
     {
         if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && !selected.isEmpty())
@@ -586,6 +621,74 @@ protected:
 
 private:
     enum class DragMode { None, Create, Move, Resize, Velocity };
+
+    void editNoteProperties(int index)
+    {
+        if (index < 0 || index >= notes.size())
+            return;
+
+        const MidiNote initialNote = notes[index];
+        QDialog dialog(this);
+        dialog.setWindowTitle(tr("MIDI note properties"));
+        auto* form = new QFormLayout(&dialog);
+
+        auto* pitchControl = new QSpinBox(&dialog);
+        pitchControl->setRange(0, 127);
+        pitchControl->setValue(initialNote.pitch);
+        form->addRow(tr("Pitch"), pitchControl);
+
+        auto* startControl = new QDoubleSpinBox(&dialog);
+        startControl->setRange(0.0, patternLength);
+        startControl->setDecimals(4);
+        startControl->setSingleStep(snap);
+        startControl->setSuffix(tr(" beats"));
+        startControl->setValue(initialNote.startBeat);
+        form->addRow(tr("Start"), startControl);
+
+        auto* lengthControl = new QDoubleSpinBox(&dialog);
+        lengthControl->setRange(1.0 / 64.0, std::max(1.0 / 64.0, patternLength));
+        lengthControl->setDecimals(4);
+        lengthControl->setSingleStep(snap);
+        lengthControl->setSuffix(tr(" beats"));
+        lengthControl->setValue(initialNote.lengthBeats);
+        form->addRow(tr("Length"), lengthControl);
+
+        auto* velocityControl = new QSpinBox(&dialog);
+        velocityControl->setRange(1, 127);
+        velocityControl->setValue(initialNote.velocity);
+        form->addRow(tr("Velocity"), velocityControl);
+
+        auto* channelControl = new QComboBox(&dialog);
+        channelControl->addItem(tr("Track default"), -1);
+        for (int channel = 0; channel < 16; ++channel)
+            channelControl->addItem(QString::number(channel + 1), channel);
+        const int channelIndex = channelControl->findData(initialNote.channel);
+        channelControl->setCurrentIndex(channelIndex < 0 ? 0 : channelIndex);
+        form->addRow(tr("MIDI channel"), channelControl);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        form->addRow(buttons);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+
+        const auto currentNote = std::find_if(notes.begin(), notes.end(),
+            [&initialNote](const MidiNote& note) { return note.id == initialNote.id; });
+        if (currentNote == notes.end())
+            return;
+
+        const QVector<MidiNote> before = notes;
+        currentNote->pitch = pitchControl->value();
+        currentNote->lengthBeats = lengthControl->value();
+        currentNote->startBeat = std::clamp(startControl->value(), 0.0,
+                                             std::max(0.0, patternLength - currentNote->lengthBeats));
+        currentNote->velocity = velocityControl->value();
+        currentNote->channel = channelControl->currentData().toInt();
+        selected = {currentNote->id};
+        commitIfChanged(before);
+        update();
+    }
 
     void updateCanvasSize()
     {
@@ -785,6 +888,11 @@ bool MidiEditor::addChordToSelection(const QVector<int>& semitoneIntervals)
 bool MidiEditor::arpeggiateSelectedChord()
 {
     return canvas->arpeggiateSelectedChord();
+}
+
+void MidiEditor::editSelectedNoteProperties()
+{
+    canvas->editSelectedNoteProperties();
 }
 
 void MidiEditor::setPixelsPerBeat(int pixels)
