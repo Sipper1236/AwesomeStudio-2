@@ -438,6 +438,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         statusBar()->showMessage(audioEngine.errorMessage() +
                                  tr(" The editor remains available; connect an output device to audition."));
     }
+    refreshAudioInputs();
 
     updateProjectTitle();
     uiTimer = new QTimer(this);
@@ -475,6 +476,12 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                 finishAudioRecording(true);
             else if (recordingTransportActive && !audioEngine.isPlaying())
                 finishAudioRecording(true);
+        }
+        if (audioMonitor)
+        {
+            const QString monitorIssue = audioMonitor->errorMessage();
+            if (!monitorIssue.isEmpty())
+                finishAudioMonitoring();
         }
         if (midiRecordingPending)
         {
@@ -644,39 +651,8 @@ void MainWindow::createActions()
     audioMonitorAction = new QAction(tr("Monitor audio"), this);
     audioMonitorAction->setCheckable(true);
     audioMonitorAction->setEnabled(false);
-    audioMonitorAction->setToolTip(tr("Route the selected audio input to the master output during recording"));
-    connect(audioMonitorAction, &QAction::toggled, this, [this](bool enabled)
-    {
-        if (enabled && (!audioRecorder || !audioEngine.isAudioAvailable()))
-        {
-            const QSignalBlocker blocker(audioMonitorAction);
-            audioMonitorAction->setChecked(false);
-            return;
-        }
-        if (enabled)
-        {
-            audioRecorder->setMonitorCallback([this](const float* samples, qsizetype frames,
-                                                      int channels, int sampleRate)
-            {
-                audioEngine.pushAudioInputMonitorFrames(samples, frames, channels, sampleRate);
-            });
-            if (!audioEngine.setAudioInputMonitoring(true))
-            {
-                audioRecorder->setMonitorCallback({});
-                const QSignalBlocker blocker(audioMonitorAction);
-                audioMonitorAction->setChecked(false);
-                statusBar()->showMessage(tr("Audio monitoring needs an available output device."), 4000);
-                return;
-            }
-            statusBar()->showMessage(tr("Monitoring live audio input through the master output"), 3500);
-        }
-        else
-        {
-            audioEngine.setAudioInputMonitoring(false);
-            if (audioRecorder)
-                audioRecorder->setMonitorCallback({});
-        }
-    });
+    audioMonitorAction->setToolTip(tr("Hear the selected audio input through the master output"));
+    connect(audioMonitorAction, &QAction::toggled, this, &MainWindow::setAudioMonitoring);
 
     midiRecordAction = new QAction(tr("Record MIDI"), this);
     midiRecordAction->setCheckable(true);
@@ -3748,6 +3724,115 @@ void MainWindow::exportMidi()
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
 }
 
+void MainWindow::setAudioMonitoring(bool enabled)
+{
+    if (!enabled)
+    {
+        audioEngine.setAudioInputMonitoring(false);
+        if (audioRecorder)
+            audioRecorder->setMonitorCallback({});
+        if (audioMonitor)
+            finishAudioMonitoring();
+        else
+            refreshAudioInputs();
+        return;
+    }
+
+    const auto reject = [this](const QString& message)
+    {
+        audioEngine.setAudioInputMonitoring(false);
+        if (audioRecorder)
+            audioRecorder->setMonitorCallback({});
+        if (audioMonitor)
+        {
+            audioMonitor->setMonitorCallback({});
+            QString ignoredError;
+            audioMonitor->finish(&ignoredError);
+            audioMonitor.reset();
+        }
+        const QSignalBlocker blocker(audioMonitorAction);
+        audioMonitorAction->setChecked(false);
+        refreshAudioInputs();
+        statusBar()->showMessage(message, 5000);
+    };
+
+    if (recordingPending)
+    {
+        reject(tr("Wait for audio recording to start before enabling input monitoring."));
+        return;
+    }
+    if (!audioEngine.isAudioAvailable() && !audioEngine.initialize())
+    {
+        reject(tr("Audio monitoring needs an available output device."));
+        return;
+    }
+    audioDeviceLabel->setText(tr("Audio · %1").arg(audioEngine.deviceName()));
+
+    const auto callback = [this](const float* samples, qsizetype frames, int channels, int sampleRate)
+    {
+        audioEngine.pushAudioInputMonitorFrames(samples, frames, channels, sampleRate);
+    };
+    if (audioRecorder)
+    {
+        audioRecorder->setMonitorCallback(callback);
+    }
+    else
+    {
+        const QByteArray selectedDeviceId = audioInputControl->currentData().toByteArray();
+        QAudioDevice selectedDevice;
+        for (const QAudioDevice& device : QMediaDevices::audioInputs())
+        {
+            if (device.id() == selectedDeviceId)
+            {
+                selectedDevice = device;
+                break;
+            }
+        }
+        if (selectedDevice.isNull())
+        {
+            reject(tr("Connect or select an audio input device before monitoring."));
+            return;
+        }
+
+        audioMonitor = std::make_unique<AudioRecorder>();
+        QString error;
+        if (!audioMonitor->startMonitoring(selectedDevice, callback, &error))
+        {
+            audioMonitor.reset();
+            reject(tr("Could not start audio monitoring: %1").arg(error));
+            return;
+        }
+    }
+
+    if (!audioEngine.setAudioInputMonitoring(true))
+    {
+        reject(tr("Audio monitoring needs an available output device."));
+        return;
+    }
+    refreshAudioInputs();
+    statusBar()->showMessage(audioRecorder
+        ? tr("Monitoring live audio input through the master output")
+        : tr("Monitoring audio input through the master output"), 3500);
+}
+
+void MainWindow::finishAudioMonitoring()
+{
+    if (!audioMonitor)
+        return;
+    audioEngine.setAudioInputMonitoring(false);
+    audioMonitor->setMonitorCallback({});
+    QString error;
+    const bool finished = audioMonitor->finish(&error);
+    audioMonitor.reset();
+    {
+        const QSignalBlocker blocker(audioMonitorAction);
+        audioMonitorAction->setChecked(false);
+    }
+    refreshAudioInputs();
+    if (!finished && !error.isEmpty())
+        statusBar()->showMessage(tr("Audio monitoring stopped: %1").arg(error), 5000);
+}
+
 void MainWindow::refreshAudioInputs()
 {
     if (audioInputControl == nullptr)
@@ -3783,9 +3868,10 @@ void MainWindow::refreshAudioInputs()
     {
         audioInputControl->setCurrentIndex(defaultIndex >= 0 ? defaultIndex : 0);
     }
-    audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !recordingPending &&
+    audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !audioMonitor && !recordingPending &&
                                   !midiRecordingActive && !midiRecordingPending);
-    audioMonitorAction->setEnabled(audioRecorder != nullptr && audioEngine.isAudioAvailable());
+    audioMonitorAction->setEnabled(audioEngine.isAudioAvailable() && !recordingPending &&
+                                   (audioRecorder != nullptr || audioMonitor != nullptr || !devices.isEmpty()));
     recordAction->setEnabled(!midiRecordingActive && !midiRecordingPending &&
                              (audioRecorder || recordingPending || !devices.isEmpty()));
 }
@@ -4180,6 +4266,8 @@ void MainWindow::startAudioRecording()
         return;
     }
 
+    if (audioMonitor)
+        finishAudioMonitoring();
     pendingRecordingPath = path;
     pendingRecordingDeviceId = selectedDevice.id();
     pendingRecordingDeviceName = selectedDevice.description();
@@ -4193,6 +4281,7 @@ void MainWindow::startAudioRecording()
     metronomeAction->setEnabled(false);
     midiInputControl->setEnabled(false);
     midiRecordAction->setEnabled(false);
+    audioMonitorAction->setEnabled(false);
     if (playbackAvailable)
     {
         audioEngine.setProject(project);

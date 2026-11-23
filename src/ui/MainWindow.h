@@ -72,6 +72,8 @@ private:
     void setMixerBusSend(quint64 busId, qsizetype sendIndex, quint64 targetBusId, float gain);
     void addMixerBusSend(quint64 busId);
     void removeMixerBusSend(quint64 busId, qsizetype sendIndex);
+    void setAudioMonitoring(bool enabled);
+    void finishAudioMonitoring();
     void setTrackOutputBus(quint64 trackId, quint64 busId);
     void setTrackSend(quint64 trackId, qsizetype sendIndex, quint64 busId, float gain);
     void addTrackSend(quint64 trackId);
@@ -239,6 +241,7 @@ private:
     QAction* pianoRollScaleSnapAction = nullptr;
     QAction* pianoRollGhostNotesAction = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
+    std::unique_ptr<AudioRecorder> audioMonitor;
     std::unique_ptr<MidiInput> midiInput;
     QComboBox* midiInputControl = nullptr;
     QTimer* midiInputPollTimer = nullptr;

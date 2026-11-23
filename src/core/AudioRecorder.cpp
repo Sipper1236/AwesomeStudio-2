@@ -131,12 +131,89 @@ bool AudioRecorder::start(const QAudioDevice& device, const QString& path,
     framesWritten = 0;
     reachedLimit = false;
     pendingBytes.clear();
+    monitorOnly = false;
+    monitorCallback = {};
+    active = true;
+    return true;
+}
+
+bool AudioRecorder::startMonitoring(const QAudioDevice& device, MonitorCallback callback,
+                                    QString* error)
+{
+    if (active)
+    {
+        if (error != nullptr)
+            *error = QStringLiteral("Audio input is already active.");
+        return false;
+    }
+    if (device.isNull() || !chooseFormat(device))
+    {
+        if (error != nullptr)
+            *error = QStringLiteral("The selected input device has no supported mono or stereo format.");
+        return false;
+    }
+    if (!callback)
+    {
+        if (error != nullptr)
+            *error = QStringLiteral("Audio monitoring needs an output callback.");
+        return false;
+    }
+
+    source = std::make_unique<QAudioSource>(device, inputFormat);
+    const qint64 requestedBuffer = inputFormat.bytesForDuration(200000);
+    if (requestedBuffer > 0)
+        source->setBufferSize(static_cast<qsizetype>(requestedBuffer));
+    input = source->start();
+    if (input == nullptr || (source->state() == QAudio::StoppedState && source->error() != QAudio::NoError))
+    {
+        const QString message = QStringLiteral("Could not start audio input (error %1).")
+                                    .arg(static_cast<int>(source->error()));
+        source->stop();
+        source.reset();
+        if (error != nullptr)
+            *error = message;
+        return false;
+    }
+
+    QObject::connect(input, &QIODevice::readyRead, source.get(), [this] { consumeAvailable(); });
+    failure.clear();
+    outputPath.clear();
+    framesWritten = 0;
+    reachedLimit = false;
+    pendingBytes.clear();
+    monitorCallback = std::move(callback);
+    monitorOnly = true;
     active = true;
     return true;
 }
 
 bool AudioRecorder::finish(QString* error)
 {
+    if (monitorOnly)
+    {
+        QString inputIssue = errorMessage();
+        consumeAvailable();
+        if (inputIssue.isEmpty())
+            inputIssue = errorMessage();
+        if (source)
+        {
+            source->stop();
+            source.reset();
+        }
+        input = nullptr;
+        active = false;
+        monitorOnly = false;
+        monitorCallback = {};
+        if (!failure.isEmpty() || !inputIssue.isEmpty())
+        {
+            const QString message = !failure.isEmpty() ? failure : inputIssue;
+            if (error != nullptr)
+                *error = message;
+            return false;
+        }
+        return true;
+    }
+
     if (!file)
     {
         if (error != nullptr)
@@ -152,6 +229,8 @@ bool AudioRecorder::finish(QString* error)
     }
     input = nullptr;
     active = false;
+    monitorOnly = false;
+    monitorCallback = {};
 
     if (!failure.isEmpty() || framesWritten == 0)
     {
@@ -259,7 +338,8 @@ bool AudioRecorder::chooseFormat(const QAudioDevice& device)
 
 void AudioRecorder::consumeAvailable()
 {
-    if (input == nullptr || file == nullptr || !failure.isEmpty() || reachedLimit)
+    if (input == nullptr || (file == nullptr && !monitorOnly) || !failure.isEmpty() ||
+        (reachedLimit && !monitorOnly))
         return;
 
     pendingBytes.append(input->readAll());
@@ -271,11 +351,11 @@ void AudioRecorder::consumeAvailable()
     }
 
     const quint64 availableFrames = static_cast<quint64>(pendingBytes.size() / inputBytesPerFrame);
-    const quint64 remainingFrames = maximumFrames - framesWritten;
-    const quint64 frames = std::min(availableFrames, remainingFrames);
+    const quint64 remainingFrames = monitorOnly ? availableFrames : maximumFrames - framesWritten;
+    const quint64 frames = monitorOnly ? availableFrames : std::min(availableFrames, remainingFrames);
     if (frames == 0)
     {
-        if (remainingFrames == 0)
+        if (!monitorOnly && remainingFrames == 0)
             reachedLimit = true;
         return;
     }
@@ -286,7 +366,9 @@ void AudioRecorder::consumeAvailable()
         setError(QStringLiteral("The audio input buffer exceeded the safe recording chunk size."));
         return;
     }
-    QByteArray output(static_cast<int>(outputByteCount), Qt::Uninitialized);
+    QByteArray output;
+    if (file)
+        output.resize(static_cast<int>(outputByteCount));
     const MonitorCallback monitor = monitorCallback;
     QVector<float> monitorSamples;
     if (monitor)
@@ -315,13 +397,14 @@ void AudioRecorder::consumeAvailable()
             }
             const qint16 value = static_cast<qint16>(std::lrint(std::clamp(sample, -1.0f, 1.0f) * 32767.0f));
             const qsizetype outputOffset = static_cast<qsizetype>(frame * outputChannels * 2 + channel * 2);
-            write16(output.data() + outputOffset, static_cast<quint16>(value));
+            if (file)
+                write16(output.data() + outputOffset, static_cast<quint16>(value));
             if (monitor)
                 monitorSamples[static_cast<qsizetype>(frame * outputChannels + channel)] = sample;
         }
     }
 
-    if (file->write(output.constData(), output.size()) != output.size())
+    if (file && file->write(output.constData(), output.size()) != output.size())
     {
         setError(file->errorString());
         return;
@@ -331,7 +414,7 @@ void AudioRecorder::consumeAvailable()
     if (monitor)
         monitor(monitorSamples.constData(), static_cast<qsizetype>(frames), outputChannels,
                 inputFormat.sampleRate());
-    if (framesWritten >= maximumFrames)
+    if (!monitorOnly && framesWritten >= maximumFrames)
         reachedLimit = true;
 }
 

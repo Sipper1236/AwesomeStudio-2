@@ -21,6 +21,8 @@ public:
 
     bool start(const QAudioDevice& device, const QString& path,
                quint64 maximumDecodedBytes, QString* error = nullptr);
+    bool startMonitoring(const QAudioDevice& device, MonitorCallback callback,
+                         QString* error = nullptr);
     bool finish(QString* error = nullptr);
     bool isActive() const;
     bool maximumReached() const;
@@ -49,5 +51,6 @@ private:
     int outputChannels = 0;
     bool reachedLimit = false;
     bool active = false;
+    bool monitorOnly = false;
     MonitorCallback monitorCallback;
 };
