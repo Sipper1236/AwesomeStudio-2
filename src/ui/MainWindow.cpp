@@ -1789,6 +1789,9 @@ public:
         : window(window), trackId(trackId), clip(std::move(clip)), insertIndex(insertIndex),
           previousTrackId(previousTrackId), previousClipId(previousClipId)
     {
+        sourceWasLoaded = clip.audioSource != nullptr;
+        audioSource = clip.audioSource;
+        clip.audioSource.reset();
         setText(QObject::tr("Duplicate Playlist clip"));
     }
 
@@ -1806,11 +1809,22 @@ public:
     {
         if (window != nullptr)
         {
+            MidiClip restoredClip = clip;
+            if (sourceWasLoaded)
+            {
+                QString error;
+                restoredClip.audioSource = window->resolveAudioAsset(
+                    clip.audioSourcePath, audioSource, true, &error);
+                if (restoredClip.audioSource == nullptr && !error.isEmpty())
+                    window->statusBar()->showMessage(
+                        QObject::tr("Duplicated region is offline: %1").arg(error), 4000);
+            }
             const quint64 appliedId = window->applyClipListHistory(
-                trackId, clip, insertIndex, true, trackId, clip.id);
+                trackId, restoredClip, insertIndex, true, trackId, clip.id);
             if (appliedId != 0)
             {
                 clip.id = appliedId;
+                audioSource = restoredClip.audioSource;
                 applied = true;
             }
             else
@@ -1825,6 +1839,8 @@ private:
     qsizetype insertIndex;
     quint64 previousTrackId;
     quint64 previousClipId;
+    std::weak_ptr<const AudioAsset> audioSource;
+    bool sourceWasLoaded = false;
     bool applied = false;
 };
 
@@ -1838,6 +1854,9 @@ public:
           previousTrackId(previousTrackId), previousClipId(previousClipId),
           nextTrackId(nextTrackId), nextClipId(nextClipId)
     {
+        sourceWasLoaded = clip.audioSource != nullptr;
+        audioSource = clip.audioSource;
+        clip.audioSource.reset();
         setText(QObject::tr("Remove Playlist clip"));
     }
 
@@ -1845,11 +1864,23 @@ public:
     {
         if (window != nullptr && applied)
         {
+            MidiClip restoredClip = clip;
+            if (sourceWasLoaded)
+            {
+                QString error;
+                restoredClip.audioSource = window->resolveAudioAsset(
+                    clip.audioSourcePath, audioSource, true, &error);
+                if (restoredClip.audioSource == nullptr)
+                    window->statusBar()->showMessage(error.isEmpty()
+                        ? QObject::tr("Restored audio region is offline")
+                        : QObject::tr("Restored audio region is offline: %1").arg(error), 5000);
+            }
             const quint64 restoredId = window->applyClipListHistory(
-                trackId, clip, clipIndex, true, previousTrackId, previousClipId);
+                trackId, restoredClip, clipIndex, true, previousTrackId, previousClipId);
             if (restoredId != 0)
             {
                 clip.id = restoredId;
+                audioSource = restoredClip.audioSource;
                 applied = false;
             }
         }
@@ -1871,6 +1902,8 @@ private:
     quint64 previousClipId;
     quint64 nextTrackId;
     quint64 nextClipId;
+    std::weak_ptr<const AudioAsset> audioSource;
+    bool sourceWasLoaded = false;
     bool applied = false;
 };
 
@@ -2179,6 +2212,36 @@ private:
     quint64 trackId;
     MainWindow::AudioTrimState before;
     MainWindow::AudioTrimState after;
+};
+
+class AudioRelinkCommand final : public QUndoCommand
+{
+public:
+    AudioRelinkCommand(MainWindow* window, quint64 trackId,
+                       MainWindow::AudioRelinkState before,
+                       MainWindow::AudioRelinkState after)
+        : window(window), trackId(trackId), before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Relink audio region"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyAudioRelinkHistory(trackId, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyAudioRelinkHistory(trackId, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    MainWindow::AudioRelinkState before;
+    MainWindow::AudioRelinkState after;
 };
 
 MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
@@ -6485,7 +6548,15 @@ quint64 MainWindow::applyClipListHistory(quint64 trackId, const MidiClip& clip,
             inserted.id = nextClipId();
             appliedId = inserted.id;
         }
-        track->clips.insert(std::clamp<qsizetype>(insertIndex, 0, track->clips.size()), inserted);
+        const qsizetype actualInsertIndex = std::clamp<qsizetype>(insertIndex, 0, track->clips.size());
+        track->clips.insert(actualInsertIndex, inserted);
+        if (inserted.audioSource != nullptr &&
+            projectAudioBytes() > AudioFile::maximumProjectDecodedBytes)
+        {
+            track->clips[actualInsertIndex].audioSource.reset();
+            statusBar()->showMessage(tr("Restored the audio region offline to stay within the project memory limit"),
+                                     5000);
+        }
         selectedTrackId = selectionTrackId;
         selectedClipId = selectionClipId == clip.id ? appliedId : selectionClipId;
     }
@@ -6696,13 +6767,20 @@ void MainWindow::relinkAudioRegion(quint64 trackId, quint64 clipId)
         return;
     }
 
+    const AudioRelinkState before{clip->id, clip->audioSourcePath, clip->audioSource,
+                                  clip->audioStartFrame, clip->audioSource != nullptr};
+    const qint64 relinkedStartFrame = std::clamp<qint64>(clip->audioStartFrame, 0,
+                                                         std::max<qint64>(0, asset->frameCount() - 1));
+    const AudioRelinkState after{clip->id, asset->path, asset, relinkedStartFrame, true};
+    if (clip->audioSource != nullptr && before.path == after.path &&
+        before.audioStartFrame == after.audioStartFrame)
+        return;
     const QString previousPath = clip->audioSourcePath;
     const std::shared_ptr<const AudioAsset> previousSource = clip->audioSource;
     const qint64 previousStartFrame = clip->audioStartFrame;
-    clip->audioSourcePath = asset->path;
+    clip->audioSourcePath = after.path;
     clip->audioSource = asset;
-    clip->audioStartFrame = std::clamp<qint64>(clip->audioStartFrame, 0,
-                                               std::max<qint64>(0, asset->frameCount() - 1));
+    clip->audioStartFrame = after.audioStartFrame;
     if (projectAudioBytes() > AudioFile::maximumProjectDecodedBytes)
     {
         clip->audioSourcePath = previousPath;
@@ -6713,9 +6791,45 @@ void MainWindow::relinkAudioRegion(quint64 trackId, quint64 clipId)
         return;
     }
 
-    settingsDirty = true;
-    refreshProjectUi();
+    clip->audioSourcePath = previousPath;
+    clip->audioSource = previousSource;
+    clip->audioStartFrame = previousStartFrame;
+    undoStack.push(new AudioRelinkCommand(this, track->id, before, after));
     statusBar()->showMessage(tr("Relinked audio region to %1").arg(QFileInfo(path).fileName()), 3000);
+}
+
+void MainWindow::applyAudioRelinkHistory(quint64 trackId, const AudioRelinkState& state)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    MidiClip* clip = project.findClip(trackId, state.clipId);
+    if (track == nullptr || clip == nullptr || track->instrumentType != InstrumentType::Audio ||
+        !clip->isAudioRegion())
+        return;
+
+    QString error;
+    const std::shared_ptr<const AudioAsset> source = resolveAudioAsset(
+        state.path, state.source, state.reloadSource, &error);
+    clip->audioSourcePath = state.path;
+    clip->audioSource = source;
+    clip->audioStartFrame = source == nullptr
+        ? std::max<qint64>(0, state.audioStartFrame)
+        : std::clamp<qint64>(state.audioStartFrame, 0,
+                             std::max<qint64>(0, source->frameCount() - 1));
+    if (source != nullptr && projectAudioBytes() > AudioFile::maximumProjectDecodedBytes)
+    {
+        clip->audioSource.reset();
+        error = tr("the project audio memory limit has been reached");
+    }
+
+    const bool restoredOffline = clip->audioSource == nullptr;
+    project.normalize();
+    refreshProjectUi();
+    if (restoredOffline && state.reloadSource)
+        statusBar()->showMessage(tr("Audio region restored offline: %1")
+                                     .arg(error.isEmpty() ? state.path : error), 5000);
+    else
+        statusBar()->showMessage(tr("Audio region relinked to %1")
+                                     .arg(QFileInfo(state.path).fileName()), 3000);
 }
 
 void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
@@ -9355,6 +9469,33 @@ std::shared_ptr<const AudioAsset> MainWindow::findProjectAudioAsset(const QStrin
         }
     }
     return {};
+}
+
+std::shared_ptr<const AudioAsset> MainWindow::resolveAudioAsset(
+    const QString& path, const std::weak_ptr<const AudioAsset>& cachedSource,
+    bool reloadSource, QString* error) const
+{
+    if (error != nullptr)
+        error->clear();
+    if (!reloadSource || path.isEmpty())
+        return {};
+
+    std::shared_ptr<const AudioAsset> asset = cachedSource.lock();
+    if (asset == nullptr)
+        asset = findProjectAudioAsset(path);
+    if (asset != nullptr)
+        return asset;
+    if (!QFileInfo::exists(path))
+    {
+        if (error != nullptr)
+            *error = tr("source file is missing");
+        return {};
+    }
+
+    QString loadError;
+    if (!AudioFile::loadWav(path, asset, &loadError) && error != nullptr)
+        *error = loadError;
+    return asset;
 }
 
 void MainWindow::importMidi()

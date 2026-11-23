@@ -44,6 +44,7 @@ class MainWindow final : public QMainWindow
     friend class TempoMapEditCommand;
     friend class AudioFadeEditCommand;
     friend class AudioTrimCommand;
+    friend class AudioRelinkCommand;
     friend class ClipDuplicateCommand;
     friend class ClipRemoveCommand;
     friend class ClipMoveCommand;
@@ -77,6 +78,15 @@ private:
         qint64 audioStartFrame = 0;
         double fadeInBeats = 0.0;
         double fadeOutBeats = 0.0;
+    };
+
+    struct AudioRelinkState
+    {
+        quint64 clipId = 0;
+        QString path;
+        std::weak_ptr<const AudioAsset> source;
+        qint64 audioStartFrame = 0;
+        bool reloadSource = false;
     };
 
     void createActions();
@@ -124,6 +134,7 @@ private:
                          double lengthBeats, qint64 audioStartFrame);
     void applyAudioTrimHistory(quint64 trackId, const AudioTrimState& state);
     void relinkAudioRegion(quint64 trackId, quint64 clipId);
+    void applyAudioRelinkHistory(quint64 trackId, const AudioRelinkState& state);
     void setSelectedAudioFade(bool fadeIn, double beats);
     void setSelectedAudioFadeCurve(bool fadeIn, int curve);
     void setSelectedAudioFadeShape(bool fadeIn, double shape);
@@ -183,6 +194,9 @@ private:
     void setSelectedDrumSample(int pad, int parameter, double value);
     quint64 projectAudioBytes() const;
     std::shared_ptr<const AudioAsset> findProjectAudioAsset(const QString& path) const;
+    std::shared_ptr<const AudioAsset> resolveAudioAsset(
+        const QString& path, const std::weak_ptr<const AudioAsset>& cachedSource,
+        bool reloadSource, QString* error = nullptr) const;
     InstrumentTrack* selectedTrack();
     MidiClip* selectedClip();
     bool maybeSave();
