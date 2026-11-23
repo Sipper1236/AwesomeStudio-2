@@ -1,6 +1,7 @@
 #include "MidiEditor.h"
 
 #include <QKeyEvent>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -422,16 +423,20 @@ public:
 
     void editSelectedNoteProperties()
     {
-        if (selected.size() != 1)
-            return;
+        QVector<int> selectedIndices;
         for (int index = 0; index < notes.size(); ++index)
         {
             if (selected.contains(notes[index].id))
-            {
-                editNoteProperties(index);
-                return;
-            }
+                selectedIndices.push_back(index);
         }
+        if (selectedIndices.isEmpty())
+            return;
+        if (selectedIndices.size() == 1)
+        {
+            editNoteProperties(selectedIndices.first());
+            return;
+        }
+        editMultipleNoteProperties(selectedIndices);
     }
 
     void setPixelsPerBeat(int pixels)
@@ -1002,6 +1007,110 @@ private:
         currentNote->velocity = velocityControl->value();
         currentNote->channel = channelControl->currentData().toInt();
         selected = {currentNote->id};
+        commitIfChanged(before);
+        update();
+    }
+
+    void editMultipleNoteProperties(const QVector<int>& selectedIndices)
+    {
+        if (selectedIndices.size() < 2)
+            return;
+
+        int velocityTotal = 0;
+        for (const int index : selectedIndices)
+            velocityTotal += notes[index].velocity;
+
+        QDialog dialog(this);
+        dialog.setWindowTitle(tr("MIDI note properties · %1 selected").arg(selectedIndices.size()));
+        auto* form = new QFormLayout(&dialog);
+
+        auto* transposeCheck = new QCheckBox(tr("Apply"), &dialog);
+        auto* transposeControl = new QSpinBox(&dialog);
+        transposeControl->setRange(-127, 127);
+        transposeControl->setSuffix(tr(" semitones"));
+        transposeControl->setEnabled(false);
+        connect(transposeCheck, &QCheckBox::toggled, transposeControl, &QWidget::setEnabled);
+        form->addRow(tr("Transpose pitches"), transposeCheck);
+        form->addRow(tr("Pitch shift"), transposeControl);
+
+        auto* startCheck = new QCheckBox(tr("Apply"), &dialog);
+        auto* startControl = new QDoubleSpinBox(&dialog);
+        startControl->setRange(-patternLength, patternLength);
+        startControl->setDecimals(4);
+        startControl->setSingleStep(snap);
+        startControl->setSuffix(tr(" beats"));
+        startControl->setEnabled(false);
+        connect(startCheck, &QCheckBox::toggled, startControl, &QWidget::setEnabled);
+        form->addRow(tr("Shift note starts"), startCheck);
+        form->addRow(tr("Timing shift"), startControl);
+
+        auto* lengthCheck = new QCheckBox(tr("Apply"), &dialog);
+        auto* lengthControl = new QDoubleSpinBox(&dialog);
+        lengthControl->setRange(1.0 / 64.0, std::max(1.0 / 64.0, patternLength));
+        lengthControl->setDecimals(4);
+        lengthControl->setSingleStep(snap);
+        lengthControl->setSuffix(tr(" beats"));
+        lengthControl->setValue(notes[selectedIndices.first()].lengthBeats);
+        lengthControl->setEnabled(false);
+        connect(lengthCheck, &QCheckBox::toggled, lengthControl, &QWidget::setEnabled);
+        form->addRow(tr("Set note length"), lengthCheck);
+        form->addRow(tr("New length"), lengthControl);
+
+        auto* velocityCheck = new QCheckBox(tr("Apply"), &dialog);
+        auto* velocityControl = new QSpinBox(&dialog);
+        velocityControl->setRange(1, 127);
+        velocityControl->setValue(static_cast<int>(std::lround(
+            static_cast<double>(velocityTotal) / selectedIndices.size())));
+        velocityControl->setEnabled(false);
+        connect(velocityCheck, &QCheckBox::toggled, velocityControl, &QWidget::setEnabled);
+        form->addRow(tr("Set velocity"), velocityCheck);
+        form->addRow(tr("New velocity"), velocityControl);
+
+        auto* channelCheck = new QCheckBox(tr("Apply"), &dialog);
+        auto* channelControl = new QComboBox(&dialog);
+        channelControl->addItem(tr("Keep each note's channel"), -2);
+        channelControl->addItem(tr("Track default"), -1);
+        for (int channel = 0; channel < 16; ++channel)
+            channelControl->addItem(QString::number(channel + 1), channel);
+        channelControl->setEnabled(false);
+        connect(channelCheck, &QCheckBox::toggled, channelControl, &QWidget::setEnabled);
+        form->addRow(tr("Set MIDI channel"), channelCheck);
+        form->addRow(tr("New channel"), channelControl);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        form->addRow(buttons);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+
+        const QVector<MidiNote> before = notes;
+        const int pitchShift = transposeCheck->isChecked() ? transposeControl->value() : 0;
+        const double startShift = startCheck->isChecked() ? startControl->value() : 0.0;
+        const int selectedChannel = channelControl->currentData().toInt();
+        for (MidiNote& note : notes)
+        {
+            if (!selected.contains(note.id))
+                continue;
+            note.pitch = std::clamp(note.pitch + pitchShift, 0, 127);
+            if (startCheck->isChecked())
+                note.startBeat = std::clamp(note.startBeat + startShift, 0.0,
+                    std::max(0.0, patternLength - note.lengthBeats));
+            if (lengthCheck->isChecked())
+            {
+                const double maxLength = std::max(1.0 / 64.0, patternLength - note.startBeat);
+                note.lengthBeats = std::clamp(lengthControl->value(), 1.0 / 64.0, maxLength);
+            }
+            if (velocityCheck->isChecked())
+                note.velocity = velocityControl->value();
+            if (channelCheck->isChecked() && selectedChannel != -2)
+                note.channel = selectedChannel;
+        }
+        std::sort(notes.begin(), notes.end(), [](const MidiNote& left, const MidiNote& right)
+        {
+            if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
+            return left.pitch < right.pitch;
+        });
         commitIfChanged(before);
         update();
     }
