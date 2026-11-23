@@ -175,6 +175,45 @@ QString rotateProjectBackups(const QString& projectPath, const QString& stagedPa
     return errors.join(QStringLiteral("; "));
 }
 
+bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("WAV export format"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* formatControl = new QComboBox(&dialog);
+    formatControl->addItem(QObject::tr("16-bit PCM"), static_cast<int>(WavSampleFormat::Pcm16));
+    formatControl->addItem(QObject::tr("24-bit PCM"), static_cast<int>(WavSampleFormat::Pcm24));
+    formatControl->addItem(QObject::tr("32-bit float"), static_cast<int>(WavSampleFormat::Float32));
+    const int selectedIndex = formatControl->findData(static_cast<int>(options.sampleFormat));
+    if (selectedIndex >= 0)
+        formatControl->setCurrentIndex(selectedIndex);
+    form->addRow(QObject::tr("Sample format"), formatControl);
+
+    auto* ditherControl = new QCheckBox(QObject::tr("Add TPDF dither to integer PCM"), &dialog);
+    ditherControl->setChecked(options.dither);
+    form->addRow(ditherControl);
+    layout->addLayout(form);
+    QObject::connect(formatControl, qOverload<int>(&QComboBox::currentIndexChanged), &dialog,
+                     [formatControl, ditherControl](int)
+    {
+        ditherControl->setEnabled(formatControl->currentData().toInt() !=
+                                  static_cast<int>(WavSampleFormat::Float32));
+    });
+    ditherControl->setEnabled(options.sampleFormat != WavSampleFormat::Float32);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    options.sampleFormat = static_cast<WavSampleFormat>(formatControl->currentData().toInt());
+    options.dither = ditherControl->isEnabled() && ditherControl->isChecked();
+    return true;
+}
+
 bool chooseExportRange(QWidget* parent, double songLengthBeats, bool& useRange,
                        double& startBeat, double& endBeat)
 {
@@ -4324,6 +4363,9 @@ void MainWindow::applyStepDivisionHistory(quint64 trackId, quint64 clipId, int r
 
 void MainWindow::exportAudio()
 {
+    WavExportOptions exportOptions;
+    if (!chooseWavExportOptions(this, exportOptions))
+        return;
     bool useRange = false;
     double startBeat = 0.0;
     double endBeat = 0.0;
@@ -4340,7 +4382,7 @@ void MainWindow::exportAudio()
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString error;
     const bool success = WavExporter::exportProject(project, path, &error,
-        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0);
+        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0, exportOptions);
     QApplication::restoreOverrideCursor();
     if (!success)
     {
@@ -4352,6 +4394,9 @@ void MainWindow::exportAudio()
 
 void MainWindow::exportStems()
 {
+    WavExportOptions exportOptions;
+    if (!chooseWavExportOptions(this, exportOptions))
+        return;
     bool useRange = false;
     double startBeat = 0.0;
     double endBeat = 0.0;
@@ -4367,7 +4412,7 @@ void MainWindow::exportStems()
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString error;
     const bool success = WavExporter::exportStems(project, directory, &error,
-        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0);
+        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0, exportOptions);
     QApplication::restoreOverrideCursor();
     if (!success)
     {
