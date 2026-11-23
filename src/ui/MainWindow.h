@@ -13,6 +13,7 @@
 #include <memory>
 
 class QCloseEvent;
+class QCheckBox;
 class QMediaDevices;
 class QComboBox;
 class QDoubleSpinBox;
@@ -94,6 +95,7 @@ private:
     void createSelectedAudioCrossfade();
     void applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades);
     void setSelectedSynthEnvelope(int parameter, double value);
+    void setSelectedSynthOscillator(int parameter, double value);
     void setSelectedTrackEqualizer(int band, double gainDb);
     void refreshAutomationEditor();
     void addAutomationPoint();
@@ -175,12 +177,17 @@ private:
     QDoubleSpinBox* tempoControl = nullptr;
     QDoubleSpinBox* clipLengthControl = nullptr;
     QComboBox* waveformControl = nullptr;
+    QCheckBox* secondOscillatorEnabledControl = nullptr;
+    QComboBox* secondOscillatorWaveformControl = nullptr;
+    QDoubleSpinBox* secondOscillatorDetuneControl = nullptr;
+    QDoubleSpinBox* secondOscillatorMixControl = nullptr;
     QComboBox* timeSignatureControl = nullptr;
     QComboBox* countInControl = nullptr;
     QComboBox* snapControl = nullptr;
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;
     QWidget* audioRegionControls = nullptr;
+    QWidget* oscillatorPanel = nullptr;
     QWidget* synthEnvelopePanel = nullptr;
     QWidget* equalizerControls = nullptr;
     QWidget* automationEditorPanel = nullptr;

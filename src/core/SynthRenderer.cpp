@@ -464,6 +464,11 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 voice.amplitude = (track.instrumentType == InstrumentType::DrumRack ? 0.48f : 0.22f) *
                                   static_cast<float>(note.velocity) / 127.0f;
                 voice.waveform = track.waveform;
+                voice.secondOscillatorWaveform = track.secondOscillatorWaveform;
+                voice.secondOscillatorDetuneCents = track.secondOscillatorDetuneCents;
+                voice.secondOscillatorMix = track.secondOscillatorMix;
+                voice.secondOscillatorEnabled = track.instrumentType == InstrumentType::Synth &&
+                                                track.secondOscillatorEnabled;
                 voice.midiPitch = note.pitch;
                 voice.midiChannel = note.channel >= 0 ? note.channel : trackMidiChannel;
                 voice.percussion = track.instrumentType == InstrumentType::DrumRack;
@@ -1134,7 +1139,17 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         }
 
         const double phase = static_cast<double>(age) * note.frequency / sampleRate;
-        const float voice = oscillatorSample(note.waveform, phase) * note.amplitude * envelope;
+        float oscillator = oscillatorSample(note.waveform, phase);
+        if (note.secondOscillatorEnabled)
+        {
+            const double detuneRatio = std::pow(2.0,
+                static_cast<double>(note.secondOscillatorDetuneCents) / 1200.0);
+            const double secondPhase = static_cast<double>(age) * note.frequency * detuneRatio / sampleRate;
+            const float secondOscillator = oscillatorSample(note.secondOscillatorWaveform, secondPhase);
+            const float mix = std::clamp(note.secondOscillatorMix, 0.0f, 1.0f);
+            oscillator = oscillator * (1.0f - mix) + secondOscillator * mix;
+        }
+        const float voice = oscillator * note.amplitude * envelope;
         const TrackMixValue& mix = trackMixAt(note.trackIndex, projectFrame, projectBeat);
         addTrackSample(note.trackIndex, voice * mix.leftGain, voice * mix.rightGain);
     }

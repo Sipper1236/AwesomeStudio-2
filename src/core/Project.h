@@ -160,6 +160,10 @@ struct InstrumentTrack
     QString name = QStringLiteral("Synth");
     InstrumentType instrumentType = InstrumentType::Synth;
     SynthWaveform waveform = SynthWaveform::Sine;
+    bool secondOscillatorEnabled = false;
+    SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
+    float secondOscillatorDetuneCents = 0.0f;
+    float secondOscillatorMix = 0.5f;
     float attackSeconds = 0.008f;
     float decaySeconds = 0.0f;
     float sustainLevel = 1.0f;

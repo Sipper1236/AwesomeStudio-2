@@ -407,7 +407,12 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         audioEngine.triggerPreview(pitch, 96,
                                    track == nullptr ? SynthWaveform::Sine : track->waveform,
                                    track == nullptr ? 0.0f : track->pan,
-                                   track != nullptr && track->instrumentType == InstrumentType::DrumRack);
+                                   track != nullptr && track->instrumentType == InstrumentType::DrumRack,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth &&
+                                       track->secondOscillatorEnabled,
+                                   track == nullptr ? SynthWaveform::Saw : track->secondOscillatorWaveform,
+                                   track == nullptr ? 0.0f : track->secondOscillatorDetuneCents,
+                                   track == nullptr ? 0.5f : track->secondOscillatorMix);
     });
     connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
     {
@@ -428,7 +433,12 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         audioEngine.triggerPreview(pitch, 100,
                                    track == nullptr ? SynthWaveform::Sine : track->waveform,
                                    track == nullptr ? 0.0f : track->pan,
-                                   track != nullptr && track->instrumentType == InstrumentType::DrumRack);
+                                   track != nullptr && track->instrumentType == InstrumentType::DrumRack,
+                                   track != nullptr && track->instrumentType == InstrumentType::Synth &&
+                                       track->secondOscillatorEnabled,
+                                   track == nullptr ? SynthWaveform::Saw : track->secondOscillatorWaveform,
+                                   track == nullptr ? 0.0f : track->secondOscillatorDetuneCents,
+                                   track == nullptr ? 0.5f : track->secondOscillatorMix);
     });
     connect(arrangementEditor, &ArrangementEditor::clipActivated, this,
             [this](quint64 trackId, quint64 clipId) { selectClip(trackId, clipId, true); });
@@ -1122,12 +1132,15 @@ void MainWindow::createDocks()
     instrumentHeading = new QLabel(tr("SELECTED INSTRUMENT"), browser);
     instrumentHeading->setStyleSheet(QStringLiteral("color: #8d9aa7; font-size: 10px; font-weight: 700; margin-top: 10px;"));
     browserLayout->addWidget(instrumentHeading);
-    waveformControl = new QComboBox(browser);
+    auto* oscillatorGroup = new QGroupBox(tr("OSCILLATORS"), browser);
+    oscillatorPanel = oscillatorGroup;
+    auto* oscillatorForm = new QFormLayout(oscillatorGroup);
+    waveformControl = new QComboBox(oscillatorGroup);
     waveformControl->addItem(tr("Sine"), static_cast<int>(SynthWaveform::Sine));
     waveformControl->addItem(tr("Triangle"), static_cast<int>(SynthWaveform::Triangle));
     waveformControl->addItem(tr("Saw"), static_cast<int>(SynthWaveform::Saw));
     waveformControl->addItem(tr("Square"), static_cast<int>(SynthWaveform::Square));
-    browserLayout->addWidget(waveformControl);
+    oscillatorForm->addRow(tr("Oscillator 1"), waveformControl);
     connect(waveformControl, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index)
     {
         InstrumentTrack* track = selectedTrack();
@@ -1137,6 +1150,46 @@ void MainWindow::createDocks()
         settingsDirty = true;
         refreshDirtyState();
     });
+
+    secondOscillatorEnabledControl = new QCheckBox(tr("Enable second oscillator"), oscillatorGroup);
+    oscillatorForm->addRow(secondOscillatorEnabledControl);
+    secondOscillatorWaveformControl = new QComboBox(oscillatorGroup);
+    secondOscillatorWaveformControl->addItem(tr("Sine"), static_cast<int>(SynthWaveform::Sine));
+    secondOscillatorWaveformControl->addItem(tr("Triangle"), static_cast<int>(SynthWaveform::Triangle));
+    secondOscillatorWaveformControl->addItem(tr("Saw"), static_cast<int>(SynthWaveform::Saw));
+    secondOscillatorWaveformControl->addItem(tr("Square"), static_cast<int>(SynthWaveform::Square));
+    oscillatorForm->addRow(tr("Oscillator 2 waveform"), secondOscillatorWaveformControl);
+    secondOscillatorDetuneControl = new QDoubleSpinBox(oscillatorGroup);
+    secondOscillatorDetuneControl->setRange(-100.0, 100.0);
+    secondOscillatorDetuneControl->setDecimals(1);
+    secondOscillatorDetuneControl->setSingleStep(1.0);
+    secondOscillatorDetuneControl->setSuffix(tr(" cents"));
+    oscillatorForm->addRow(tr("Oscillator 2 detune"), secondOscillatorDetuneControl);
+    secondOscillatorMixControl = new QDoubleSpinBox(oscillatorGroup);
+    secondOscillatorMixControl->setRange(0.0, 100.0);
+    secondOscillatorMixControl->setDecimals(0);
+    secondOscillatorMixControl->setSingleStep(5.0);
+    secondOscillatorMixControl->setSuffix(QStringLiteral("%"));
+    oscillatorForm->addRow(tr("Oscillator 2 mix"), secondOscillatorMixControl);
+    connect(secondOscillatorEnabledControl, &QCheckBox::toggled, this,
+            [this](bool enabled) { setSelectedSynthOscillator(0, enabled ? 1.0 : 0.0); });
+    connect(secondOscillatorEnabledControl, &QCheckBox::toggled,
+            secondOscillatorWaveformControl, &QWidget::setEnabled);
+    connect(secondOscillatorEnabledControl, &QCheckBox::toggled,
+            secondOscillatorDetuneControl, &QWidget::setEnabled);
+    connect(secondOscillatorEnabledControl, &QCheckBox::toggled,
+            secondOscillatorMixControl, &QWidget::setEnabled);
+    connect(secondOscillatorWaveformControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index)
+    {
+        if (index >= 0)
+            setSelectedSynthOscillator(1, secondOscillatorWaveformControl->itemData(index).toInt());
+    });
+    connect(secondOscillatorDetuneControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double value) { setSelectedSynthOscillator(2, value); });
+    connect(secondOscillatorMixControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double value) { setSelectedSynthOscillator(3, value); });
+    browserLayout->addWidget(oscillatorGroup);
 
     auto* synthEnvelopeGroup = new QGroupBox(tr("SYNTH ENVELOPE"), browser);
     synthEnvelopePanel = synthEnvelopeGroup;
@@ -1572,11 +1625,27 @@ void MainWindow::refreshProjectUi()
     }
 
     const QSignalBlocker waveformBlocker(waveformControl);
+    const QSignalBlocker secondOscillatorEnabledBlocker(secondOscillatorEnabledControl);
+    const QSignalBlocker secondOscillatorWaveformBlocker(secondOscillatorWaveformControl);
+    const QSignalBlocker secondOscillatorDetuneBlocker(secondOscillatorDetuneControl);
+    const QSignalBlocker secondOscillatorMixBlocker(secondOscillatorMixControl);
     const int waveformIndex = track == nullptr ? 0 :
         waveformControl->findData(static_cast<int>(track->waveform));
     waveformControl->setCurrentIndex(std::max(0, waveformIndex));
-    waveformControl->setEnabled(track != nullptr && track->instrumentType == InstrumentType::Synth);
     const bool synthTrackSelected = track != nullptr && track->instrumentType == InstrumentType::Synth;
+    waveformControl->setEnabled(synthTrackSelected);
+    oscillatorPanel->setVisible(synthTrackSelected);
+    const bool secondOscillatorEnabled = synthTrackSelected && track->secondOscillatorEnabled;
+    secondOscillatorEnabledControl->setChecked(secondOscillatorEnabled);
+    secondOscillatorEnabledControl->setEnabled(synthTrackSelected);
+    const int secondWaveformIndex = track == nullptr ? 0 :
+        secondOscillatorWaveformControl->findData(static_cast<int>(track->secondOscillatorWaveform));
+    secondOscillatorWaveformControl->setCurrentIndex(std::max(0, secondWaveformIndex));
+    secondOscillatorDetuneControl->setValue(track == nullptr ? 0.0 : track->secondOscillatorDetuneCents);
+    secondOscillatorMixControl->setValue(track == nullptr ? 50.0 : track->secondOscillatorMix * 100.0);
+    secondOscillatorWaveformControl->setEnabled(secondOscillatorEnabled);
+    secondOscillatorDetuneControl->setEnabled(secondOscillatorEnabled);
+    secondOscillatorMixControl->setEnabled(secondOscillatorEnabled);
     synthEnvelopePanel->setVisible(synthTrackSelected);
     const std::array<float, 4> envelopeValues = track == nullptr
         ? std::array<float, 4>{0.008f, 0.0f, 1.0f, 0.06f}
@@ -3163,6 +3232,27 @@ void MainWindow::setSelectedSynthEnvelope(int parameter, double value)
         case 1: track->decaySeconds = static_cast<float>(value); break;
         case 2: track->sustainLevel = static_cast<float>(value); break;
         case 3: track->releaseSeconds = static_cast<float>(value); break;
+        default: return;
+    }
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::setSelectedSynthOscillator(int parameter, double value)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::Synth)
+        return;
+    switch (parameter)
+    {
+        case 0: track->secondOscillatorEnabled = value >= 0.5; break;
+        case 1: track->secondOscillatorWaveform = static_cast<SynthWaveform>(
+                    std::clamp(static_cast<int>(value), 0, 3)); break;
+        case 2: track->secondOscillatorDetuneCents = static_cast<float>(
+                    std::clamp(value, -100.0, 100.0)); break;
+        case 3: track->secondOscillatorMix = static_cast<float>(
+                    std::clamp(value / 100.0, 0.0, 1.0)); break;
         default: return;
     }
     audioEngine.setProject(project);

@@ -39,7 +39,10 @@ public:
     void stopLiveMidiNotes();
     void triggerPreview(int midiPitch, int velocity = 96,
                         SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
-                        bool percussion = false);
+                        bool percussion = false, bool secondOscillatorEnabled = false,
+                        SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw,
+                        float secondOscillatorDetuneCents = 0.0f,
+                        float secondOscillatorMix = 0.5f);
     void triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity = 96,
                               float pan = 0.0f, float gain = 1.0f);
     void setMasterGain(float gain);
@@ -66,6 +69,10 @@ private:
         bool percussion = false;
         bool pitchBend = false;
         SynthWaveform waveform = SynthWaveform::Sine;
+        SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
+        float secondOscillatorDetuneCents = 0.0f;
+        float secondOscillatorMix = 0.5f;
+        bool secondOscillatorEnabled = false;
         float gain = 1.0f;
         float pan = 0.0f;
         float attackSeconds = 0.008f;
@@ -97,6 +104,10 @@ private:
         float leftGain = 0.70710678f;
         float rightGain = 0.70710678f;
         SynthWaveform waveform = SynthWaveform::Sine;
+        SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
+        float secondOscillatorDetuneCents = 0.0f;
+        float secondOscillatorMix = 0.5f;
+        bool secondOscillatorEnabled = false;
         std::shared_ptr<const AudioAsset> sample;
     };
 
@@ -165,6 +176,10 @@ private:
     std::atomic<int> previewVelocity{96};
     std::atomic<double> previewFrequency{440.0};
     std::atomic<int> previewWaveform{static_cast<int>(SynthWaveform::Sine)};
+    std::atomic<bool> previewSecondOscillatorEnabled{false};
+    std::atomic<int> previewSecondOscillatorWaveform{static_cast<int>(SynthWaveform::Saw)};
+    std::atomic<float> previewSecondOscillatorDetuneCents{0.0f};
+    std::atomic<float> previewSecondOscillatorMix{0.5f};
     std::atomic<bool> previewPercussion{false};
     std::atomic<float> previewLeftGain{0.70710678f};
     std::atomic<float> previewRightGain{0.70710678f};

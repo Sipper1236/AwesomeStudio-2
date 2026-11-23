@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 22;
+constexpr int currentProjectVersion = 23;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -363,6 +363,10 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("name"), track.name},
         {QStringLiteral("instrumentType"), static_cast<int>(track.instrumentType)},
         {QStringLiteral("waveform"), static_cast<int>(track.waveform)},
+        {QStringLiteral("secondOscillatorEnabled"), track.secondOscillatorEnabled},
+        {QStringLiteral("secondOscillatorWaveform"), static_cast<int>(track.secondOscillatorWaveform)},
+        {QStringLiteral("secondOscillatorDetuneCents"), track.secondOscillatorDetuneCents},
+        {QStringLiteral("secondOscillatorMix"), track.secondOscillatorMix},
         {QStringLiteral("attackSeconds"), track.attackSeconds},
         {QStringLiteral("decaySeconds"), track.decaySeconds},
         {QStringLiteral("sustainLevel"), track.sustainLevel},
@@ -473,6 +477,17 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     track.name = object.value(QStringLiteral("name")).toString(QStringLiteral("Synth"));
     track.instrumentType = static_cast<InstrumentType>(object.value(QStringLiteral("instrumentType")).toInt(0));
     track.waveform = static_cast<SynthWaveform>(object.value(QStringLiteral("waveform")).toInt(0));
+    if (version >= 23)
+    {
+        track.secondOscillatorEnabled = object.value(QStringLiteral("secondOscillatorEnabled")).toBool(false);
+        track.secondOscillatorWaveform = static_cast<SynthWaveform>(
+            object.value(QStringLiteral("secondOscillatorWaveform")).toInt(
+                static_cast<int>(track.secondOscillatorWaveform)));
+        track.secondOscillatorDetuneCents = static_cast<float>(
+            object.value(QStringLiteral("secondOscillatorDetuneCents")).toDouble(0.0));
+        track.secondOscillatorMix = static_cast<float>(
+            object.value(QStringLiteral("secondOscillatorMix")).toDouble(0.5));
+    }
     track.attackSeconds = static_cast<float>(
         object.value(QStringLiteral("attackSeconds")).toDouble(track.attackSeconds));
     track.decaySeconds = static_cast<float>(

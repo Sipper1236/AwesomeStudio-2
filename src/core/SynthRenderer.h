@@ -45,9 +45,13 @@ private:
         float amplitude = 0.0f;
         float sustainLevel = 1.0f;
         SynthWaveform waveform = SynthWaveform::Sine;
+        SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;
+        float secondOscillatorDetuneCents = 0.0f;
+        float secondOscillatorMix = 0.5f;
         int midiPitch = 60;
         int midiChannel = 0;
         bool percussion = false;
+        bool secondOscillatorEnabled = false;
     };
 
     struct PitchBendEvent

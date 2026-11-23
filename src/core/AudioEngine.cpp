@@ -301,6 +301,11 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
     }
     event.percussion = track.instrumentType == InstrumentType::DrumRack;
     event.waveform = track.waveform;
+    event.secondOscillatorWaveform = track.secondOscillatorWaveform;
+    event.secondOscillatorDetuneCents = track.secondOscillatorDetuneCents;
+    event.secondOscillatorMix = track.secondOscillatorMix;
+    event.secondOscillatorEnabled = track.instrumentType == InstrumentType::Synth &&
+                                    track.secondOscillatorEnabled;
     const bool suppressedBySolo = hasSolo && !track.solo;
     event.gain = track.muted || suppressedBySolo ? 0.0f : std::clamp(track.gain, 0.0f, 1.0f);
     event.pan = std::clamp(track.pan, -1.0f, 1.0f);
@@ -456,6 +461,10 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     target->leftGain = static_cast<float>(std::cos(panAngle));
     target->rightGain = static_cast<float>(std::sin(panAngle));
     target->waveform = event.waveform;
+    target->secondOscillatorWaveform = event.secondOscillatorWaveform;
+    target->secondOscillatorDetuneCents = event.secondOscillatorDetuneCents;
+    target->secondOscillatorMix = event.secondOscillatorMix;
+    target->secondOscillatorEnabled = event.secondOscillatorEnabled && !event.percussion;
     target->sample = event.sample;
 }
 
@@ -550,11 +559,28 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame)
         else
             envelope = voice.sustainLevel;
 
-        const float voiceSample = voice.percussion
-            ? renderPercussionSample(voice.pitch, age, voice.startFrame, outputSampleRate) *
-                  voice.amplitude * envelope
-            : oscillatorSample(voice.waveform, static_cast<double>(age) * voice.frequency / outputSampleRate) *
-                  voice.amplitude * envelope;
+        float voiceSample = 0.0f;
+        if (voice.percussion)
+        {
+            voiceSample = renderPercussionSample(voice.pitch, age, voice.startFrame, outputSampleRate) *
+                          voice.amplitude * envelope;
+        }
+        else
+        {
+            float oscillator = oscillatorSample(
+                voice.waveform, static_cast<double>(age) * voice.frequency / outputSampleRate);
+            if (voice.secondOscillatorEnabled)
+            {
+                const double detuneRatio = std::pow(2.0,
+                    static_cast<double>(voice.secondOscillatorDetuneCents) / 1200.0);
+                const double secondPhase = static_cast<double>(age) * voice.frequency * detuneRatio /
+                                           outputSampleRate;
+                const float secondOscillator = oscillatorSample(voice.secondOscillatorWaveform, secondPhase);
+                const float mix = std::clamp(voice.secondOscillatorMix, 0.0f, 1.0f);
+                oscillator = oscillator * (1.0f - mix) + secondOscillator * mix;
+            }
+            voiceSample = oscillator * voice.amplitude * envelope;
+        }
         const float leftContribution = voiceSample * voice.leftGain;
         const float rightContribution = voiceSample * voice.rightGain;
         addTrackFrameSample(voice.trackIndex, leftContribution, rightContribution);
@@ -573,7 +599,9 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame)
 }
 
 void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform waveform, float pan,
-                                 bool percussion)
+                                 bool percussion, bool secondOscillatorEnabled,
+                                 SynthWaveform secondOscillatorWaveform,
+                                 float secondOscillatorDetuneCents, float secondOscillatorMix)
 {
     std::atomic_store_explicit(&previewSampleAsset, std::shared_ptr<const AudioAsset>{},
                                std::memory_order_release);
@@ -582,6 +610,12 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
     previewVelocity.store(std::clamp(velocity, 1, 127), std::memory_order_relaxed);
     previewFrequency.store(440.0 * std::pow(2.0, (clampedPitch - 69) / 12.0), std::memory_order_relaxed);
     previewWaveform.store(static_cast<int>(waveform), std::memory_order_relaxed);
+    previewSecondOscillatorEnabled.store(secondOscillatorEnabled, std::memory_order_relaxed);
+    previewSecondOscillatorWaveform.store(static_cast<int>(secondOscillatorWaveform), std::memory_order_relaxed);
+    previewSecondOscillatorDetuneCents.store(std::clamp(secondOscillatorDetuneCents, -100.0f, 100.0f),
+                                             std::memory_order_relaxed);
+    previewSecondOscillatorMix.store(std::clamp(secondOscillatorMix, 0.0f, 1.0f),
+                                     std::memory_order_relaxed);
     previewPercussion.store(percussion, std::memory_order_relaxed);
     previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
     previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
@@ -848,10 +882,22 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                 {
                     const double frequency = previewFrequency.load(std::memory_order_relaxed);
                     const double phase = static_cast<double>(age) * frequency / outputSampleRate;
+                    float oscillator = oscillatorSample(
+                        static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase);
+                    if (previewSecondOscillatorEnabled.load(std::memory_order_relaxed))
+                    {
+                        const double detuneRatio = std::pow(2.0,
+                            static_cast<double>(previewSecondOscillatorDetuneCents.load(
+                                std::memory_order_relaxed)) / 1200.0);
+                        const float secondOscillator = oscillatorSample(
+                            static_cast<SynthWaveform>(previewSecondOscillatorWaveform.load(
+                                std::memory_order_relaxed)), phase * detuneRatio);
+                        const float mix = previewSecondOscillatorMix.load(std::memory_order_relaxed);
+                        oscillator = oscillator * (1.0f - mix) + secondOscillator * mix;
+                    }
                     const float release = std::min(1.0f, static_cast<float>(previewEnd - clockFrame) /
                                                            std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
-                    preview = oscillatorSample(static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase) *
-                              (0.2f * velocity) * attack * release;
+                    preview = oscillator * (0.2f * velocity) * attack * release;
                 }
                 mixed.left += preview * previewLeftGain.load(std::memory_order_relaxed);
                 mixed.right += preview * previewRightGain.load(std::memory_order_relaxed);

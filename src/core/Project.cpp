@@ -414,6 +414,14 @@ void ProjectData::normalize()
         normalizeAutomation(track.volumeAutomation, 0.0f, 1.0f);
         normalizeAutomation(track.panAutomation, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));
+        track.secondOscillatorWaveform = static_cast<SynthWaveform>(
+            std::clamp(static_cast<int>(track.secondOscillatorWaveform), 0, 3));
+        if (!std::isfinite(track.secondOscillatorDetuneCents))
+            track.secondOscillatorDetuneCents = 0.0f;
+        if (!std::isfinite(track.secondOscillatorMix))
+            track.secondOscillatorMix = 0.5f;
+        track.secondOscillatorDetuneCents = std::clamp(track.secondOscillatorDetuneCents, -100.0f, 100.0f);
+        track.secondOscillatorMix = std::clamp(track.secondOscillatorMix, 0.0f, 1.0f);
         if (!std::isfinite(track.attackSeconds)) track.attackSeconds = 0.008f;
         if (!std::isfinite(track.decaySeconds)) track.decaySeconds = 0.0f;
         if (!std::isfinite(track.sustainLevel)) track.sustainLevel = 1.0f;
