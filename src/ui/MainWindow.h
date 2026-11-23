@@ -200,7 +200,12 @@ private:
         SelectedTrackMute = 4,
         SelectedTrackSolo = 5,
         SelectedTrackFilterCutoff = 6,
-        SelectedTrackFilterResonance = 7
+        SelectedTrackFilterResonance = 7,
+        SelectedTrackSynthAttack = 8,
+        SelectedTrackSynthDecay = 9,
+        SelectedTrackSynthSustain = 10,
+        SelectedTrackSynthRelease = 11,
+        SelectedTrackOscillatorMix = 12
     };
     struct MidiControllerMapping
     {

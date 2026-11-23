@@ -3524,14 +3524,17 @@ void MainWindow::createMenus()
     connect(midiControllerListenAction, &QAction::toggled,
             this, &MainWindow::setMidiControllerListening);
 
-    const std::array<QString, 8> controllerTargets = {
+    const std::array<QString, 13> controllerTargets = {
         tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo"),
         tr("Selected track mute"), tr("Selected track solo"),
-        tr("Selected synth filter cutoff"), tr("Selected synth filter resonance")
+        tr("Selected synth filter cutoff"), tr("Selected synth filter resonance"),
+        tr("Selected synth attack"), tr("Selected synth decay"),
+        tr("Selected synth sustain"), tr("Selected synth release"),
+        tr("Selected synth oscillator 2 mix")
     };
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
-    for (int target = 0; target <= static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance); ++target)
+    for (int target = 0; target <= static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorMix); ++target)
     {
         QAction* learnAction = learnControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
         connect(learnAction, &QAction::triggered, this,
@@ -7958,7 +7961,7 @@ void MainWindow::setMidiControllerListening(bool enabled)
 
 void MainWindow::beginMidiControllerLearn(int target)
 {
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorMix) + 1;
     if (target < 0 || target >= targetCount)
         return;
     const InstrumentTrack* track = selectedTrack();
@@ -7967,16 +7970,18 @@ void MainWindow::beginMidiControllerLearn(int target)
          target == static_cast<int>(MidiControllerTarget::SelectedTrackMute) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackSolo) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) ||
-         target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance)) && track == nullptr)
+         target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) ||
+         (target >= static_cast<int>(MidiControllerTarget::SelectedTrackSynthAttack) &&
+          target <= static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorMix))) && track == nullptr)
     {
         statusBar()->showMessage(tr("Select a track before learning its MIDI control"), 3000);
         return;
     }
-    if ((target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) ||
-         target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance)) &&
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorMix) &&
         track->instrumentType != InstrumentType::Synth)
     {
-        statusBar()->showMessage(tr("Select a synth track before learning its filter control"), 3000);
+        statusBar()->showMessage(tr("Select a synth track before learning its synth control"), 3000);
         return;
     }
     if (midiInput == nullptr || !midiInput->isConnected())
@@ -8012,7 +8017,7 @@ void MainWindow::loadMidiControllerMappings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorMix) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const QString prefix = QString::number(target);
@@ -8032,7 +8037,7 @@ void MainWindow::saveMidiControllerMappings() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorMix) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const MidiControllerMapping mapping = midiControllerMappings.value(target);
@@ -8102,6 +8107,23 @@ void MainWindow::applyMidiControllerTarget(int target, int value)
         {
             synthFilterResonanceControl->setValue(0.1 + 9.9 * value / 127.0);
         }
+        return;
+    }
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackSynthAttack) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackSynthRelease))
+    {
+        if (track->instrumentType != InstrumentType::Synth)
+            return;
+        const int envelopeIndex = target - static_cast<int>(MidiControllerTarget::SelectedTrackSynthAttack);
+        const std::array<double, 4> maximumValues = {5.0, 5.0, 1.0, 10.0};
+        envelopeControls[static_cast<size_t>(envelopeIndex)]->setValue(
+            maximumValues[static_cast<size_t>(envelopeIndex)] * value / 127.0);
+        return;
+    }
+    if (target == static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorMix))
+    {
+        if (track->instrumentType == InstrumentType::Synth)
+            secondOscillatorMixControl->setValue(value * 100.0 / 127.0);
         return;
     }
     if (target == static_cast<int>(MidiControllerTarget::SelectedTrackMute) ||
