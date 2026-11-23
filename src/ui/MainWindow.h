@@ -167,6 +167,7 @@ private:
     void applyPitchBendRangeHistory(double semitones);
     void exportAudio();
     void exportAudioFlac();
+    void exportAudioOgg();
     void exportStems();
     void importAudio();
     void importMidi();

@@ -1022,11 +1022,12 @@ QString rotateProjectBackups(const QString& projectPath, const QString& stagedPa
     return errors.join(QStringLiteral("; "));
 }
 
-bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options, bool flac = false)
+bool chooseAudioExportOptions(QWidget* parent, WavExportOptions& options,
+                              bool flac = false, bool oggVorbis = false)
 {
     QDialog dialog(parent);
-    dialog.setWindowTitle(flac ? QObject::tr("FLAC export format")
-                               : QObject::tr("WAV export format"));
+    dialog.setWindowTitle(oggVorbis ? QObject::tr("Ogg Vorbis export format")
+        : flac ? QObject::tr("FLAC export format") : QObject::tr("WAV export format"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
     auto* sampleRateControl = new QComboBox(&dialog);
@@ -1040,29 +1041,60 @@ bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options, bool fla
         sampleRateControl->setCurrentIndex(sampleRateIndex);
     form->addRow(QObject::tr("Sample rate"), sampleRateControl);
 
-    auto* formatControl = new QComboBox(&dialog);
-    formatControl->addItem(QObject::tr("16-bit PCM"), static_cast<int>(WavSampleFormat::Pcm16));
-    formatControl->addItem(QObject::tr("24-bit PCM"), static_cast<int>(WavSampleFormat::Pcm24));
-    if (!flac)
-        formatControl->addItem(QObject::tr("32-bit float"), static_cast<int>(WavSampleFormat::Float32));
-    else if (options.sampleFormat == WavSampleFormat::Float32)
-        options.sampleFormat = WavSampleFormat::Pcm24;
-    const int selectedIndex = formatControl->findData(static_cast<int>(options.sampleFormat));
-    if (selectedIndex >= 0)
-        formatControl->setCurrentIndex(selectedIndex);
-    form->addRow(QObject::tr("Sample format"), formatControl);
-
-    auto* ditherControl = new QCheckBox(QObject::tr("Add TPDF dither to integer PCM"), &dialog);
-    ditherControl->setChecked(options.dither);
-    form->addRow(ditherControl);
-    layout->addLayout(form);
-    QObject::connect(formatControl, qOverload<int>(&QComboBox::currentIndexChanged), &dialog,
-                     [formatControl, ditherControl](int)
+    QComboBox* formatControl = nullptr;
+    QCheckBox* ditherControl = nullptr;
+    QComboBox* qualityControl = nullptr;
+    if (oggVorbis)
     {
-        ditherControl->setEnabled(formatControl->currentData().toInt() !=
-                                  static_cast<int>(WavSampleFormat::Float32));
-    });
-    ditherControl->setEnabled(options.sampleFormat != WavSampleFormat::Float32);
+        qualityControl = new QComboBox(&dialog);
+        qualityControl->addItem(QObject::tr("Small file · 0.4"), 0.4);
+        qualityControl->addItem(QObject::tr("Balanced · 0.6"), 0.6);
+        qualityControl->addItem(QObject::tr("High quality · 0.8"), 0.8);
+        qualityControl->addItem(QObject::tr("Very high quality · 1.0"), 1.0);
+        int closestIndex = 0;
+        double closestDistance = std::numeric_limits<double>::max();
+        for (int index = 0; index < qualityControl->count(); ++index)
+        {
+            const double distance = std::abs(qualityControl->itemData(index).toDouble() -
+                                             options.vorbisQuality);
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestIndex = index;
+            }
+        }
+        qualityControl->setCurrentIndex(closestIndex);
+        form->addRow(QObject::tr("Encoding quality"), qualityControl);
+    }
+    else
+    {
+        formatControl = new QComboBox(&dialog);
+        formatControl->addItem(QObject::tr("16-bit PCM"), static_cast<int>(WavSampleFormat::Pcm16));
+        formatControl->addItem(QObject::tr("24-bit PCM"), static_cast<int>(WavSampleFormat::Pcm24));
+        if (!flac)
+            formatControl->addItem(QObject::tr("32-bit float"), static_cast<int>(WavSampleFormat::Float32));
+        else if (options.sampleFormat == WavSampleFormat::Float32)
+            options.sampleFormat = WavSampleFormat::Pcm24;
+        const int selectedIndex = formatControl->findData(static_cast<int>(options.sampleFormat));
+        if (selectedIndex >= 0)
+            formatControl->setCurrentIndex(selectedIndex);
+        form->addRow(QObject::tr("Sample format"), formatControl);
+
+        ditherControl = new QCheckBox(QObject::tr("Add TPDF dither to integer PCM"), &dialog);
+        ditherControl->setChecked(options.dither);
+        form->addRow(ditherControl);
+    }
+    layout->addLayout(form);
+    if (formatControl != nullptr && ditherControl != nullptr)
+    {
+        QObject::connect(formatControl, qOverload<int>(&QComboBox::currentIndexChanged), &dialog,
+                         [formatControl, ditherControl](int)
+        {
+            ditherControl->setEnabled(formatControl->currentData().toInt() !=
+                                      static_cast<int>(WavSampleFormat::Float32));
+        });
+        ditherControl->setEnabled(options.sampleFormat != WavSampleFormat::Float32);
+    }
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -1072,8 +1104,13 @@ bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options, bool fla
         return false;
 
     options.sampleRate = sampleRateControl->currentData().toInt();
-    options.sampleFormat = static_cast<WavSampleFormat>(formatControl->currentData().toInt());
-    options.dither = ditherControl->isEnabled() && ditherControl->isChecked();
+    if (oggVorbis)
+        options.vorbisQuality = static_cast<float>(qualityControl->currentData().toDouble());
+    else
+    {
+        options.sampleFormat = static_cast<WavSampleFormat>(formatControl->currentData().toInt());
+        options.dither = ditherControl->isEnabled() && ditherControl->isChecked();
+    }
     return true;
 }
 
@@ -1169,6 +1206,12 @@ WavExportOptions& previousWavExportOptions()
 WavExportOptions& previousFlacExportOptions()
 {
     static WavExportOptions options{44100, WavSampleFormat::Pcm24, false};
+    return options;
+}
+
+WavExportOptions& previousOggExportOptions()
+{
+    static WavExportOptions options;
     return options;
 }
 
@@ -3463,6 +3506,9 @@ void MainWindow::createMenus()
     fileMenu->addAction(tr("Export arrangement to WAV…"), this, &MainWindow::exportAudio);
 #if defined(AWESOME_STUDIO_HAS_FLAC)
     fileMenu->addAction(tr("Export arrangement to FLAC…"), this, &MainWindow::exportAudioFlac);
+#endif
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+    fileMenu->addAction(tr("Export arrangement to Ogg Vorbis…"), this, &MainWindow::exportAudioOgg);
 #endif
     fileMenu->addAction(tr("Export track stems…"), this, &MainWindow::exportStems);
     fileMenu->addSeparator();
@@ -7213,7 +7259,7 @@ void MainWindow::applyStepDivisionHistory(quint64 trackId, quint64 clipId, int r
 void MainWindow::exportAudio()
 {
     WavExportOptions& exportOptions = previousWavExportOptions();
-    if (!chooseWavExportOptions(this, exportOptions))
+    if (!chooseAudioExportOptions(this, exportOptions))
         return;
     bool useRange = false;
     double startBeat = 0.0;
@@ -7244,7 +7290,7 @@ void MainWindow::exportAudio()
 void MainWindow::exportAudioFlac()
 {
     WavExportOptions& exportOptions = previousFlacExportOptions();
-    if (!chooseWavExportOptions(this, exportOptions, true))
+    if (!chooseAudioExportOptions(this, exportOptions, true))
         return;
     bool useRange = false;
     double startBeat = 0.0;
@@ -7279,10 +7325,47 @@ void MainWindow::exportAudioFlac()
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
 }
 
+void MainWindow::exportAudioOgg()
+{
+    WavExportOptions& exportOptions = previousOggExportOptions();
+    if (!chooseAudioExportOptions(this, exportOptions, false, true))
+        return;
+    bool useRange = false;
+    double startBeat = 0.0;
+    double endBeat = 0.0;
+    if (!chooseExportRange(this, project.songLengthBeats(), useRange, startBeat, endBeat))
+        return;
+    QString path = QFileDialog::getSaveFileName(this, tr("Export arrangement to Ogg Vorbis"),
+        project.title + QStringLiteral(".ogg"), tr("Ogg Vorbis audio (*.ogg)"));
+    if (path.isEmpty())
+        return;
+    if (QFileInfo(path).suffix().isEmpty())
+        path += QStringLiteral(".ogg");
+    else if (QFileInfo(path).suffix().compare(QStringLiteral("ogg"), Qt::CaseInsensitive) != 0)
+    {
+        QMessageBox::warning(this, tr("Unsupported export filename"),
+                             tr("Choose an .ogg filename for Ogg Vorbis export."));
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString error;
+    const bool success = WavExporter::exportProject(project, path, &error,
+        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0, exportOptions,
+        AudioExportContainer::OggVorbis);
+    QApplication::restoreOverrideCursor();
+    if (!success)
+    {
+        QMessageBox::critical(this, tr("Could not export Ogg Vorbis"), error);
+        return;
+    }
+    statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
+}
+
 void MainWindow::exportStems()
 {
     WavExportOptions& exportOptions = previousWavExportOptions();
-    if (!chooseWavExportOptions(this, exportOptions))
+    if (!chooseAudioExportOptions(this, exportOptions))
         return;
     bool useRange = false;
     double startBeat = 0.0;

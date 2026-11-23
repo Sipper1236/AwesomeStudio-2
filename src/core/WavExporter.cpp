@@ -20,6 +20,9 @@
 #if defined(AWESOME_STUDIO_HAS_FLAC)
 #include <FLAC/stream_encoder.h>
 #endif
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+#include <sndfile.h>
+#endif
 
 namespace
 {
@@ -58,6 +61,28 @@ struct FlacEncoderGuard
 };
 #endif
 
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+struct SndfileEncoderGuard
+{
+    ~SndfileEncoderGuard()
+    {
+        if (encoder != nullptr)
+            sf_close(encoder);
+    }
+
+    bool finish()
+    {
+        if (encoder == nullptr)
+            return false;
+        const int status = sf_close(encoder);
+        encoder = nullptr;
+        return status == 0;
+    }
+
+    SNDFILE* encoder = nullptr;
+};
+#endif
+
 bool sampleFormatInfo(WavSampleFormat format, SampleFormatInfo& info)
 {
     switch (format)
@@ -79,6 +104,46 @@ void setError(QString* error, const QString& message)
 {
     if (error != nullptr)
         *error = message;
+}
+
+bool installEncodedFile(const QString& encodedPath, const QString& destinationPath, QString* error)
+{
+    QFile encodedFile(encodedPath);
+    if (!encodedFile.open(QIODevice::ReadOnly))
+    {
+        setError(error, encodedFile.errorString());
+        return false;
+    }
+    QSaveFile outputFile(destinationPath);
+    if (!outputFile.open(QIODevice::WriteOnly))
+    {
+        setError(error, outputFile.errorString());
+        return false;
+    }
+    while (!encodedFile.atEnd())
+    {
+        const QByteArray chunk = encodedFile.read(1024 * 1024);
+        if (chunk.isEmpty())
+        {
+            if (encodedFile.error() != QFileDevice::NoError)
+            {
+                setError(error, encodedFile.errorString());
+                return false;
+            }
+            break;
+        }
+        if (outputFile.write(chunk) != chunk.size())
+        {
+            setError(error, outputFile.errorString());
+            return false;
+        }
+    }
+    if (!outputFile.commit())
+    {
+        setError(error, outputFile.errorString());
+        return false;
+    }
+    return true;
 }
 
 void write16(char* destination, quint16 value)
@@ -163,7 +228,7 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     case 192000:
         break;
     default:
-        setError(error, QStringLiteral("Choose a supported WAV sample rate."));
+        setError(error, QStringLiteral("Choose a supported audio sample rate."));
         return false;
     }
     const quint32 sampleRate = static_cast<quint32>(options.sampleRate);
@@ -174,12 +239,15 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         setError(error, QStringLiteral("Choose a supported audio sample format."));
         return false;
     }
-    if (container != AudioExportContainer::Wav && container != AudioExportContainer::Flac)
+    if (container != AudioExportContainer::Wav && container != AudioExportContainer::Flac &&
+        container != AudioExportContainer::OggVorbis)
     {
         setError(error, QStringLiteral("Choose a supported audio container."));
         return false;
     }
+    const bool wavContainer = container == AudioExportContainer::Wav;
     const bool flacContainer = container == AudioExportContainer::Flac;
+    const bool oggContainer = container == AudioExportContainer::OggVorbis;
     if (flacContainer && options.sampleFormat == WavSampleFormat::Float32)
     {
         setError(error, QStringLiteral("FLAC export supports 16-bit or 24-bit integer PCM."));
@@ -192,8 +260,15 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         return false;
     }
 #endif
+#if !defined(AWESOME_STUDIO_HAS_SNDFILE)
+    if (oggContainer)
+    {
+        setError(error, QStringLiteral("Ogg Vorbis export is unavailable because this build has no libsndfile support."));
+        return false;
+    }
+#endif
     const bool integerPcm = formatInfo.formatTag == 1;
-    if (options.dither && !integerPcm)
+    if (options.dither && !integerPcm && !oggContainer)
     {
         setError(error, QStringLiteral("Dither is available for integer PCM output only."));
         return false;
@@ -229,7 +304,7 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         frameCount = countInFrames + static_cast<qint64>(std::ceil(durationSeconds * sampleRate));
     }
     const quint64 dataSize = static_cast<quint64>(frameCount) * bytesPerSampleFrame;
-    if (!flacContainer && dataSize > std::numeric_limits<quint32>::max() - 36)
+    if (wavContainer && dataSize > std::numeric_limits<quint32>::max() - 36)
     {
         setError(error, QStringLiteral("This pattern is too long to store in a standard WAV file."));
         return false;
@@ -238,10 +313,15 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     QSaveFile wavFile(path);
     QTemporaryFile flacTemporaryFile(
         QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".awesome-studio-flac-XXXXXX")));
+    QTemporaryFile oggTemporaryFile(
+        QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".awesome-studio-ogg-XXXXXX")));
 #if defined(AWESOME_STUDIO_HAS_FLAC)
     FlacEncoderGuard flacEncoder;
 #endif
-    if (!flacContainer)
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+    SndfileEncoderGuard oggEncoder;
+#endif
+    if (wavContainer)
     {
         if (!wavFile.open(QIODevice::WriteOnly))
         {
@@ -269,7 +349,7 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         }
     }
 #if defined(AWESOME_STUDIO_HAS_FLAC)
-    else
+    else if (flacContainer)
     {
         if (!flacTemporaryFile.open())
         {
@@ -301,9 +381,45 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         flacEncoder.initialized = true;
     }
 #endif
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+    if (oggContainer)
+    {
+        if (!oggTemporaryFile.open())
+        {
+            setError(error, oggTemporaryFile.errorString());
+            return false;
+        }
+        const QString temporaryPath = oggTemporaryFile.fileName();
+        oggTemporaryFile.close();
+        SF_INFO info{};
+        info.samplerate = static_cast<int>(sampleRate);
+        info.channels = channelCount;
+        info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
+        if (!sf_format_check(&info))
+        {
+            setError(error, QStringLiteral("This libsndfile build does not support Ogg Vorbis encoding."));
+            return false;
+        }
+        const QByteArray encodedPath = QFile::encodeName(temporaryPath);
+        oggEncoder.encoder = sf_open(encodedPath.constData(), SFM_WRITE, &info);
+        if (oggEncoder.encoder == nullptr)
+        {
+            setError(error, QString::fromLocal8Bit(sf_strerror(nullptr)));
+            return false;
+        }
+        float quality = std::clamp(options.vorbisQuality, 0.0f, 1.0f);
+        if (sf_command(oggEncoder.encoder, SFC_SET_VBR_ENCODING_QUALITY,
+                       &quality, sizeof(quality)) != SF_TRUE)
+        {
+            setError(error, QStringLiteral("Could not set Ogg Vorbis encoding quality."));
+            return false;
+        }
+    }
+#endif
 
     constexpr int framesPerChunk = 2048;
     QByteArray audio(framesPerChunk * bytesPerSampleFrame, Qt::Uninitialized);
+    std::vector<float> oggAudio(static_cast<size_t>(framesPerChunk) * channelCount);
 #if defined(AWESOME_STUDIO_HAS_FLAC)
     std::vector<FLAC__int32> flacAudio(static_cast<size_t>(framesPerChunk) * channelCount);
 #endif
@@ -324,17 +440,22 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             rendered.left += mixerOutput.left;
             rendered.right += mixerOutput.right;
             rendered = renderer.processMasterEffects(rendered);
-            char* frame = flacContainer ? nullptr : audio.data() + index * bytesPerSampleFrame;
+            char* frame = wavContainer ? audio.data() + index * bytesPerSampleFrame : nullptr;
             const float output[2] = {
                 outputSample(rendered.left, safeProject.masterGain,
-                             options.sampleFormat != WavSampleFormat::Float32),
+                             oggContainer || options.sampleFormat != WavSampleFormat::Float32),
                 outputSample(rendered.right, safeProject.masterGain,
-                             options.sampleFormat != WavSampleFormat::Float32)
+                             oggContainer || options.sampleFormat != WavSampleFormat::Float32)
             };
             for (int channel = 0; channel < 2; ++channel)
             {
-                char* destination = flacContainer
+                char* destination = !wavContainer
                     ? nullptr : frame + channel * formatInfo.bytesPerSample;
+                if (oggContainer)
+                {
+                    oggAudio[static_cast<size_t>(index) * channelCount + channel] = output[channel];
+                    continue;
+                }
                 if (options.sampleFormat == WavSampleFormat::Float32)
                 {
                     writeFloatSample(destination, output[channel]);
@@ -375,6 +496,16 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             }
 #endif
         }
+        else if (oggContainer)
+        {
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+            if (sf_writef_float(oggEncoder.encoder, oggAudio.data(), frames) != frames)
+            {
+                setError(error, QString::fromLocal8Bit(sf_strerror(oggEncoder.encoder)));
+                return false;
+            }
+#endif
+        }
         else if (wavFile.write(audio.constData(), bytes) != bytes)
         {
             setError(error, wavFile.errorString());
@@ -391,42 +522,20 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             setError(error, QStringLiteral("Could not finalize the FLAC file."));
             return false;
         }
-        QFile encodedFile(flacTemporaryFile.fileName());
-        if (!encodedFile.open(QIODevice::ReadOnly))
+        return installEncodedFile(flacTemporaryFile.fileName(), path, error);
+#else
+        return false;
+#endif
+    }
+    if (oggContainer)
+    {
+#if defined(AWESOME_STUDIO_HAS_SNDFILE)
+        if (!oggEncoder.finish())
         {
-            setError(error, encodedFile.errorString());
+            setError(error, QStringLiteral("Could not finalize the Ogg Vorbis file."));
             return false;
         }
-        QSaveFile outputFile(path);
-        if (!outputFile.open(QIODevice::WriteOnly))
-        {
-            setError(error, outputFile.errorString());
-            return false;
-        }
-        while (!encodedFile.atEnd())
-        {
-            const QByteArray chunk = encodedFile.read(1024 * 1024);
-            if (chunk.isEmpty())
-            {
-                if (encodedFile.error() != QFileDevice::NoError)
-                {
-                    setError(error, encodedFile.errorString());
-                    return false;
-                }
-                break;
-            }
-            if (outputFile.write(chunk) != chunk.size())
-            {
-                setError(error, outputFile.errorString());
-                return false;
-            }
-        }
-        if (!outputFile.commit())
-        {
-            setError(error, outputFile.errorString());
-            return false;
-        }
-        return true;
+        return installEncodedFile(oggTemporaryFile.fileName(), path, error);
 #else
         return false;
 #endif

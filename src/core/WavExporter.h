@@ -12,7 +12,8 @@ enum class WavSampleFormat
 enum class AudioExportContainer
 {
     Wav,
-    Flac
+    Flac,
+    OggVorbis
 };
 
 struct WavExportOptions
@@ -20,6 +21,7 @@ struct WavExportOptions
     int sampleRate = 44100;
     WavSampleFormat sampleFormat = WavSampleFormat::Pcm16;
     bool dither = false;
+    float vorbisQuality = 0.8f;
 };
 
 class WavExporter
