@@ -5,20 +5,71 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSet>
 
 namespace
 {
-constexpr int currentProjectVersion = 7;
+constexpr int currentProjectVersion = 8;
 constexpr auto projectFormat = "awesome-studio-project";
+
+struct MediaLoadContext
+{
+    QHash<QString, std::shared_ptr<const AudioAsset>> assets;
+    QSet<QString> unavailableAssets;
+    quint64 decodedBytes = 0;
+};
 
 void setError(QString* error, const QString& message)
 {
     if (error != nullptr)
         *error = message;
+}
+
+void loadAudioReference(QString& path, const QString& mediaBaseDir, MediaLoadContext& media,
+                        std::shared_ptr<const AudioAsset>& asset)
+{
+    if (path.isEmpty())
+        return;
+    if (QDir::isRelativePath(path))
+        path = QDir(mediaBaseDir).absoluteFilePath(path);
+
+    const QFileInfo fileInfo(path);
+    if (!fileInfo.exists() || !fileInfo.isFile())
+        return;
+    QString cacheKey = fileInfo.canonicalFilePath();
+    if (cacheKey.isEmpty())
+        cacheKey = fileInfo.absoluteFilePath();
+    const auto cached = media.assets.constFind(cacheKey);
+    if (cached != media.assets.cend())
+    {
+        asset = *cached;
+        return;
+    }
+    if (media.unavailableAssets.contains(cacheKey))
+        return;
+
+    std::shared_ptr<const AudioAsset> decoded;
+    QString audioError;
+    if (!AudioFile::loadWav(path, decoded, &audioError))
+    {
+        media.unavailableAssets.insert(cacheKey);
+        return;
+    }
+    const quint64 bytes = static_cast<quint64>(decoded->samples.size() + decoded->waveformPeaks.size()) *
+                          sizeof(float);
+    if (bytes > AudioFile::maximumProjectDecodedBytes - media.decodedBytes)
+    {
+        media.unavailableAssets.insert(cacheKey);
+        return;
+    }
+    media.decodedBytes += bytes;
+    media.assets.insert(cacheKey, decoded);
+    asset = std::move(decoded);
 }
 
 QJsonArray saveNotes(const QVector<MidiNote>& notes)
@@ -113,6 +164,13 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("pan"), track.pan},
         {QStringLiteral("muted"), track.muted},
         {QStringLiteral("solo"), track.solo},
+        {QStringLiteral("drumSamples"), [&track]
+         {
+             QJsonArray samples;
+             for (const DrumPadSample& sample : track.drumSamples)
+                 samples.push_back(sample.path);
+             return samples;
+         }()},
         {QStringLiteral("clips"), clips}
     };
 }
@@ -129,7 +187,8 @@ bool readId(const QJsonObject& object, const QString& key, quint64& id, QString*
     return true;
 }
 
-bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseDir, QString* error)
+bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseDir,
+              MediaLoadContext& media, QString* error)
 {
     if (!value.isObject())
     {
@@ -157,20 +216,12 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
     clip.audioStartFrame = storedAudioStart;
     clip.audioFadeInBeats = object.value(QStringLiteral("audioFadeInBeats")).toDouble(0.0);
     clip.audioFadeOutBeats = object.value(QStringLiteral("audioFadeOutBeats")).toDouble(0.0);
-    if (!clip.audioSourcePath.isEmpty())
-    {
-        if (QDir::isRelativePath(clip.audioSourcePath))
-            clip.audioSourcePath = QDir(mediaBaseDir).absoluteFilePath(clip.audioSourcePath);
-        if (QFileInfo::exists(clip.audioSourcePath))
-        {
-            QString audioError;
-            AudioFile::loadWav(clip.audioSourcePath, clip.audioSource, &audioError);
-        }
-    }
+    loadAudioReference(clip.audioSourcePath, mediaBaseDir, media, clip.audioSource);
     return loadNotes(object.value(QStringLiteral("notes")), clip.notes, error);
 }
 
-bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& mediaBaseDir, QString* error)
+bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& mediaBaseDir,
+               MediaLoadContext& media, QString* error)
 {
     if (!value.isObject())
     {
@@ -187,6 +238,32 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     track.pan = static_cast<float>(object.value(QStringLiteral("pan")).toDouble(0.0));
     track.muted = object.value(QStringLiteral("muted")).toBool(false);
     track.solo = object.value(QStringLiteral("solo")).toBool(false);
+    const QJsonValue drumSampleValue = object.value(QStringLiteral("drumSamples"));
+    if (drumSampleValue.isArray())
+    {
+        const QJsonArray drumSamples = drumSampleValue.toArray();
+        if (drumSamples.size() > static_cast<qsizetype>(track.drumSamples.size()))
+        {
+            setError(error, QStringLiteral("The drum rack contains too many sample assignments."));
+            return false;
+        }
+        for (qsizetype index = 0; index < drumSamples.size(); ++index)
+        {
+            if (!drumSamples[index].isString())
+            {
+                setError(error, QStringLiteral("The drum rack contains an invalid sample path."));
+                return false;
+            }
+            track.drumSamples[static_cast<size_t>(index)].path = drumSamples[index].toString();
+            loadAudioReference(track.drumSamples[static_cast<size_t>(index)].path,
+                               mediaBaseDir, media, track.drumSamples[static_cast<size_t>(index)].source);
+        }
+    }
+    else if (!drumSampleValue.isUndefined() && !drumSampleValue.isNull())
+    {
+        setError(error, QStringLiteral("The drum rack has invalid sample assignments."));
+        return false;
+    }
     const QJsonValue clipValue = object.value(QStringLiteral("clips"));
     if (!clipValue.isArray() || clipValue.toArray().size() > 10000)
     {
@@ -196,7 +273,7 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     for (const QJsonValue& clipJson : clipValue.toArray())
     {
         MidiClip clip;
-        if (!loadClip(clipJson, clip, mediaBaseDir, error))
+        if (!loadClip(clipJson, clip, mediaBaseDir, media, error))
             return false;
         track.clips.push_back(std::move(clip));
     }
@@ -267,6 +344,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     }
 
     const QString mediaBaseDir = QFileInfo(path).absoluteDir().absolutePath();
+    MediaLoadContext media;
     const QJsonObject root = document.object();
     if (root.value(QStringLiteral("format")).toString() != QString::fromLatin1(projectFormat))
     {
@@ -319,7 +397,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
         for (const QJsonValue& trackJson : trackValue.toArray())
         {
             InstrumentTrack track;
-            if (!loadTrack(trackJson, track, mediaBaseDir, error))
+            if (!loadTrack(trackJson, track, mediaBaseDir, media, error))
                 return false;
             loaded.tracks.push_back(std::move(track));
         }

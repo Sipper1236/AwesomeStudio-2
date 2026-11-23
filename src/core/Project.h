@@ -4,6 +4,7 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <array>
 #include <memory>
 
 enum class SynthWaveform
@@ -64,6 +65,12 @@ struct MidiClip
     bool isAudioRegion() const { return !audioSourcePath.isEmpty(); }
 };
 
+struct DrumPadSample
+{
+    QString path;
+    std::shared_ptr<const AudioAsset> source;
+};
+
 struct InstrumentTrack
 {
     quint64 id = 0;
@@ -74,6 +81,7 @@ struct InstrumentTrack
     float pan = 0.0f;
     bool muted = false;
     bool solo = false;
+    std::array<DrumPadSample, 4> drumSamples;
     QVector<MidiClip> clips;
 };
 

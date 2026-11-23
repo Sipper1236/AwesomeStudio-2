@@ -40,7 +40,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 #include <utility>
+
+namespace
+{
+int drumSamplePadForPitch(int pitch)
+{
+    if (pitch == 35 || pitch == 36) return 0;
+    if (pitch == 38 || pitch == 40) return 1;
+    if (pitch == 42 || pitch == 44) return 2;
+    if (pitch == 46) return 3;
+    return -1;
+}
+}
 
 class NoteEditCommand final : public QUndoCommand
 {
@@ -122,6 +135,19 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(midiEditor, &MidiEditor::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
+        if (track != nullptr && track->instrumentType == InstrumentType::DrumRack)
+        {
+            const int pad = drumSamplePadForPitch(pitch);
+            if (pad >= 0 && !track->drumSamples[static_cast<size_t>(pad)].path.isEmpty())
+            {
+                const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+                if (sample.source != nullptr)
+                    audioEngine.triggerSamplePreview(sample.source, 96, track->pan, track->gain);
+                else
+                    statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
+                return;
+            }
+        }
         audioEngine.triggerPreview(pitch, 96,
                                    track == nullptr ? SynthWaveform::Sine : track->waveform,
                                    track == nullptr ? 0.0f : track->pan,
@@ -130,6 +156,19 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
+        if (track != nullptr && track->instrumentType == InstrumentType::DrumRack)
+        {
+            const int pad = drumSamplePadForPitch(pitch);
+            if (pad >= 0 && !track->drumSamples[static_cast<size_t>(pad)].path.isEmpty())
+            {
+                const DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+                if (sample.source != nullptr)
+                    audioEngine.triggerSamplePreview(sample.source, 100, track->pan, track->gain);
+                else
+                    statusBar()->showMessage(tr("The assigned drum sample is offline"), 2000);
+                return;
+            }
+        }
         audioEngine.triggerPreview(pitch, 100,
                                    track == nullptr ? SynthWaveform::Sine : track->waveform,
                                    track == nullptr ? 0.0f : track->pan,
@@ -591,6 +630,30 @@ void MainWindow::createDocks()
     connect(audioFadeOutControl, &QDoubleSpinBox::valueChanged, this,
             [this](double beats) { setSelectedAudioFade(false, beats); });
 
+    drumSampleControls = new QGroupBox(tr("DRUM SAMPLES"), browser);
+    auto* drumSampleLayout = new QVBoxLayout(drumSampleControls);
+    const std::array<QString, 4> drumPadNames = {
+        tr("Kick"), tr("Snare"), tr("Closed hat"), tr("Open hat")
+    };
+    for (int pad = 0; pad < static_cast<int>(drumPadNames.size()); ++pad)
+    {
+        auto* row = new QWidget(drumSampleControls);
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        drumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(
+            tr("Load %1 sample…").arg(drumPadNames[static_cast<size_t>(pad)]), row);
+        clearDrumSampleButtons[static_cast<size_t>(pad)] = new QPushButton(tr("Clear"), row);
+        rowLayout->addWidget(drumSampleButtons[static_cast<size_t>(pad)], 1);
+        rowLayout->addWidget(clearDrumSampleButtons[static_cast<size_t>(pad)]);
+        drumSampleLayout->addWidget(row);
+        connect(drumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
+                [this, pad] { importDrumSample(pad); });
+        connect(clearDrumSampleButtons[static_cast<size_t>(pad)], &QPushButton::clicked, this,
+                [this, pad] { clearDrumSample(pad); });
+    }
+    browserLayout->addWidget(drumSampleControls);
+    drumSampleControls->hide();
+
     browserLayout->addStretch();
     auto* hint = new QLabel(tr("Import a WAV to add an audio track. Double-click MIDI clips to edit notes or drum steps."), browser);
     hint->setWordWrap(true);
@@ -729,6 +792,23 @@ void MainWindow::refreshProjectUi()
     audioFadeOutControl->setValue(audioRegionSelected ? clip->audioFadeOutBeats : 0.0);
     audioFadeInControl->setEnabled(audioRegionSelected);
     audioFadeOutControl->setEnabled(audioRegionSelected);
+    const bool drumRackSelected = track != nullptr && track->instrumentType == InstrumentType::DrumRack;
+    drumSampleControls->setVisible(drumRackSelected);
+    const std::array<QString, 4> drumPadNames = {
+        tr("Kick"), tr("Snare"), tr("Closed hat"), tr("Open hat")
+    };
+    for (size_t pad = 0; pad < drumSampleButtons.size(); ++pad)
+    {
+        const DrumPadSample* sample = track == nullptr ? nullptr : &track->drumSamples[pad];
+        const QString padName = drumPadNames[pad];
+        drumSampleButtons[pad]->setText(sample == nullptr || sample->path.isEmpty()
+            ? tr("Load %1 sample…").arg(padName)
+            : sample->source != nullptr ? QFileInfo(sample->path).fileName()
+                                        : tr("%1 · OFFLINE").arg(padName));
+        drumSampleButtons[pad]->setEnabled(drumRackSelected);
+        clearDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
+                                                !sample->path.isEmpty());
+    }
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     midiEditor->setNotes(clip == nullptr ? QVector<MidiNote>{} : clip->notes);
@@ -1141,14 +1221,19 @@ void MainWindow::setProject(const ProjectData& incoming, const QString& path)
     midiEditor->setPlayheadBeat(0.0);
     arrangementEditor->setPlayheadBeat(0.0);
     updateProjectTitle();
-    int offlineRegions = 0;
+    int offlineSources = 0;
     for (const InstrumentTrack& track : project.tracks)
+    {
         for (const MidiClip& clip : track.clips)
             if (clip.isAudioRegion() && clip.audioSource == nullptr)
-                ++offlineRegions;
-    if (offlineRegions > 0)
-        statusBar()->showMessage(tr("Project opened with %1 offline WAV region(s); restore the source file to hear them.")
-                                     .arg(offlineRegions), 6000);
+                ++offlineSources;
+        for (const DrumPadSample& sample : track.drumSamples)
+            if (!sample.path.isEmpty() && sample.source == nullptr)
+                ++offlineSources;
+    }
+    if (offlineSources > 0)
+        statusBar()->showMessage(tr("Project opened with %1 offline audio source reference(s); restore media or reduce loaded audio.")
+                                     .arg(offlineSources), 6000);
 }
 
 bool MainWindow::saveToPath(const QString& path)
@@ -1239,12 +1324,25 @@ void MainWindow::importAudio()
     if (path.isEmpty())
         return;
 
-    std::shared_ptr<const AudioAsset> asset;
+    std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
     QString error;
-    if (!AudioFile::loadWav(path, asset, &error))
+    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
     {
         QMessageBox::critical(this, tr("Could not import WAV audio"), error);
         return;
+    }
+    if (findProjectAudioAsset(path) == nullptr)
+    {
+        const quint64 currentBytes = projectAudioBytes();
+        const quint64 assetBytes = static_cast<quint64>(asset->samples.size() + asset->waveformPeaks.size()) *
+                                   sizeof(float);
+        if (currentBytes > AudioFile::maximumProjectDecodedBytes ||
+            assetBytes > AudioFile::maximumProjectDecodedBytes - currentBytes)
+        {
+            QMessageBox::warning(this, tr("Audio memory limit"),
+                                 tr("This project can load up to 512 MiB of decoded audio. Remove another audio source first."));
+            return;
+        }
     }
 
     InstrumentTrack track;
@@ -1267,6 +1365,107 @@ void MainWindow::importAudio()
     refreshProjectUi();
     editorTabs->setCurrentWidget(arrangementEditor);
     statusBar()->showMessage(tr("Imported %1 into an audio track").arg(QFileInfo(path).fileName()), 3000);
+}
+
+void MainWindow::importDrumSample(int pad)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
+        return;
+
+    const QString path = QFileDialog::getOpenFileName(this, tr("Load drum sample"), QString(),
+                                                       tr("WAV audio (*.wav)"));
+    if (path.isEmpty())
+        return;
+
+    std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
+    QString error;
+    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
+    {
+        QMessageBox::critical(this, tr("Could not load drum sample"), error);
+        return;
+    }
+    DrumPadSample& drumSample = track->drumSamples[static_cast<size_t>(pad)];
+    const DrumPadSample previousSample = drumSample;
+    drumSample.path = asset->path;
+    drumSample.source = asset;
+    if (projectAudioBytes() > AudioFile::maximumProjectDecodedBytes)
+    {
+        drumSample = previousSample;
+        QMessageBox::warning(this, tr("Audio memory limit"),
+                             tr("This project can load up to 512 MiB of decoded audio. Remove another audio source first."));
+        return;
+    }
+    settingsDirty = true;
+    refreshProjectUi();
+    statusBar()->showMessage(tr("Drum sample set: %1")
+                                 .arg(QFileInfo(drumSample.path).fileName()), 2500);
+}
+
+void MainWindow::clearDrumSample(int pad)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
+        return;
+
+    track->drumSamples[static_cast<size_t>(pad)] = DrumPadSample{};
+    settingsDirty = true;
+    refreshProjectUi();
+    statusBar()->showMessage(tr("Using synthesized sound for this drum pad"), 2000);
+}
+
+quint64 MainWindow::projectAudioBytes() const
+{
+    std::unordered_set<const AudioAsset*> uniqueAssets;
+    quint64 totalBytes = 0;
+    const auto addAsset = [&uniqueAssets, &totalBytes](const std::shared_ptr<const AudioAsset>& asset)
+    {
+        if (asset == nullptr || !uniqueAssets.insert(asset.get()).second)
+            return;
+        const quint64 sampleCount = static_cast<quint64>(asset->samples.size()) +
+                                    static_cast<quint64>(asset->waveformPeaks.size());
+        if (totalBytes > AudioFile::maximumProjectDecodedBytes ||
+            sampleCount > (AudioFile::maximumProjectDecodedBytes - totalBytes) / sizeof(float))
+            totalBytes = AudioFile::maximumProjectDecodedBytes + 1;
+        else
+            totalBytes += sampleCount * sizeof(float);
+    };
+
+    for (const InstrumentTrack& track : project.tracks)
+    {
+        for (const MidiClip& clip : track.clips)
+            addAsset(clip.audioSource);
+        for (const DrumPadSample& sample : track.drumSamples)
+            addAsset(sample.source);
+    }
+    return totalBytes;
+}
+
+std::shared_ptr<const AudioAsset> MainWindow::findProjectAudioAsset(const QString& path) const
+{
+    const QFileInfo requestedInfo(path);
+    const QString requestedPath = requestedInfo.canonicalFilePath().isEmpty()
+        ? requestedInfo.absoluteFilePath() : requestedInfo.canonicalFilePath();
+    const auto matchesPath = [&requestedPath](const std::shared_ptr<const AudioAsset>& asset)
+    {
+        if (asset == nullptr)
+            return false;
+        const QFileInfo assetInfo(asset->path);
+        const QString assetPath = assetInfo.canonicalFilePath().isEmpty()
+            ? assetInfo.absoluteFilePath() : assetInfo.canonicalFilePath();
+        return assetPath == requestedPath;
+    };
+
+    for (const InstrumentTrack& track : project.tracks)
+    {
+        for (const MidiClip& clip : track.clips)
+            if (matchesPath(clip.audioSource)) return clip.audioSource;
+        for (const DrumPadSample& sample : track.drumSamples)
+            if (matchesPath(sample.source)) return sample.source;
+    }
+    return {};
 }
 
 void MainWindow::importMidi()

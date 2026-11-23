@@ -8,6 +8,15 @@ namespace
 {
 constexpr double twoPi = 6.28318530717958647692;
 
+int drumPadForPitch(int pitch)
+{
+    if (pitch == 35 || pitch == 36) return 0;
+    if (pitch == 38 || pitch == 40) return 1;
+    if (pitch == 42 || pitch == 44) return 2;
+    if (pitch == 46) return 3;
+    return -1;
+}
+
 float oscillatorSample(SynthWaveform waveform, double phase)
 {
     phase -= std::floor(phase);
@@ -125,6 +134,32 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             }
             for (const MidiNote& note : clip.notes)
             {
+                if (track.instrumentType == InstrumentType::DrumRack)
+                {
+                    const int pad = drumPadForPitch(note.pitch);
+                    if (pad >= 0 && !track.drumSamples[static_cast<size_t>(pad)].path.isEmpty())
+                    {
+                        const std::shared_ptr<const AudioAsset>& source =
+                            track.drumSamples[static_cast<size_t>(pad)].source;
+                        if (source != nullptr && source->sampleRate > 0 &&
+                            source->channelCount > 0 && source->frameCount() > 0)
+                        {
+                            AudioRegion region;
+                            region.startFrame = static_cast<qint64>(std::llround(
+                                (clip.startBeat + note.startBeat) * sampleRate * 60.0 / project->tempoBpm));
+                            region.source = source;
+                            const qint64 duration = static_cast<qint64>(std::ceil(
+                                static_cast<double>(source->frameCount()) * sampleRate / source->sampleRate));
+                            region.endFrame = region.startFrame + std::max<qint64>(1, duration);
+                            const float velocityGain = 0.48f * static_cast<float>(note.velocity) / 127.0f;
+                            region.leftGain = leftGain * track.gain * velocityGain;
+                            region.rightGain = rightGain * track.gain * velocityGain;
+                            audioRegions.push_back(std::move(region));
+                        }
+                        continue;
+                    }
+                }
+
                 VoiceNote voice;
                 const double startBeat = clip.startBeat + note.startBeat;
                 voice.startFrame = static_cast<qint64>(std::llround(startBeat * sampleRate * 60.0 /

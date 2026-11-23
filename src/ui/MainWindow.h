@@ -6,12 +6,15 @@
 #include <QMainWindow>
 #include <QUndoStack>
 
+#include <array>
+
 class QCloseEvent;
 class QComboBox;
 class QDoubleSpinBox;
 class QDockWidget;
 class QLabel;
 class QListWidget;
+class QPushButton;
 class QScrollArea;
 class QSlider;
 class QTabWidget;
@@ -50,6 +53,10 @@ private:
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
                          double lengthBeats, qint64 audioStartFrame);
     void setSelectedAudioFade(bool fadeIn, double beats);
+    void importDrumSample(int pad);
+    void clearDrumSample(int pad);
+    quint64 projectAudioBytes() const;
+    std::shared_ptr<const AudioAsset> findProjectAudioAsset(const QString& path) const;
     InstrumentTrack* selectedTrack();
     MidiClip* selectedClip();
     bool maybeSave();
@@ -84,8 +91,11 @@ private:
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;
     QWidget* audioRegionControls = nullptr;
+    QWidget* drumSampleControls = nullptr;
     QDoubleSpinBox* audioFadeInControl = nullptr;
     QDoubleSpinBox* audioFadeOutControl = nullptr;
+    std::array<QPushButton*, 4> drumSampleButtons{};
+    std::array<QPushButton*, 4> clearDrumSampleButtons{};
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
     QLabel* playheadLabel = nullptr;

@@ -135,6 +135,11 @@ void ProjectData::normalize()
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));
+        for (DrumPadSample& drumSample : track.drumSamples)
+        {
+            if (drumSample.source != nullptr && drumSample.path.isEmpty())
+                drumSample.path = drumSample.source->path;
+        }
         if (track.clips.size() > 10000)
             track.clips.resize(10000);
 

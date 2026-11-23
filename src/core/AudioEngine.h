@@ -29,6 +29,8 @@ public:
     void triggerPreview(int midiPitch, int velocity = 96,
                         SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
                         bool percussion = false);
+    void triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity = 96,
+                              float pan = 0.0f, float gain = 1.0f);
     void setMasterGain(float gain);
 
 private:
@@ -63,6 +65,8 @@ private:
     std::atomic<float> previewRightGain{0.70710678f};
     std::atomic<qint64> previewStartFrame{0};
     std::atomic<qint64> previewEndFrame{0};
+    std::shared_ptr<const AudioAsset> previewSampleAsset;
+    std::atomic<float> previewSampleGain{1.0f};
 
     qint64 playbackFrame = 0;
 };

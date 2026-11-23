@@ -170,6 +170,8 @@ double AudioEngine::positionBeats() const
 void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform waveform, float pan,
                                  bool percussion)
 {
+    std::atomic_store_explicit(&previewSampleAsset, std::shared_ptr<const AudioAsset>{},
+                               std::memory_order_release);
     const int clampedPitch = std::clamp(midiPitch, 0, 127);
     const double panAngle = (std::clamp(static_cast<double>(pan), -1.0, 1.0) + 1.0) * 0.7853981633974483;
     previewVelocity.store(std::clamp(velocity, 1, 127), std::memory_order_relaxed);
@@ -184,6 +186,28 @@ void AudioEngine::triggerPreview(int midiPitch, int velocity, SynthWaveform wave
     const double previewSeconds = percussion && clampedPitch == 46 ? 0.72 :
                                   percussion && (clampedPitch == 42 || clampedPitch == 44) ? 0.22 : 0.48;
     previewEndFrame.store(start + static_cast<qint64>(outputSampleRate * previewSeconds), std::memory_order_release);
+}
+
+void AudioEngine::triggerSamplePreview(std::shared_ptr<const AudioAsset> sample, int velocity,
+                                       float pan, float gain)
+{
+    if (sample == nullptr || sample->sampleRate <= 0 || sample->channelCount < 1 ||
+        sample->channelCount > 2 || sample->frameCount() <= 0)
+        return;
+
+    const double panAngle = (std::clamp(static_cast<double>(pan), -1.0, 1.0) + 1.0) *
+                            0.7853981633974483;
+    previewVelocity.store(std::clamp(velocity, 1, 127), std::memory_order_relaxed);
+    previewSampleGain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
+    previewLeftGain.store(static_cast<float>(std::cos(panAngle)), std::memory_order_relaxed);
+    previewRightGain.store(static_cast<float>(std::sin(panAngle)), std::memory_order_relaxed);
+    const qint64 start = audioClockFrames.load(std::memory_order_acquire);
+    const qint64 duration = static_cast<qint64>(std::ceil(
+        static_cast<double>(sample->frameCount()) * outputSampleRate / sample->sampleRate));
+    previewStartFrame.store(start, std::memory_order_release);
+    previewEndFrame.store(start + std::max<qint64>(1, duration), std::memory_order_release);
+    std::atomic_store_explicit(&previewSampleAsset, std::move(sample), std::memory_order_release);
+    previewPitch.store(0, std::memory_order_release);
 }
 
 void AudioEngine::setMasterGain(float gain)
@@ -213,6 +237,8 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     if (!project)
         return 0;
     prepareNotes(project);
+    const std::shared_ptr<const AudioAsset> previewSample =
+        std::atomic_load_explicit(&previewSampleAsset, std::memory_order_acquire);
 
     if (resetPosition.exchange(false, std::memory_order_acq_rel))
     {
@@ -249,28 +275,58 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         if (preview >= 0 && clockFrame >= previewStart && clockFrame < previewEnd)
         {
             const qint64 age = clockFrame - previewStart;
-            const bool percussion = previewPercussion.load(std::memory_order_relaxed);
             const float velocity = static_cast<float>(previewVelocity.load(std::memory_order_relaxed)) / 127.0f;
-            const float attack = std::min(1.0f, static_cast<float>(age) /
-                                                  std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
-            float preview = 0.0f;
-            if (percussion)
+            if (previewSample != nullptr)
             {
-                preview = renderPercussionSample(previewPitch.load(std::memory_order_relaxed), age,
-                                                 previewStart, outputSampleRate) *
-                          (0.48f * velocity) * attack;
+                const double sourcePosition = static_cast<double>(age) * previewSample->sampleRate /
+                                              outputSampleRate;
+                const qint64 firstFrame = static_cast<qint64>(sourcePosition);
+                if (firstFrame >= 0 && firstFrame < previewSample->frameCount())
+                {
+                    const qint64 secondFrame = std::min(firstFrame + 1, previewSample->frameCount() - 1);
+                    const float fraction = static_cast<float>(sourcePosition - firstFrame);
+                    const int channels = previewSample->channelCount;
+                    const auto sampleAt = [&](qint64 frame, int channel)
+                    {
+                        const int sourceChannel = channels == 1 ? 0 : channel;
+                        return previewSample->samples[
+                            static_cast<qsizetype>(frame * channels + sourceChannel)];
+                    };
+                    const float left = sampleAt(firstFrame, 0) * (1.0f - fraction) +
+                                       sampleAt(secondFrame, 0) * fraction;
+                    const float right = channels == 1 ? left :
+                        sampleAt(firstFrame, 1) * (1.0f - fraction) +
+                        sampleAt(secondFrame, 1) * fraction;
+                    const float sampleGain = 0.48f * velocity *
+                                             previewSampleGain.load(std::memory_order_relaxed);
+                    mixed.left += left * sampleGain * previewLeftGain.load(std::memory_order_relaxed);
+                    mixed.right += right * sampleGain * previewRightGain.load(std::memory_order_relaxed);
+                }
             }
             else
             {
-                const double frequency = previewFrequency.load(std::memory_order_relaxed);
-                const double phase = static_cast<double>(age) * frequency / outputSampleRate;
-                const float release = std::min(1.0f, static_cast<float>(previewEnd - clockFrame) /
-                                                       std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
-                preview = oscillatorSample(static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase) *
-                          (0.2f * velocity) * attack * release;
+                const bool percussion = previewPercussion.load(std::memory_order_relaxed);
+                const float attack = std::min(1.0f, static_cast<float>(age) /
+                                                      std::max(1.0f, static_cast<float>(outputSampleRate * 0.008)));
+                float preview = 0.0f;
+                if (percussion)
+                {
+                    preview = renderPercussionSample(previewPitch.load(std::memory_order_relaxed), age,
+                                                     previewStart, outputSampleRate) *
+                              (0.48f * velocity) * attack;
+                }
+                else
+                {
+                    const double frequency = previewFrequency.load(std::memory_order_relaxed);
+                    const double phase = static_cast<double>(age) * frequency / outputSampleRate;
+                    const float release = std::min(1.0f, static_cast<float>(previewEnd - clockFrame) /
+                                                           std::max(1.0f, static_cast<float>(outputSampleRate * 0.035)));
+                    preview = oscillatorSample(static_cast<SynthWaveform>(previewWaveform.load(std::memory_order_relaxed)), phase) *
+                              (0.2f * velocity) * attack * release;
+                }
+                mixed.left += preview * previewLeftGain.load(std::memory_order_relaxed);
+                mixed.right += preview * previewRightGain.load(std::memory_order_relaxed);
             }
-            mixed.left += preview * previewLeftGain.load(std::memory_order_relaxed);
-            mixed.right += preview * previewRightGain.load(std::memory_order_relaxed);
         }
 
         const float gain = masterGain.load(std::memory_order_relaxed);

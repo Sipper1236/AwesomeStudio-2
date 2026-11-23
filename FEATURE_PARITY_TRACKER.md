@@ -6,12 +6,12 @@ Status describes the executable built by the repository's CMake target. Source f
 |---|---|---|
 | Build and desktop shell | Working Qt 6 app with menus, docks, and saved window layout | Packaging, crash recovery, accessibility review |
 | Piano roll | Per-clip full MIDI pitch range, snap grid, draw/move/resize/delete, Shift multi-select, velocity lane, MIDI-note undo/redo, editable clip length | Quantize, scale/chord tools, ghost notes |
-| Instruments | Multiple polyphonic synth tracks plus a synthesized drum rack with kick, snare, closed/open hats | ADSR/filter controls, presets, sample-based drum rack, plugin instruments |
+| Instruments | Multiple polyphonic synth tracks plus a four-pad drum rack with synthesized voices or one assigned WAV sample per pad | ADSR/filter controls, presets, velocity layers, pad tuning/envelopes, plugin instruments |
 | Transport | Arrangement play/stop, 20–300 BPM, common editable time signatures, song loop, off/1–4 bar count-in, accented metronome | Punch recording, tempo maps, transport markers |
-| Projects | Versioned v7 `.aws` JSON save/open with atomic writes; v1 projects migrate to a track and clip; v2–v6 files gain compatible meter/instrument/transport defaults; audio sources reopen from saved paths and missing files show as offline | Autosave, backups, portable media packaging, broader migration tooling |
-| Audio export | Full arrangement, stereo 16-bit WAV at 44.1 kHz, including imported audio and linear region fades | More formats, stems, range selection, render queue, dithering options |
+| Projects | Versioned v8 `.aws` JSON save/open with atomic writes; v1 projects migrate to a track and clip; v2–v7 files gain compatible meter/instrument/transport defaults; audio sources reopen from saved paths and missing or over-budget media stay offline; shared source cache with 512 MiB project memory cap | Autosave, backups, portable media packaging, broader migration tooling |
+| Audio export | Full arrangement, stereo 16-bit WAV at 44.1 kHz, including imported audio, sampled drums, and linear region fades | More formats, stems, range selection, render queue, dithering options |
 | Arrangement | Playlist with MIDI and WAV audio tracks, waveform regions, movable clips, left/right audio edge trimming, linear fade-in/out, editable MIDI clip lengths, and Standard MIDI File import/export (formats 0 and 1, PPQN timing) | Fade curves, crossfades, markers, comping, MIDI format 2/SMPTE import |
-| Step sequencing | 16-step per-bar editor with kick, snare, closed-hat, and open-hat lanes; note edits share the piano-roll undo history | Variable step divisions, pattern chaining, per-step probability/ratchets, sample assignment |
+| Step sequencing | 16-step per-bar editor with kick, snare, closed-hat, and open-hat lanes; note edits share the piano-roll undo history; each pad can load a WAV or use its synthesized voice | Variable step divisions, pattern chaining, per-step probability/ratchets, velocity layers, sample start/loop controls |
 | Mixer | Per-track level, pan, mute, solo, plus master level | Buses, sends, inserts, meters, routing graph, groups, effects |
 | Audio recording | Not implemented | Input device selection, armed tracks, takes, latency compensation |
 | MIDI input | Piano-roll preview only | Device enumeration, live input, recording, controller mapping |
