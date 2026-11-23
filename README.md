@@ -48,6 +48,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Enable Automation lanes in the Playlist toolbar and choose Volume, Pan, or an installed LV2/CLAP parameter from the lane selector. Plug-in lanes apply to tracks with the matching insert; other tracks show that the plug-in is not present. Click a lane to add a point, drag points to reshape it, and right-click or press Delete to remove a point. Select a keyframe in the Browser to set its segment to Linear, Smooth, Ease In, Ease Out, or Hold. Edits share undo/redo with the keyframe list; playback and WAV export use the selected segment shapes.
 - Arm Write automation, choose Volume, Pan, or an LV2/CLAP parameter and Touch, Latch, or Trim, then move the matching Mixer control during playback. Trim adds the control movement as an offset to the existing curve. Touch commits after you stop moving the control; Latch keeps writing its last value until playback stops or Write is disarmed. Each pass is one undoable edit and is audible while recording.
 - Import Standard MIDI Files (formats 0, 1, and 2 with PPQN or SMPTE timing), and export arrangements as format 1 multitrack MIDI or stereo WAV at 44.1, 48, 88.2, 96, or 192 kHz in 16-bit PCM, 24-bit PCM, or 32-bit float, either as a full arrangement or a selected beat range. Integer PCM output can use TPDF dither.
+- On Linux builds with libFLAC development files, use **File → Export arrangement to FLAC…** for full-song or beat-range lossless 16-bit or 24-bit stereo output, with optional TPDF dither.
 - Use **File → Export track stems…** to render every track to a separate stereo WAV in a folder, for either the full arrangement or a selected beat range. Choose the same sample format and dither options as the master WAV export. Range exports contain exactly the selected interval and cut effects tails at the boundaries. Each stem includes that track's EQ and effects, routed bus and Master effects, and level/pan automation plus the master level; mute and solo state do not omit tracks.
 - Select any track and use **Track Equalizer** in the Browser to adjust each band's gain from −18 to +18 dB and move the low/mid and mid/high split frequencies. The EQ runs in realtime arrangement playback, full WAV exports, and track stems.
 - Right-click the Playlist ruler to add a named arrangement marker or a tempo change; right-click either tag to edit or remove it. Left-click the ruler or a marker to seek and start playback. Marker and tempo edits can be undone and are saved in the project.
@@ -64,7 +65,7 @@ Requirements:
 - CMake 3.16 or newer
 - A C++17 compiler
 - Qt 6.2 or newer with Widgets and Multimedia
-- On Linux, libasound development files enable MIDI input recording, and Lilv development files enable LV2 audio effects; both dependencies are optional. CLAP API headers are bundled under `third_party/clap`; audio-effect and instrument hosting use the system dynamic loader.
+- On Linux, libasound development files enable MIDI input recording, Lilv development files enable LV2 audio effects, and libFLAC development files enable FLAC arrangement export; these dependencies are optional. CLAP API headers are bundled under `third_party/clap`; audio-effect and instrument hosting use the system dynamic loader.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

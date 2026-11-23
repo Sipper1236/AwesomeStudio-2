@@ -166,6 +166,7 @@ private:
     void applyStepDivisionHistory(quint64 trackId, quint64 clipId, int stepsPerBar);
     void applyPitchBendRangeHistory(double semitones);
     void exportAudio();
+    void exportAudioFlac();
     void exportStems();
     void importAudio();
     void importMidi();

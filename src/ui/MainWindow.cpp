@@ -976,10 +976,11 @@ QString rotateProjectBackups(const QString& projectPath, const QString& stagedPa
     return errors.join(QStringLiteral("; "));
 }
 
-bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options)
+bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options, bool flac = false)
 {
     QDialog dialog(parent);
-    dialog.setWindowTitle(QObject::tr("WAV export format"));
+    dialog.setWindowTitle(flac ? QObject::tr("FLAC export format")
+                               : QObject::tr("WAV export format"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
     auto* sampleRateControl = new QComboBox(&dialog);
@@ -996,7 +997,10 @@ bool chooseWavExportOptions(QWidget* parent, WavExportOptions& options)
     auto* formatControl = new QComboBox(&dialog);
     formatControl->addItem(QObject::tr("16-bit PCM"), static_cast<int>(WavSampleFormat::Pcm16));
     formatControl->addItem(QObject::tr("24-bit PCM"), static_cast<int>(WavSampleFormat::Pcm24));
-    formatControl->addItem(QObject::tr("32-bit float"), static_cast<int>(WavSampleFormat::Float32));
+    if (!flac)
+        formatControl->addItem(QObject::tr("32-bit float"), static_cast<int>(WavSampleFormat::Float32));
+    else if (options.sampleFormat == WavSampleFormat::Float32)
+        options.sampleFormat = WavSampleFormat::Pcm24;
     const int selectedIndex = formatControl->findData(static_cast<int>(options.sampleFormat));
     if (selectedIndex >= 0)
         formatControl->setCurrentIndex(selectedIndex);
@@ -1113,6 +1117,12 @@ bool editPluginParameterAutomation(QWidget* parent, const QString& title,
 WavExportOptions& previousWavExportOptions()
 {
     static WavExportOptions options;
+    return options;
+}
+
+WavExportOptions& previousFlacExportOptions()
+{
+    static WavExportOptions options{44100, WavSampleFormat::Pcm24, false};
     return options;
 }
 
@@ -3389,6 +3399,9 @@ void MainWindow::createMenus()
     fileMenu->addAction(tr("Import MIDI…"), this, &MainWindow::importMidi);
     fileMenu->addAction(tr("Export arrangement to MIDI…"), this, &MainWindow::exportMidi);
     fileMenu->addAction(tr("Export arrangement to WAV…"), this, &MainWindow::exportAudio);
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+    fileMenu->addAction(tr("Export arrangement to FLAC…"), this, &MainWindow::exportAudioFlac);
+#endif
     fileMenu->addAction(tr("Export track stems…"), this, &MainWindow::exportStems);
     fileMenu->addSeparator();
     auto* quitAction = fileMenu->addAction(tr("Quit"));
@@ -7146,6 +7159,44 @@ void MainWindow::exportAudio()
     if (!success)
     {
         QMessageBox::critical(this, tr("Could not export WAV"), error);
+        return;
+    }
+    statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
+}
+
+void MainWindow::exportAudioFlac()
+{
+    WavExportOptions& exportOptions = previousFlacExportOptions();
+    if (!chooseWavExportOptions(this, exportOptions, true))
+        return;
+    bool useRange = false;
+    double startBeat = 0.0;
+    double endBeat = 0.0;
+    if (!chooseExportRange(this, project.songLengthBeats(), useRange, startBeat, endBeat))
+        return;
+    QString path = QFileDialog::getSaveFileName(this, tr("Export arrangement to FLAC"),
+                                                 project.title + QStringLiteral(".flac"),
+                                                 tr("FLAC audio (*.flac)"));
+    if (path.isEmpty())
+        return;
+    if (QFileInfo(path).suffix().isEmpty())
+        path += QStringLiteral(".flac");
+    else if (QFileInfo(path).suffix().compare(QStringLiteral("flac"), Qt::CaseInsensitive) != 0)
+    {
+        QMessageBox::warning(this, tr("Unsupported export filename"),
+                             tr("Choose a .flac filename for FLAC export."));
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString error;
+    const bool success = WavExporter::exportProject(project, path, &error,
+        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0, exportOptions,
+        AudioExportContainer::Flac);
+    QApplication::restoreOverrideCursor();
+    if (!success)
+    {
+        QMessageBox::critical(this, tr("Could not export FLAC"), error);
         return;
     }
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);

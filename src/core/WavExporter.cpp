@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
+#include <QTemporaryFile>
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +15,11 @@
 #include <limits>
 #include <memory>
 #include <random>
+#include <vector>
+
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+#include <FLAC/stream_encoder.h>
+#endif
 
 namespace
 {
@@ -25,6 +31,32 @@ struct SampleFormatInfo
     quint16 bitsPerSample = 16;
     quint16 bytesPerSample = 2;
 };
+
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+struct FlacEncoderGuard
+{
+    ~FlacEncoderGuard()
+    {
+        if (encoder == nullptr)
+            return;
+        if (initialized)
+            FLAC__stream_encoder_finish(encoder);
+        FLAC__stream_encoder_delete(encoder);
+    }
+
+    bool finish()
+    {
+        if (encoder == nullptr || !initialized)
+            return false;
+        const bool success = FLAC__stream_encoder_finish(encoder);
+        initialized = false;
+        return success;
+    }
+
+    FLAC__StreamEncoder* encoder = nullptr;
+    bool initialized = false;
+};
+#endif
 
 bool sampleFormatInfo(WavSampleFormat format, SampleFormatInfo& info)
 {
@@ -107,7 +139,8 @@ QString safeStemName(const QString& source)
 }
 
 bool WavExporter::exportProject(const ProjectData& project, const QString& path, QString* error,
-                                double startBeat, double endBeat, const WavExportOptions& options)
+                                double startBeat, double endBeat, const WavExportOptions& options,
+                                AudioExportContainer container)
 {
     ProjectData safeProject = project;
     safeProject.normalize();
@@ -138,9 +171,27 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     SampleFormatInfo formatInfo;
     if (!sampleFormatInfo(options.sampleFormat, formatInfo))
     {
-        setError(error, QStringLiteral("Choose a supported WAV sample format."));
+        setError(error, QStringLiteral("Choose a supported audio sample format."));
         return false;
     }
+    if (container != AudioExportContainer::Wav && container != AudioExportContainer::Flac)
+    {
+        setError(error, QStringLiteral("Choose a supported audio container."));
+        return false;
+    }
+    const bool flacContainer = container == AudioExportContainer::Flac;
+    if (flacContainer && options.sampleFormat == WavSampleFormat::Float32)
+    {
+        setError(error, QStringLiteral("FLAC export supports 16-bit or 24-bit integer PCM."));
+        return false;
+    }
+#if !defined(AWESOME_STUDIO_HAS_FLAC)
+    if (flacContainer)
+    {
+        setError(error, QStringLiteral("FLAC export is unavailable because this build has no libFLAC support."));
+        return false;
+    }
+#endif
     const bool integerPcm = formatInfo.formatTag == 1;
     if (options.dither && !integerPcm)
     {
@@ -178,40 +229,84 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         frameCount = countInFrames + static_cast<qint64>(std::ceil(durationSeconds * sampleRate));
     }
     const quint64 dataSize = static_cast<quint64>(frameCount) * bytesPerSampleFrame;
-    if (dataSize > std::numeric_limits<quint32>::max() - 36)
+    if (!flacContainer && dataSize > std::numeric_limits<quint32>::max() - 36)
     {
         setError(error, QStringLiteral("This pattern is too long to store in a standard WAV file."));
         return false;
     }
 
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly))
+    QSaveFile wavFile(path);
+    QTemporaryFile flacTemporaryFile(
+        QDir(QFileInfo(path).absolutePath()).filePath(QStringLiteral(".awesome-studio-flac-XXXXXX")));
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+    FlacEncoderGuard flacEncoder;
+#endif
+    if (!flacContainer)
     {
-        setError(error, file.errorString());
-        return false;
-    }
+        if (!wavFile.open(QIODevice::WriteOnly))
+        {
+            setError(error, wavFile.errorString());
+            return false;
+        }
 
-    char header[44]{};
-    std::memcpy(header, "RIFF", 4);
-    write32(header + 4, static_cast<quint32>(dataSize + 36));
-    std::memcpy(header + 8, "WAVEfmt ", 8);
-    write32(header + 16, 16);
-    write16(header + 20, formatInfo.formatTag);
-    write16(header + 22, channelCount);
-    write32(header + 24, sampleRate);
-    write32(header + 28, sampleRate * bytesPerSampleFrame);
-    write16(header + 32, bytesPerSampleFrame);
-    write16(header + 34, formatInfo.bitsPerSample);
-    std::memcpy(header + 36, "data", 4);
-    write32(header + 40, static_cast<quint32>(dataSize));
-    if (file.write(header, sizeof(header)) != sizeof(header))
-    {
-        setError(error, file.errorString());
-        return false;
+        char header[44]{};
+        std::memcpy(header, "RIFF", 4);
+        write32(header + 4, static_cast<quint32>(dataSize + 36));
+        std::memcpy(header + 8, "WAVEfmt ", 8);
+        write32(header + 16, 16);
+        write16(header + 20, formatInfo.formatTag);
+        write16(header + 22, channelCount);
+        write32(header + 24, sampleRate);
+        write32(header + 28, sampleRate * bytesPerSampleFrame);
+        write16(header + 32, bytesPerSampleFrame);
+        write16(header + 34, formatInfo.bitsPerSample);
+        std::memcpy(header + 36, "data", 4);
+        write32(header + 40, static_cast<quint32>(dataSize));
+        if (wavFile.write(header, sizeof(header)) != sizeof(header))
+        {
+            setError(error, wavFile.errorString());
+            return false;
+        }
     }
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+    else
+    {
+        if (!flacTemporaryFile.open())
+        {
+            setError(error, flacTemporaryFile.errorString());
+            return false;
+        }
+        const QString temporaryPath = flacTemporaryFile.fileName();
+        flacTemporaryFile.close();
+
+        flacEncoder.encoder = FLAC__stream_encoder_new();
+        if (flacEncoder.encoder == nullptr ||
+            !FLAC__stream_encoder_set_channels(flacEncoder.encoder, channelCount) ||
+            !FLAC__stream_encoder_set_bits_per_sample(flacEncoder.encoder, formatInfo.bitsPerSample) ||
+            !FLAC__stream_encoder_set_sample_rate(flacEncoder.encoder, sampleRate) ||
+            !FLAC__stream_encoder_set_compression_level(flacEncoder.encoder, 5))
+        {
+            setError(error, QStringLiteral("Could not configure the FLAC encoder."));
+            return false;
+        }
+        const QByteArray encodedPath = QFile::encodeName(temporaryPath);
+        const FLAC__StreamEncoderInitStatus initStatus = FLAC__stream_encoder_init_file(
+            flacEncoder.encoder, encodedPath.constData(), nullptr, nullptr);
+        if (initStatus != FLAC__STREAM_ENCODER_INIT_STATUS_OK)
+        {
+            setError(error, QStringLiteral("Could not start FLAC encoding (status %1).")
+                                 .arg(static_cast<int>(initStatus)));
+            return false;
+        }
+        flacEncoder.initialized = true;
+    }
+#endif
 
     constexpr int framesPerChunk = 2048;
     QByteArray audio(framesPerChunk * bytesPerSampleFrame, Qt::Uninitialized);
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+    std::vector<FLAC__int32> flacAudio(static_cast<size_t>(framesPerChunk) * channelCount);
+#endif
     std::mt19937 ditherGenerator(0x41575331u);
     std::uniform_real_distribution<double> unitNoise(0.0, 1.0);
     qint64 writtenFrames = 0;
@@ -229,7 +324,7 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             rendered.left += mixerOutput.left;
             rendered.right += mixerOutput.right;
             rendered = renderer.processMasterEffects(rendered);
-            char* frame = audio.data() + index * bytesPerSampleFrame;
+            char* frame = flacContainer ? nullptr : audio.data() + index * bytesPerSampleFrame;
             const float output[2] = {
                 outputSample(rendered.left, safeProject.masterGain,
                              options.sampleFormat != WavSampleFormat::Float32),
@@ -238,7 +333,8 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             };
             for (int channel = 0; channel < 2; ++channel)
             {
-                char* destination = frame + channel * formatInfo.bytesPerSample;
+                char* destination = flacContainer
+                    ? nullptr : frame + channel * formatInfo.bytesPerSample;
                 if (options.sampleFormat == WavSampleFormat::Float32)
                 {
                     writeFloatSample(destination, output[channel]);
@@ -256,23 +352,88 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
                     scaled += firstNoise - secondNoise;
                 }
                 const qint64 quantized = static_cast<qint64>(std::lrint(scaled));
-                writeIntegerSample(destination, std::clamp(quantized, minimum, maximum),
-                                   formatInfo.bytesPerSample);
+                const qint64 bounded = std::clamp(quantized, minimum, maximum);
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+                if (flacContainer)
+                    flacAudio[static_cast<size_t>(index) * channelCount + channel] =
+                        static_cast<FLAC__int32>(bounded);
+                else
+#endif
+                    writeIntegerSample(destination, bounded, formatInfo.bytesPerSample);
             }
         }
 
         const qint64 bytes = static_cast<qint64>(frames) * bytesPerSampleFrame;
-        if (file.write(audio.constData(), bytes) != bytes)
+        if (flacContainer)
         {
-            setError(error, file.errorString());
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+            if (!FLAC__stream_encoder_process_interleaved(flacEncoder.encoder,
+                    flacAudio.data(), static_cast<unsigned>(frames)))
+            {
+                setError(error, QStringLiteral("FLAC encoding failed while rendering audio."));
+                return false;
+            }
+#endif
+        }
+        else if (wavFile.write(audio.constData(), bytes) != bytes)
+        {
+            setError(error, wavFile.errorString());
             return false;
         }
         writtenFrames += frames;
     }
 
-    if (!file.commit())
+    if (flacContainer)
     {
-        setError(error, file.errorString());
+#if defined(AWESOME_STUDIO_HAS_FLAC)
+        if (!flacEncoder.finish())
+        {
+            setError(error, QStringLiteral("Could not finalize the FLAC file."));
+            return false;
+        }
+        QFile encodedFile(flacTemporaryFile.fileName());
+        if (!encodedFile.open(QIODevice::ReadOnly))
+        {
+            setError(error, encodedFile.errorString());
+            return false;
+        }
+        QSaveFile outputFile(path);
+        if (!outputFile.open(QIODevice::WriteOnly))
+        {
+            setError(error, outputFile.errorString());
+            return false;
+        }
+        while (!encodedFile.atEnd())
+        {
+            const QByteArray chunk = encodedFile.read(1024 * 1024);
+            if (chunk.isEmpty())
+            {
+                if (encodedFile.error() != QFileDevice::NoError)
+                {
+                    setError(error, encodedFile.errorString());
+                    return false;
+                }
+                break;
+            }
+            if (outputFile.write(chunk) != chunk.size())
+            {
+                setError(error, outputFile.errorString());
+                return false;
+            }
+        }
+        if (!outputFile.commit())
+        {
+            setError(error, outputFile.errorString());
+            return false;
+        }
+        return true;
+#else
+        return false;
+#endif
+    }
+    if (!wavFile.commit())
+    {
+        setError(error, wavFile.errorString());
         return false;
     }
     return true;
