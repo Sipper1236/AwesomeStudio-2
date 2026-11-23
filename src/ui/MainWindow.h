@@ -61,6 +61,7 @@ private:
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
                          double lengthBeats, qint64 audioStartFrame);
     void setSelectedAudioFade(bool fadeIn, double beats);
+    void setSelectedSynthEnvelope(int parameter, double value);
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
     quint64 projectAudioBytes() const;
@@ -110,7 +111,9 @@ private:
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;
     QWidget* audioRegionControls = nullptr;
+    QWidget* synthEnvelopePanel = nullptr;
     QWidget* drumSampleControls = nullptr;
+    std::array<QDoubleSpinBox*, 4> envelopeControls{};
     QDoubleSpinBox* audioFadeInControl = nullptr;
     QDoubleSpinBox* audioFadeOutControl = nullptr;
     std::array<QPushButton*, 4> drumSampleButtons{};

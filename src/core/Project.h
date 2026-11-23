@@ -77,6 +77,10 @@ struct InstrumentTrack
     QString name = QStringLiteral("Synth");
     InstrumentType instrumentType = InstrumentType::Synth;
     SynthWaveform waveform = SynthWaveform::Sine;
+    float attackSeconds = 0.008f;
+    float decaySeconds = 0.0f;
+    float sustainLevel = 1.0f;
+    float releaseSeconds = 0.06f;
     float gain = 0.8f;
     float pan = 0.0f;
     bool muted = false;

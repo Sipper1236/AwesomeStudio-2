@@ -24,8 +24,12 @@ private:
     {
         qint64 startFrame = 0;
         qint64 endFrame = 0;
+        qint64 attackFrames = 1;
+        qint64 decayFrames = 0;
+        qint64 releaseFrames = 1;
         double frequency = 440.0;
         float amplitude = 0.0f;
+        float sustainLevel = 1.0f;
         float leftGain = 0.70710678f;
         float rightGain = 0.70710678f;
         SynthWaveform waveform = SynthWaveform::Sine;

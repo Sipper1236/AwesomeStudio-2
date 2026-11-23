@@ -167,6 +167,13 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 const qint64 duration = static_cast<qint64>(std::llround(note.lengthBeats * sampleRate * 60.0 /
                                                                           project->tempoBpm));
                 voice.endFrame = voice.startFrame + std::max<qint64>(duration, 1);
+                voice.attackFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+                    track.attackSeconds * sampleRate)));
+                voice.decayFrames = std::max<qint64>(0, static_cast<qint64>(std::llround(
+                    track.decaySeconds * sampleRate)));
+                voice.releaseFrames = std::max<qint64>(1, static_cast<qint64>(std::llround(
+                    track.releaseSeconds * sampleRate)));
+                voice.sustainLevel = track.sustainLevel;
                 voice.frequency = 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0);
                 voice.amplitude = (track.instrumentType == InstrumentType::DrumRack ? 0.48f : 0.22f) *
                                   static_cast<float>(note.velocity) / 127.0f * track.gain;
@@ -212,14 +219,12 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     lastFrame = projectFrame;
 
     StereoSample sample;
-        const qint64 releaseFrames = static_cast<qint64>(sampleRate * 0.06);
-    const qint64 attackFrames = std::max<qint64>(1, static_cast<qint64>(sampleRate * 0.008));
     while (nextStartIndex < notes.size() && notes[nextStartIndex].startFrame <= projectFrame)
         activeNotes.push_back(nextStartIndex++);
 
     activeNotes.erase(std::remove_if(activeNotes.begin(), activeNotes.end(), [&](size_t index)
     {
-        return projectFrame >= notes[index].endFrame + releaseFrames;
+        return projectFrame >= notes[index].endFrame + notes[index].releaseFrames;
     }), activeNotes.end());
 
     while (nextAudioStartIndex < audioRegions.size() &&
@@ -231,26 +236,42 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     for (const size_t index : activeNotes)
     {
         const VoiceNote& note = notes[index];
-        if (projectFrame < note.startFrame || projectFrame >= note.endFrame + releaseFrames)
+        if (projectFrame < note.startFrame || projectFrame >= note.endFrame + note.releaseFrames)
             continue;
 
         const qint64 age = projectFrame - note.startFrame;
-        float envelope = age < attackFrames
-            ? static_cast<float>(age) / static_cast<float>(attackFrames)
-            : 1.0f;
         if (note.percussion)
         {
+            const float envelope = age < note.attackFrames
+                ? static_cast<float>(age) / static_cast<float>(note.attackFrames) : 1.0f;
             const float voice = renderPercussionSample(note.midiPitch, age, note.startFrame, sampleRate) *
                                 note.amplitude * envelope;
             sample.left += voice * note.leftGain;
             sample.right += voice * note.rightGain;
             continue;
         }
+
+        const auto envelopeBeforeRelease = [&note](qint64 envelopeAge)
+        {
+            if (envelopeAge < note.attackFrames)
+                return static_cast<float>(envelopeAge) / static_cast<float>(note.attackFrames);
+            const qint64 decayAge = envelopeAge - note.attackFrames;
+            if (note.decayFrames > 0 && decayAge < note.decayFrames)
+            {
+                const float decayProgress = static_cast<float>(decayAge) /
+                                            static_cast<float>(note.decayFrames);
+                return 1.0f - decayProgress * (1.0f - note.sustainLevel);
+            }
+            return note.sustainLevel;
+        };
+        const qint64 ageAtRelease = note.endFrame - note.startFrame;
+        float envelope = envelopeBeforeRelease(age);
         if (projectFrame >= note.endFrame)
         {
             const qint64 releaseAge = projectFrame - note.endFrame;
-            envelope *= std::max(0.0f, 1.0f - static_cast<float>(releaseAge) /
-                                               static_cast<float>(releaseFrames));
+            const float releaseStartLevel = envelopeBeforeRelease(ageAtRelease);
+            envelope = releaseStartLevel * std::max(0.0f, 1.0f - static_cast<float>(releaseAge) /
+                                                                  static_cast<float>(note.releaseFrames));
         }
 
         const double phase = static_cast<double>(age) * note.frequency / sampleRate;

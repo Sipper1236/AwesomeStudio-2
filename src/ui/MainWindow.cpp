@@ -716,6 +716,33 @@ void MainWindow::createDocks()
         refreshDirtyState();
     });
 
+    auto* synthEnvelopeGroup = new QGroupBox(tr("SYNTH ENVELOPE"), browser);
+    synthEnvelopePanel = synthEnvelopeGroup;
+    auto* synthEnvelopeForm = new QFormLayout(synthEnvelopeGroup);
+    const std::array<QString, 4> envelopeLabels = {
+        tr("Attack (s)"), tr("Decay (s)"), tr("Sustain"), tr("Release (s)")
+    };
+    for (int parameter = 0; parameter < static_cast<int>(envelopeControls.size()); ++parameter)
+    {
+        QDoubleSpinBox* control = new QDoubleSpinBox(synthEnvelopeGroup);
+        control->setDecimals(parameter == 2 ? 2 : 3);
+        control->setSingleStep(parameter == 2 ? 0.05 : 0.01);
+        if (parameter != 2)
+        {
+            control->setRange(0.0, parameter == 3 ? 10.0 : 5.0);
+            control->setSuffix(tr(" s"));
+        }
+        else
+        {
+            control->setRange(0.0, 1.0);
+        }
+        envelopeControls[static_cast<size_t>(parameter)] = control;
+        synthEnvelopeForm->addRow(envelopeLabels[static_cast<size_t>(parameter)], control);
+        connect(control, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+                [this, parameter](double value) { setSelectedSynthEnvelope(parameter, value); });
+    }
+    browserLayout->addWidget(synthEnvelopeGroup);
+
     audioRegionControls = new QGroupBox(tr("AUDIO REGION"), browser);
     auto* audioFadeForm = new QFormLayout(audioRegionControls);
     audioFadeInControl = new QDoubleSpinBox(audioRegionControls);
@@ -886,6 +913,18 @@ void MainWindow::refreshProjectUi()
         waveformControl->findData(static_cast<int>(track->waveform));
     waveformControl->setCurrentIndex(std::max(0, waveformIndex));
     waveformControl->setEnabled(track != nullptr && track->instrumentType == InstrumentType::Synth);
+    const bool synthTrackSelected = track != nullptr && track->instrumentType == InstrumentType::Synth;
+    synthEnvelopePanel->setVisible(synthTrackSelected);
+    const std::array<float, 4> envelopeValues = track == nullptr
+        ? std::array<float, 4>{0.008f, 0.0f, 1.0f, 0.06f}
+        : std::array<float, 4>{track->attackSeconds, track->decaySeconds,
+                               track->sustainLevel, track->releaseSeconds};
+    for (size_t index = 0; index < envelopeControls.size(); ++index)
+    {
+        const QSignalBlocker envelopeBlocker(envelopeControls[index]);
+        envelopeControls[index]->setValue(envelopeValues[index]);
+        envelopeControls[index]->setEnabled(synthTrackSelected);
+    }
     instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
                                track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
                                track->instrumentType == InstrumentType::Audio ? tr("AUDIO SOURCE") :
@@ -1287,6 +1326,24 @@ void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
     audioEngine.setProject(project);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
+    settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::setSelectedSynthEnvelope(int parameter, double value)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::Synth)
+        return;
+    switch (parameter)
+    {
+        case 0: track->attackSeconds = static_cast<float>(value); break;
+        case 1: track->decaySeconds = static_cast<float>(value); break;
+        case 2: track->sustainLevel = static_cast<float>(value); break;
+        case 3: track->releaseSeconds = static_cast<float>(value); break;
+        default: return;
+    }
+    audioEngine.setProject(project);
     settingsDirty = true;
     refreshDirtyState();
 }

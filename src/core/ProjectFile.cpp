@@ -14,7 +14,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 8;
+constexpr int currentProjectVersion = 9;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -160,6 +160,10 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("name"), track.name},
         {QStringLiteral("instrumentType"), static_cast<int>(track.instrumentType)},
         {QStringLiteral("waveform"), static_cast<int>(track.waveform)},
+        {QStringLiteral("attackSeconds"), track.attackSeconds},
+        {QStringLiteral("decaySeconds"), track.decaySeconds},
+        {QStringLiteral("sustainLevel"), track.sustainLevel},
+        {QStringLiteral("releaseSeconds"), track.releaseSeconds},
         {QStringLiteral("gain"), track.gain},
         {QStringLiteral("pan"), track.pan},
         {QStringLiteral("muted"), track.muted},
@@ -234,6 +238,14 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     track.name = object.value(QStringLiteral("name")).toString(QStringLiteral("Synth"));
     track.instrumentType = static_cast<InstrumentType>(object.value(QStringLiteral("instrumentType")).toInt(0));
     track.waveform = static_cast<SynthWaveform>(object.value(QStringLiteral("waveform")).toInt(0));
+    track.attackSeconds = static_cast<float>(
+        object.value(QStringLiteral("attackSeconds")).toDouble(track.attackSeconds));
+    track.decaySeconds = static_cast<float>(
+        object.value(QStringLiteral("decaySeconds")).toDouble(track.decaySeconds));
+    track.sustainLevel = static_cast<float>(
+        object.value(QStringLiteral("sustainLevel")).toDouble(track.sustainLevel));
+    track.releaseSeconds = static_cast<float>(
+        object.value(QStringLiteral("releaseSeconds")).toDouble(track.releaseSeconds));
     track.gain = static_cast<float>(object.value(QStringLiteral("gain")).toDouble(0.8));
     track.pan = static_cast<float>(object.value(QStringLiteral("pan")).toDouble(0.0));
     track.muted = object.value(QStringLiteral("muted")).toBool(false);

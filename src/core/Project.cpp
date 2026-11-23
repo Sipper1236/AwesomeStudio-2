@@ -135,6 +135,14 @@ void ProjectData::normalize()
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));
+        if (!std::isfinite(track.attackSeconds)) track.attackSeconds = 0.008f;
+        if (!std::isfinite(track.decaySeconds)) track.decaySeconds = 0.0f;
+        if (!std::isfinite(track.sustainLevel)) track.sustainLevel = 1.0f;
+        if (!std::isfinite(track.releaseSeconds)) track.releaseSeconds = 0.06f;
+        track.attackSeconds = std::clamp(track.attackSeconds, 0.0f, 5.0f);
+        track.decaySeconds = std::clamp(track.decaySeconds, 0.0f, 5.0f);
+        track.sustainLevel = std::clamp(track.sustainLevel, 0.0f, 1.0f);
+        track.releaseSeconds = std::clamp(track.releaseSeconds, 0.0f, 10.0f);
         for (DrumPadSample& drumSample : track.drumSamples)
         {
             if (drumSample.source != nullptr && drumSample.path.isEmpty())
