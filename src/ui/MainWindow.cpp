@@ -1106,6 +1106,27 @@ void MainWindow::createMenus()
     editMenu->addAction(redoAction);
     editMenu->addSeparator();
     editMenu->addAction(tr("Quantize note starts to grid"), midiEditor, &MidiEditor::quantizeNotesToGrid);
+    QMenu* chordMenu = editMenu->addMenu(tr("Build chord from selection"));
+    const auto addChordAction = [this, chordMenu](const QString& label, const QVector<int>& intervals)
+    {
+        QAction* action = chordMenu->addAction(label);
+        connect(action, &QAction::triggered, this, [this, label, intervals]
+        {
+            if (midiEditor->addChordToSelection(intervals))
+                statusBar()->showMessage(tr("Applied %1 to the selected root notes").arg(label), 1800);
+            else
+                statusBar()->showMessage(tr("Select one or more root notes in the piano roll first"), 2400);
+        });
+    };
+    addChordAction(tr("Major triad"), {0, 4, 7});
+    addChordAction(tr("Minor triad"), {0, 3, 7});
+    addChordAction(tr("Diminished triad"), {0, 3, 6});
+    addChordAction(tr("Augmented triad"), {0, 4, 8});
+    addChordAction(tr("Suspended 2nd"), {0, 2, 7});
+    addChordAction(tr("Suspended 4th"), {0, 5, 7});
+    addChordAction(tr("Dominant 7th"), {0, 4, 7, 10});
+    addChordAction(tr("Major 7th"), {0, 4, 7, 11});
+    addChordAction(tr("Minor 7th"), {0, 3, 7, 10});
 
     QMenu* patternMenu = menuBar()->addMenu(tr("&Track"));
     patternMenu->addAction(addTrackAction);

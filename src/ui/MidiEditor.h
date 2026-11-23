@@ -17,6 +17,7 @@ public:
     void setSnap(double beatStep);
     void setScale(int rootPitchClass, const QVector<int>& intervals, bool snapNewNotes);
     void quantizeNotesToGrid();
+    bool addChordToSelection(const QVector<int>& semitoneIntervals);
     void setPixelsPerBeat(int pixels);
     void setPlayheadBeat(double beat);
 

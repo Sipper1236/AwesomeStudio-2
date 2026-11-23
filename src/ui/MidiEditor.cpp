@@ -134,6 +134,63 @@ public:
         update();
     }
 
+    bool addChordToSelection(const QVector<int>& semitoneIntervals)
+    {
+        if (selected.isEmpty() || semitoneIntervals.size() < 2)
+            return false;
+
+        const QVector<MidiNote> before = notes;
+        QVector<MidiNote> roots;
+        for (const MidiNote& note : notes)
+        {
+            if (selected.contains(note.id))
+                roots.push_back(note);
+        }
+        if (roots.isEmpty())
+            return false;
+
+        QSet<quint64> chordSelection;
+        for (const MidiNote& root : roots)
+        {
+            chordSelection.insert(root.id);
+            for (const int interval : semitoneIntervals)
+            {
+                if (interval <= 0 || root.pitch + interval > 127)
+                    continue;
+
+                MidiNote chordNote = root;
+                chordNote.pitch += interval;
+                const auto existing = std::find_if(notes.cbegin(), notes.cend(),
+                    [&chordNote](const MidiNote& note)
+                    {
+                        return note.pitch == chordNote.pitch &&
+                               note.startBeat == chordNote.startBeat &&
+                               note.lengthBeats == chordNote.lengthBeats &&
+                               note.channel == chordNote.channel;
+                    });
+                if (existing != notes.cend())
+                {
+                    chordSelection.insert(existing->id);
+                    continue;
+                }
+
+                chordNote.id = nextId();
+                notes.push_back(chordNote);
+                chordSelection.insert(chordNote.id);
+            }
+        }
+
+        std::sort(notes.begin(), notes.end(), [](const MidiNote& left, const MidiNote& right)
+        {
+            if (left.startBeat != right.startBeat) return left.startBeat < right.startBeat;
+            return left.pitch < right.pitch;
+        });
+        selected = chordSelection;
+        commitIfChanged(before);
+        update();
+        return true;
+    }
+
     void setPixelsPerBeat(int pixels)
     {
         pixelsPerBeat = std::clamp(pixels, 36, 180);
@@ -609,6 +666,11 @@ void MidiEditor::setScale(int rootPitchClass, const QVector<int>& intervals, boo
 void MidiEditor::quantizeNotesToGrid()
 {
     canvas->quantizeNotesToGrid();
+}
+
+bool MidiEditor::addChordToSelection(const QVector<int>& semitoneIntervals)
+{
+    return canvas->addChordToSelection(semitoneIntervals);
 }
 
 void MidiEditor::setPixelsPerBeat(int pixels)
