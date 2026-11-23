@@ -60,22 +60,50 @@ QString safeStemName(const QString& source)
 }
 }
 
-bool WavExporter::exportProject(const ProjectData& project, const QString& path, QString* error)
+bool WavExporter::exportProject(const ProjectData& project, const QString& path, QString* error,
+                                double startBeat, double endBeat)
 {
     ProjectData safeProject = project;
     safeProject.normalize();
+    const bool customRange = endBeat >= 0.0;
+    if (customRange && (!std::isfinite(startBeat) || !std::isfinite(endBeat) || startBeat < 0.0 ||
+                        endBeat <= startBeat || endBeat > safeProject.songLengthBeats()))
+    {
+        setError(error, QStringLiteral("Choose a beat range inside the arrangement with an end after its start."));
+        return false;
+    }
+    if (customRange)
+        safeProject.countInBars = 0;
 
     auto snapshot = std::make_shared<const ProjectData>(safeProject);
     SynthRenderer renderer;
     renderer.setProject(snapshot, sampleRate);
 
-    const qint64 beatUnitFrames = static_cast<qint64>(std::llround(
-        sampleRate * 60.0 / safeProject.tempoBpm * 4.0 / safeProject.beatUnit));
-    const qint64 countInFrames = static_cast<qint64>(safeProject.countInBars) *
-                                 safeProject.beatsPerBar * beatUnitFrames;
-    const double durationSeconds = safeProject.songLengthBeats() * 60.0 / safeProject.tempoBpm +
-                                   renderer.effectTailSeconds() + 0.1;
-    const qint64 frameCount = countInFrames + static_cast<qint64>(std::ceil(durationSeconds * sampleRate));
+    qint64 countInFrames = 0;
+    qint64 rangeStartFrame = 0;
+    qint64 frameCount = 0;
+    if (customRange)
+    {
+        const double framesPerBeat = sampleRate * 60.0 / safeProject.tempoBpm;
+        rangeStartFrame = static_cast<qint64>(std::llround(startBeat * framesPerBeat));
+        const qint64 rangeEndFrame = static_cast<qint64>(std::llround(endBeat * framesPerBeat));
+        frameCount = rangeEndFrame - rangeStartFrame;
+        if (frameCount <= 0)
+        {
+            setError(error, QStringLiteral("The selected beat range is shorter than one audio frame."));
+            return false;
+        }
+    }
+    else
+    {
+        const qint64 beatUnitFrames = static_cast<qint64>(std::llround(
+            sampleRate * 60.0 / safeProject.tempoBpm * 4.0 / safeProject.beatUnit));
+        countInFrames = static_cast<qint64>(safeProject.countInBars) *
+                        safeProject.beatsPerBar * beatUnitFrames;
+        const double durationSeconds = safeProject.songLengthBeats() * 60.0 / safeProject.tempoBpm +
+                                       renderer.effectTailSeconds() + 0.1;
+        frameCount = countInFrames + static_cast<qint64>(std::ceil(durationSeconds * sampleRate));
+    }
     const quint64 dataSize = static_cast<quint64>(frameCount) * bytesPerSampleFrame;
     if (dataSize > std::numeric_limits<quint32>::max() - 36)
     {
@@ -118,7 +146,10 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
         for (int index = 0; index < frames; ++index)
         {
             renderer.beginMixerFrame();
-            StereoSample rendered = renderer.renderSample(writtenFrames + index - countInFrames);
+            const qint64 projectFrame = customRange
+                ? rangeStartFrame + writtenFrames + index
+                : writtenFrames + index - countInFrames;
+            StereoSample rendered = renderer.renderSample(projectFrame);
             const StereoSample mixerOutput = renderer.finishMixerFrame();
             rendered.left += mixerOutput.left;
             rendered.right += mixerOutput.right;
@@ -149,7 +180,8 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     return true;
 }
 
-bool WavExporter::exportStems(const ProjectData& project, const QString& directoryPath, QString* error)
+bool WavExporter::exportStems(const ProjectData& project, const QString& directoryPath, QString* error,
+                              double startBeat, double endBeat)
 {
     ProjectData source = project;
     source.normalize();
@@ -201,7 +233,7 @@ bool WavExporter::exportStems(const ProjectData& project, const QString& directo
         }
 
         QString renderError;
-        if (!exportProject(stemProject, paths[trackIndex], &renderError))
+        if (!exportProject(stemProject, paths[trackIndex], &renderError, startBeat, endBeat))
         {
             for (const QString& createdPath : createdPaths)
                 QFile::remove(createdPath);

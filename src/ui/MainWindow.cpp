@@ -60,6 +60,63 @@ namespace
 {
 constexpr double automationWritePointSpacingBeats = 0.04;
 
+bool chooseExportRange(QWidget* parent, double songLengthBeats, bool& useRange,
+                       double& startBeat, double& endBeat)
+{
+    const double maximumBeat = std::max(0.25, songLengthBeats);
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("WAV export range"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* rangeEnabled = new QCheckBox(QObject::tr("Export a selected beat range"), &dialog);
+    layout->addWidget(rangeEnabled);
+
+    auto* rangeForm = new QFormLayout;
+    auto* startControl = new QDoubleSpinBox(&dialog);
+    auto* endControl = new QDoubleSpinBox(&dialog);
+    for (QDoubleSpinBox* control : {startControl, endControl})
+    {
+        control->setDecimals(3);
+        control->setSingleStep(1.0);
+        control->setRange(0.0, maximumBeat);
+        control->setSuffix(QObject::tr(" beats"));
+        control->setEnabled(false);
+    }
+    startControl->setValue(0.0);
+    endControl->setValue(maximumBeat);
+    rangeForm->addRow(QObject::tr("Start (inclusive)"), startControl);
+    rangeForm->addRow(QObject::tr("End (exclusive)"), endControl);
+    layout->addLayout(rangeForm);
+    layout->addWidget(new QLabel(QObject::tr(
+        "Range exports contain exactly the selected interval; boundary effect tails are cut."), &dialog));
+
+    QObject::connect(rangeEnabled, &QCheckBox::toggled, &dialog, [startControl, endControl](bool enabled)
+    {
+        startControl->setEnabled(enabled);
+        endControl->setEnabled(enabled);
+    });
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, rangeEnabled,
+        startControl, endControl]
+    {
+        if (rangeEnabled->isChecked() && endControl->value() <= startControl->value())
+        {
+            QMessageBox::warning(&dialog, QObject::tr("Invalid export range"),
+                                 QObject::tr("The end beat must be after the start beat."));
+            return;
+        }
+        dialog.accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    useRange = rangeEnabled->isChecked();
+    startBeat = startControl->value();
+    endBeat = endControl->value();
+    return true;
+}
+
 int drumSamplePadForPitch(int pitch)
 {
     if (pitch == 35 || pitch == 36) return 0;
@@ -4066,6 +4123,11 @@ void MainWindow::applyStepDivisionHistory(quint64 trackId, quint64 clipId, int r
 
 void MainWindow::exportAudio()
 {
+    bool useRange = false;
+    double startBeat = 0.0;
+    double endBeat = 0.0;
+    if (!chooseExportRange(this, project.songLengthBeats(), useRange, startBeat, endBeat))
+        return;
     QString path = QFileDialog::getSaveFileName(this, tr("Export arrangement to WAV"),
                                                  project.title + QStringLiteral(".wav"),
                                                  tr("WAV audio (*.wav)"));
@@ -4076,7 +4138,8 @@ void MainWindow::exportAudio()
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString error;
-    const bool success = WavExporter::exportProject(project, path, &error);
+    const bool success = WavExporter::exportProject(project, path, &error,
+        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0);
     QApplication::restoreOverrideCursor();
     if (!success)
     {
@@ -4088,6 +4151,11 @@ void MainWindow::exportAudio()
 
 void MainWindow::exportStems()
 {
+    bool useRange = false;
+    double startBeat = 0.0;
+    double endBeat = 0.0;
+    if (!chooseExportRange(this, project.songLengthBeats(), useRange, startBeat, endBeat))
+        return;
     const QString defaultDirectory = projectPath.isEmpty()
         ? QDir::homePath() : QFileInfo(projectPath).absolutePath();
     const QString directory = QFileDialog::getExistingDirectory(
@@ -4097,7 +4165,8 @@ void MainWindow::exportStems()
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString error;
-    const bool success = WavExporter::exportStems(project, directory, &error);
+    const bool success = WavExporter::exportStems(project, directory, &error,
+        useRange ? startBeat : 0.0, useRange ? endBeat : -1.0);
     QApplication::restoreOverrideCursor();
     if (!success)
     {
