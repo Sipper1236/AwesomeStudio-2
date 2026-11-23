@@ -15,7 +15,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Toggle **Ghost notes** in the piano-roll toolbar to see faint, non-editable notes from other MIDI clips on the same track while editing the selected clip.
 - Select chord notes with matching start and length, then use **Edit → Arpeggiate selected chord upward** to turn them into an ascending, grid-timed note sequence. The conversion is one undoable edit.
 - Use **Edit → Strum selected chord upward** to stagger selected chord tones slightly by pitch while preserving their lengths and velocities.
-- Set the grid to quarter, eighth, sixteenth, or thirty-second notes, edit velocity, and undo or redo note edits.
+- Set straight, dotted, or triplet quarter through thirty-second note grids, edit velocity, and undo or redo note edits.
 - Play and loop the full arrangement at 20–300 BPM.
 - Enable an accented metronome and set a 1, 2, or 4 bar count-in. Count-in is included in WAV renders.
 - Select an audio input and record a WAV take; with audio output connected, the take starts after count-in, then appears as a new Playlist track. Recording also works without output, starting immediately.

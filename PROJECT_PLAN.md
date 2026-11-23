@@ -15,6 +15,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Buildable desktop application and event loop
 - [x] Piano-roll note entry, movement, resizing, deletion, and velocity editing
 - [x] Quantize selected or all piano-roll note starts to the current snap grid
+- [x] Straight, dotted, and triplet piano-roll snap divisions
 - [x] Highlight selectable key/scale pitches and optionally snap new piano-roll notes to the scale
 - [x] Piano-roll chord insertion for common triads, suspended chords, and sevenths
 - [x] Toggleable piano-roll ghost notes from other MIDI clips on the same track
