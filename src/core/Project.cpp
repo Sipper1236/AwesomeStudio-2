@@ -571,6 +571,8 @@ void ProjectData::normalize()
             track.secondOscillatorMix = 0.5f;
         track.secondOscillatorDetuneCents = std::clamp(track.secondOscillatorDetuneCents, -100.0f, 100.0f);
         track.secondOscillatorMix = std::clamp(track.secondOscillatorMix, 0.0f, 1.0f);
+        track.synthFilterType = static_cast<SynthFilterType>(
+            std::clamp(static_cast<int>(track.synthFilterType), 0, 3));
         if (!std::isfinite(track.synthFilterCutoffHz))
             track.synthFilterCutoffHz = 20000.0f;
         if (!std::isfinite(track.synthFilterResonance))

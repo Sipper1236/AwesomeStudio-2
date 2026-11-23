@@ -210,6 +210,7 @@ private:
     QDoubleSpinBox* secondOscillatorDetuneControl = nullptr;
     QDoubleSpinBox* secondOscillatorMixControl = nullptr;
     QCheckBox* synthFilterEnabledControl = nullptr;
+    QComboBox* synthFilterTypeControl = nullptr;
     QDoubleSpinBox* synthFilterCutoffControl = nullptr;
     QDoubleSpinBox* synthFilterResonanceControl = nullptr;
     QComboBox* timeSignatureControl = nullptr;

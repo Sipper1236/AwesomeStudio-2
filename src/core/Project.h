@@ -15,6 +15,14 @@ enum class SynthWaveform
     Square
 };
 
+enum class SynthFilterType
+{
+    LowPass,
+    HighPass,
+    BandPass,
+    Notch
+};
+
 enum class InstrumentType
 {
     Synth,
@@ -263,6 +271,7 @@ struct InstrumentTrack
     float secondOscillatorDetuneCents = 0.0f;
     float secondOscillatorMix = 0.5f;
     bool synthFilterEnabled = false;
+    SynthFilterType synthFilterType = SynthFilterType::LowPass;
     float synthFilterCutoffHz = 20000.0f;
     float synthFilterResonance = 0.707f;
     float attackSeconds = 0.008f;

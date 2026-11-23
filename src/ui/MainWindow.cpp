@@ -2061,8 +2061,14 @@ void MainWindow::createDocks()
     auto* synthFilterGroup = new QGroupBox(tr("SYNTH FILTER"), browser);
     synthFilterPanel = synthFilterGroup;
     auto* synthFilterForm = new QFormLayout(synthFilterGroup);
-    synthFilterEnabledControl = new QCheckBox(tr("Enable low-pass filter"), synthFilterGroup);
+    synthFilterEnabledControl = new QCheckBox(tr("Enable filter"), synthFilterGroup);
     synthFilterForm->addRow(synthFilterEnabledControl);
+    synthFilterTypeControl = new QComboBox(synthFilterGroup);
+    synthFilterTypeControl->addItem(tr("Low-pass"), static_cast<int>(SynthFilterType::LowPass));
+    synthFilterTypeControl->addItem(tr("High-pass"), static_cast<int>(SynthFilterType::HighPass));
+    synthFilterTypeControl->addItem(tr("Band-pass"), static_cast<int>(SynthFilterType::BandPass));
+    synthFilterTypeControl->addItem(tr("Notch"), static_cast<int>(SynthFilterType::Notch));
+    synthFilterForm->addRow(tr("Type"), synthFilterTypeControl);
     synthFilterCutoffControl = new QDoubleSpinBox(synthFilterGroup);
     synthFilterCutoffControl->setRange(20.0, 20000.0);
     synthFilterCutoffControl->setDecimals(0);
@@ -2077,9 +2083,17 @@ void MainWindow::createDocks()
     connect(synthFilterEnabledControl, &QCheckBox::toggled, this,
             [this](bool enabled) { setSelectedSynthFilter(0, enabled ? 1.0 : 0.0); });
     connect(synthFilterEnabledControl, &QCheckBox::toggled,
+            synthFilterTypeControl, &QWidget::setEnabled);
+    connect(synthFilterEnabledControl, &QCheckBox::toggled,
             synthFilterCutoffControl, &QWidget::setEnabled);
     connect(synthFilterEnabledControl, &QCheckBox::toggled,
             synthFilterResonanceControl, &QWidget::setEnabled);
+    connect(synthFilterTypeControl, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index)
+    {
+        if (index >= 0)
+            setSelectedSynthFilter(3, synthFilterTypeControl->itemData(index).toInt());
+    });
     connect(synthFilterCutoffControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
             [this](double value) { setSelectedSynthFilter(1, value); });
     connect(synthFilterResonanceControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
@@ -2680,6 +2694,7 @@ void MainWindow::refreshProjectUi()
     const QSignalBlocker secondOscillatorDetuneBlocker(secondOscillatorDetuneControl);
     const QSignalBlocker secondOscillatorMixBlocker(secondOscillatorMixControl);
     const QSignalBlocker synthFilterEnabledBlocker(synthFilterEnabledControl);
+    const QSignalBlocker synthFilterTypeBlocker(synthFilterTypeControl);
     const QSignalBlocker synthFilterCutoffBlocker(synthFilterCutoffControl);
     const QSignalBlocker synthFilterResonanceBlocker(synthFilterResonanceControl);
     const int waveformIndex = track == nullptr ? 0 :
@@ -2704,6 +2719,10 @@ void MainWindow::refreshProjectUi()
     const bool synthFilterEnabled = synthTrackSelected && track->synthFilterEnabled;
     synthFilterEnabledControl->setChecked(synthFilterEnabled);
     synthFilterEnabledControl->setEnabled(synthTrackSelected);
+    const int synthFilterTypeIndex = track == nullptr ? 0 :
+        synthFilterTypeControl->findData(static_cast<int>(track->synthFilterType));
+    synthFilterTypeControl->setCurrentIndex(std::max(0, synthFilterTypeIndex));
+    synthFilterTypeControl->setEnabled(synthFilterEnabled);
     synthFilterCutoffControl->setValue(track == nullptr ? 20000.0 : track->synthFilterCutoffHz);
     synthFilterResonanceControl->setValue(track == nullptr ? 0.707 : track->synthFilterResonance);
     synthFilterCutoffControl->setEnabled(synthFilterEnabled);
@@ -4884,6 +4903,8 @@ void MainWindow::setSelectedSynthFilter(int parameter, double value)
         case 0: track->synthFilterEnabled = value >= 0.5; break;
         case 1: track->synthFilterCutoffHz = static_cast<float>(std::clamp(value, 20.0, 20000.0)); break;
         case 2: track->synthFilterResonance = static_cast<float>(std::clamp(value, 0.1, 10.0)); break;
+        case 3: track->synthFilterType = static_cast<SynthFilterType>(
+                    std::clamp(static_cast<int>(value), 0, 3)); break;
         default: return;
     }
     audioEngine.setProject(project);

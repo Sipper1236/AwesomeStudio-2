@@ -260,6 +260,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             instrumentFilter.resonance = track.synthFilterResonance;
             QVector<MixerEffect> instrumentFilterChain{instrumentFilter};
             prepareEffectChain(instrumentFilterChain, trackInstrumentFilterStates[trackIndex]);
+            if (!trackInstrumentFilterStates[trackIndex].empty())
+                configureFilter(trackInstrumentFilterStates[trackIndex].front(), track.synthFilterType);
         }
         if (track.instrumentType == InstrumentType::ClapInstrument && !track.clapPluginId.isEmpty())
         {
@@ -1000,19 +1002,7 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
             }
         }
         else if (effect.type == MixerEffectType::LowPass)
-        {
-            const double cutoff = std::clamp(static_cast<double>(effect.cutoffHz), 20.0,
-                                              std::max(20.0, sampleRate * 0.49));
-            const double omega = twoPi * cutoff / sampleRate;
-            const double cosine = std::cos(omega);
-            const double alpha = std::sin(omega) / (2.0 * std::max(0.1f, effect.resonance));
-            const double a0 = 1.0 + alpha;
-            state.filterB0 = static_cast<float>(((1.0 - cosine) * 0.5) / a0);
-            state.filterB1 = static_cast<float>((1.0 - cosine) / a0);
-            state.filterB2 = state.filterB0;
-            state.filterA1 = static_cast<float>((-2.0 * cosine) / a0);
-            state.filterA2 = static_cast<float>((1.0 - alpha) / a0);
-        }
+            configureFilter(state, SynthFilterType::LowPass);
         else if (effect.enabled && effect.wet > 0.0f &&
                  effect.type == MixerEffectType::Lv2Plugin && !effect.pluginUri.isEmpty())
         {
@@ -1038,6 +1028,43 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
         }
         states.push_back(std::move(state));
     }
+}
+
+void SynthRenderer::configureFilter(EffectState& state, SynthFilterType type)
+{
+    const double cutoff = std::clamp(static_cast<double>(state.settings.cutoffHz), 20.0,
+                                     std::max(20.0, sampleRate * 0.49));
+    const double omega = twoPi * cutoff / sampleRate;
+    const double cosine = std::cos(omega);
+    const double alpha = std::sin(omega) /
+        (2.0 * std::max(0.1f, state.settings.resonance));
+    const double a0 = 1.0 + alpha;
+    switch (type)
+    {
+        case SynthFilterType::HighPass:
+            state.filterB0 = static_cast<float>(((1.0 + cosine) * 0.5) / a0);
+            state.filterB1 = static_cast<float>(-(1.0 + cosine) / a0);
+            state.filterB2 = state.filterB0;
+            break;
+        case SynthFilterType::BandPass:
+            state.filterB0 = static_cast<float>((alpha) / a0);
+            state.filterB1 = 0.0f;
+            state.filterB2 = -state.filterB0;
+            break;
+        case SynthFilterType::Notch:
+            state.filterB0 = static_cast<float>(1.0 / a0);
+            state.filterB1 = static_cast<float>((-2.0 * cosine) / a0);
+            state.filterB2 = state.filterB0;
+            break;
+        case SynthFilterType::LowPass:
+        default:
+            state.filterB0 = static_cast<float>(((1.0 - cosine) * 0.5) / a0);
+            state.filterB1 = static_cast<float>((1.0 - cosine) / a0);
+            state.filterB2 = state.filterB0;
+            break;
+    }
+    state.filterA1 = static_cast<float>((-2.0 * cosine) / a0);
+    state.filterA2 = static_cast<float>((1.0 - alpha) / a0);
 }
 
 void SynthRenderer::resetEffectChain(std::vector<EffectState>& states)

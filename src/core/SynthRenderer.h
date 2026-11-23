@@ -195,6 +195,7 @@ private:
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
     void resetTrackEqualizers();
     void prepareEffectChain(const QVector<MixerEffect>& settings, std::vector<EffectState>& states);
+    void configureFilter(EffectState& state, SynthFilterType type);
     void resetEffectChain(std::vector<EffectState>& states);
     bool effectChainHasTail(const std::vector<EffectState>& states) const;
     void captureEffectStates(const std::vector<EffectState>& states,
