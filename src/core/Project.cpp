@@ -453,6 +453,9 @@ void ProjectData::normalize()
         {
             if (drumSample.source != nullptr && drumSample.path.isEmpty())
                 drumSample.path = drumSample.source->path;
+            if (drumSample.highVelocitySource != nullptr && drumSample.highVelocityPath.isEmpty())
+                drumSample.highVelocityPath = drumSample.highVelocitySource->path;
+            drumSample.highVelocityThreshold = std::clamp(drumSample.highVelocityThreshold, 1, 127);
             if (!std::isfinite(drumSample.tuningSemitones))
                 drumSample.tuningSemitones = 0.0f;
             if (!std::isfinite(drumSample.startPositionPercent))

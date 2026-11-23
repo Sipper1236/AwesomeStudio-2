@@ -451,10 +451,11 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                 if (track.instrumentType == InstrumentType::DrumRack)
                 {
                     const int pad = drumPadForPitch(note.pitch);
-                    if (pad >= 0 && !track.drumSamples[static_cast<size_t>(pad)].path.isEmpty())
+                    if (pad >= 0 && track.drumSamples[static_cast<size_t>(pad)].hasSampleAssignment())
                     {
+                        const DrumPadSample& padSample = track.drumSamples[static_cast<size_t>(pad)];
                         const std::shared_ptr<const AudioAsset>& source =
-                            track.drumSamples[static_cast<size_t>(pad)].source;
+                            padSample.sourceForVelocity(note.velocity);
                         if (source != nullptr && source->sampleRate > 0 &&
                             source->channelCount > 0 && source->frameCount() > 0)
                         {
@@ -464,7 +465,6 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                             region.source = source;
                             region.trackIndex = trackIndex;
                             region.drumSamplePlayback = true;
-                            const DrumPadSample& padSample = track.drumSamples[static_cast<size_t>(pad)];
                             region.drumSampleLoop = padSample.loopEnabled;
                             region.probabilityPercent = note.probabilityPercent;
                             region.probabilitySeed = probabilitySeed;

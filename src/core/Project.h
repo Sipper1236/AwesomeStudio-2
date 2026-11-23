@@ -94,9 +94,21 @@ struct DrumPadSample
 {
     QString path;
     std::shared_ptr<const AudioAsset> source;
+    QString highVelocityPath;
+    std::shared_ptr<const AudioAsset> highVelocitySource;
+    int highVelocityThreshold = 100;
     float tuningSemitones = 0.0f;
     float startPositionPercent = 0.0f;
     bool loopEnabled = false;
+
+    bool hasSampleAssignment() const { return !path.isEmpty() || !highVelocityPath.isEmpty(); }
+    const std::shared_ptr<const AudioAsset>& sourceForVelocity(int velocity) const
+    {
+        if (highVelocitySource != nullptr &&
+            (velocity >= highVelocityThreshold || source == nullptr))
+            return highVelocitySource;
+        return source;
+    }
 };
 
 struct AutomationPoint

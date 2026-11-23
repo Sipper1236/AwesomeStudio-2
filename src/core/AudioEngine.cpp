@@ -319,7 +319,7 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
         if (pad >= 0)
         {
             const DrumPadSample& sample = track.drumSamples[static_cast<size_t>(pad)];
-            event.sample = sample.source;
+            event.sample = sample.sourceForVelocity(velocity);
             event.sampleLoopEnabled = sample.loopEnabled;
             if (event.sample != nullptr && event.sample->frameCount() > 0)
             {

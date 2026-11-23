@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 29;
+constexpr int currentProjectVersion = 30;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -410,6 +410,8 @@ QJsonObject saveTrack(const InstrumentTrack& track)
              for (const DrumPadSample& sample : track.drumSamples)
                  samples.push_back(QJsonObject{
                      {QStringLiteral("path"), sample.path},
+                     {QStringLiteral("highVelocityPath"), sample.highVelocityPath},
+                     {QStringLiteral("highVelocityThreshold"), sample.highVelocityThreshold},
                      {QStringLiteral("tuningSemitones"), sample.tuningSemitones},
                      {QStringLiteral("startPositionPercent"), sample.startPositionPercent},
                      {QStringLiteral("loopEnabled"), sample.loopEnabled}
@@ -623,6 +625,19 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                 sample.startPositionPercent = static_cast<float>(startPositionPercent);
                 if (version >= 27)
                     sample.loopEnabled = sampleObject.value(QStringLiteral("loopEnabled")).toBool(false);
+                if (version >= 30)
+                {
+                    const QJsonValue highVelocityPath = sampleObject.value(QStringLiteral("highVelocityPath"));
+                    sample.highVelocityThreshold = sampleObject.value(
+                        QStringLiteral("highVelocityThreshold")).toInt(-1);
+                    if ((!highVelocityPath.isString() && !highVelocityPath.isNull()) ||
+                        sample.highVelocityThreshold < 1 || sample.highVelocityThreshold > 127)
+                    {
+                        setError(error, QStringLiteral("The drum rack contains an invalid velocity layer."));
+                        return false;
+                    }
+                    sample.highVelocityPath = highVelocityPath.toString();
+                }
             }
             else
             {
@@ -634,6 +649,7 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                 sample.path = drumSamples[index].toString();
             }
             loadAudioReference(sample.path, mediaBaseDir, media, sample.source);
+            loadAudioReference(sample.highVelocityPath, mediaBaseDir, media, sample.highVelocitySource);
         }
     }
     else if (!drumSampleValue.isUndefined() && !drumSampleValue.isNull())

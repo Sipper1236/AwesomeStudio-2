@@ -24,6 +24,7 @@ class QPushButton;
 class QProgressBar;
 class QScrollArea;
 class QSlider;
+class QSpinBox;
 class QTabWidget;
 class QTimer;
 class MidiEditor;
@@ -114,6 +115,8 @@ private:
     void finishAutomationWrite();
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
+    void importHighVelocityDrumSample(int pad);
+    void clearHighVelocityDrumSample(int pad);
     void setSelectedDrumSample(int pad, int parameter, double value);
     quint64 projectAudioBytes() const;
     std::shared_ptr<const AudioAsset> findProjectAudioAsset(const QString& path) const;
@@ -231,6 +234,9 @@ private:
     std::array<QDoubleSpinBox*, 4> drumSampleTuneControls{};
     std::array<QDoubleSpinBox*, 4> drumSampleStartControls{};
     std::array<QCheckBox*, 4> drumSampleLoopControls{};
+    std::array<QPushButton*, 4> highVelocityDrumSampleButtons{};
+    std::array<QPushButton*, 4> clearHighVelocityDrumSampleButtons{};
+    std::array<QSpinBox*, 4> highVelocityThresholdControls{};
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
     QLabel* playheadLabel = nullptr;
