@@ -1622,6 +1622,7 @@ void MainWindow::refreshMixer()
         const std::function<void(qsizetype, const std::function<void(MixerEffect&)>&)>& updateEffect,
         const std::function<void(MixerEffectType)>& appendEffect,
         const std::function<void(qsizetype)>& removeEffect,
+        const std::function<void(qsizetype, qsizetype)>& moveEffect,
         bool canAddEffect)
     {
         auto* chain = new QGroupBox(tr("Effect inserts"), parent);
@@ -1660,9 +1661,17 @@ void MainWindow::refreshMixer()
             stateLayout->setContentsMargins(0, 0, 0, 0);
             auto* enabled = new QCheckBox(tr("Enabled"), stateRow);
             enabled->setChecked(effect.enabled);
+            auto* moveUp = new QPushButton(QStringLiteral("↑"), stateRow);
+            moveUp->setEnabled(index > 0);
+            moveUp->setToolTip(tr("Move this insert earlier in the chain"));
+            auto* moveDown = new QPushButton(QStringLiteral("↓"), stateRow);
+            moveDown->setEnabled(index + 1 < effects.size());
+            moveDown->setToolTip(tr("Move this insert later in the chain"));
             auto* remove = new QPushButton(tr("Remove"), stateRow);
             stateLayout->addWidget(enabled);
             stateLayout->addStretch(1);
+            stateLayout->addWidget(moveUp);
+            stateLayout->addWidget(moveDown);
             stateLayout->addWidget(remove);
             effectForm->addRow(stateRow);
             connect(enabled, &QCheckBox::toggled, this,
@@ -1673,6 +1682,14 @@ void MainWindow::refreshMixer()
             connect(remove, &QPushButton::clicked, this, [removeEffect, index]
             {
                 removeEffect(index);
+            });
+            connect(moveUp, &QPushButton::clicked, this, [moveEffect, index]
+            {
+                moveEffect(index, index - 1);
+            });
+            connect(moveDown, &QPushButton::clicked, this, [moveEffect, index]
+            {
+                moveEffect(index, index + 1);
             });
             addFloatControl(effectForm, tr("Wet"), effect.wet * 100.0f, 0.0f, 100.0f,
                             1.0f, 0, QStringLiteral("%"), index, updateEffect,
@@ -1796,6 +1813,17 @@ void MainWindow::refreshMixer()
             {
                 if (index < 0 || index >= project.masterEffects.size()) return;
                 project.masterEffects.removeAt(index);
+                commitEffectChange();
+                refreshMixer();
+            });
+        },
+        [this, commitEffectChange](qsizetype from, qsizetype to)
+        {
+            QTimer::singleShot(0, this, [this, commitEffectChange, from, to]
+            {
+                if (from < 0 || from >= project.masterEffects.size() ||
+                    to < 0 || to >= project.masterEffects.size()) return;
+                project.masterEffects.move(from, to);
                 commitEffectChange();
                 refreshMixer();
             });
@@ -2016,6 +2044,21 @@ void MainWindow::refreshMixer()
                         return;
                     }
                 });
+            },
+            [this, commitEffectChange, busId](qsizetype from, qsizetype to)
+            {
+                QTimer::singleShot(0, this, [this, commitEffectChange, busId, from, to]
+                {
+                    for (MixerBus& bus : project.buses)
+                    {
+                        if (bus.id != busId || from < 0 || from >= bus.effects.size() ||
+                            to < 0 || to >= bus.effects.size()) continue;
+                        bus.effects.move(from, to);
+                        commitEffectChange();
+                        refreshMixer();
+                        return;
+                    }
+                });
             }, effectCount() < 48);
 
         auto* removeBusButton = new QPushButton(tr("Remove bus"), group);
@@ -2201,6 +2244,18 @@ void MainWindow::refreshMixer()
                     InstrumentTrack* track = project.findTrack(trackId);
                     if (track == nullptr || index < 0 || index >= track->effects.size()) return;
                     track->effects.removeAt(index);
+                    commitEffectChange();
+                    refreshMixer();
+                });
+            },
+            [this, commitEffectChange, trackId](qsizetype from, qsizetype to)
+            {
+                QTimer::singleShot(0, this, [this, commitEffectChange, trackId, from, to]
+                {
+                    InstrumentTrack* track = project.findTrack(trackId);
+                    if (track == nullptr || from < 0 || from >= track->effects.size() ||
+                        to < 0 || to >= track->effects.size()) return;
+                    track->effects.move(from, to);
                     commitEffectChange();
                     refreshMixer();
                 });
