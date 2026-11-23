@@ -48,6 +48,7 @@
 #include <QStringList>
 #include <QTabWidget>
 #include <QTemporaryFile>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -2092,6 +2093,8 @@ void MainWindow::createMenus()
             saveToPath(path);
         }
     });
+    fileMenu->addAction(tr("Save portable project copy…"), this,
+                        &MainWindow::savePortableProjectCopy);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("Import WAV audio…"), this, &MainWindow::importAudio);
     fileMenu->addAction(tr("Import MIDI…"), this, &MainWindow::importMidi);
@@ -4596,6 +4599,175 @@ bool MainWindow::saveToPath(const QString& path)
     else
         statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(savePath).fileName()), 2500);
     return true;
+}
+
+void MainWindow::savePortableProjectCopy()
+{
+    QString savePath = QFileDialog::getSaveFileName(this, tr("Save portable project copy"), projectPath,
+                                                    tr("Awesome Studio project (*.aws)"));
+    if (savePath.isEmpty())
+        return;
+    if (QFileInfo(savePath).suffix().isEmpty())
+        savePath += QStringLiteral(".aws");
+    if (!projectPath.isEmpty() &&
+        QDir::cleanPath(QFileInfo(savePath).absoluteFilePath()) ==
+            QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath()))
+    {
+        QMessageBox::warning(this, tr("Choose a different project path"),
+                             tr("A portable copy needs a different file name from the open project."));
+        return;
+    }
+
+    finishAutomationWrite();
+    if (audioRecorder || recordingPending)
+        finishAudioRecording(true);
+    if (midiRecordingActive || midiRecordingPending)
+        finishMidiRecording(true);
+
+    ProjectData portable = project;
+    portable.normalize();
+    const QFileInfo targetInfo(savePath);
+    const QString outputDirectoryPath = targetInfo.absolutePath();
+    const QString baseName = targetInfo.completeBaseName().isEmpty()
+        ? QStringLiteral("project") : targetInfo.completeBaseName();
+    const QString mediaDirectoryName = baseName + QStringLiteral("_media");
+    const QString finalMediaDirectory = QDir(outputDirectoryPath).filePath(mediaDirectoryName);
+    if (QFileInfo::exists(finalMediaDirectory))
+    {
+        QMessageBox::warning(this, tr("Media folder already exists"),
+                             tr("The portable copy cannot replace the existing folder %1.")
+                                 .arg(finalMediaDirectory));
+        return;
+    }
+
+    QTemporaryDir staging(QDir(outputDirectoryPath).filePath(
+        QStringLiteral(".awesome-studio-media-XXXXXX")));
+    if (!staging.isValid())
+    {
+        QMessageBox::critical(this, tr("Could not prepare portable copy"), staging.errorString());
+        return;
+    }
+    const QString stagedMediaDirectory = staging.filePath(mediaDirectoryName);
+    if (!QDir().mkpath(stagedMediaDirectory))
+    {
+        QMessageBox::critical(this, tr("Could not prepare portable copy"),
+                              tr("The temporary media folder could not be created."));
+        return;
+    }
+
+    QHash<QString, QString> copiedPaths;
+    int copiedAssetCount = 0;
+    int unavailableAssetCount = 0;
+    QString copyError;
+    const auto collectPath = [&](QString& storedPath)
+    {
+        if (storedPath.isEmpty())
+            return true;
+        QString sourcePath = storedPath;
+        if (QDir::isRelativePath(sourcePath))
+        {
+            const QString sourceBase = projectPath.isEmpty()
+                ? QDir::currentPath() : QFileInfo(projectPath).absolutePath();
+            sourcePath = QDir(sourceBase).absoluteFilePath(sourcePath);
+        }
+        const QFileInfo sourceInfo(sourcePath);
+        if (!sourceInfo.exists() || !sourceInfo.isFile())
+        {
+            ++unavailableAssetCount;
+            storedPath = sourceInfo.absoluteFilePath();
+            return true;
+        }
+        QString cacheKey = sourceInfo.canonicalFilePath();
+        if (cacheKey.isEmpty())
+            cacheKey = sourceInfo.absoluteFilePath();
+        const auto existing = copiedPaths.constFind(cacheKey);
+        if (existing != copiedPaths.cend())
+        {
+            storedPath = *existing;
+            return true;
+        }
+
+        const QString fileName = sourceInfo.fileName().isEmpty()
+            ? QStringLiteral("audio.wav") : sourceInfo.fileName();
+        const QString relativePath = QStringLiteral("%1/%2_%3")
+            .arg(mediaDirectoryName)
+            .arg(copiedAssetCount + 1, 4, 10, QLatin1Char('0'))
+            .arg(fileName);
+        const QString stagedPath = staging.filePath(relativePath);
+        if (!QDir().mkpath(QFileInfo(stagedPath).absolutePath()) ||
+            !QFile::copy(sourceInfo.absoluteFilePath(), stagedPath))
+        {
+            copyError = tr("Could not copy %1 into the portable media folder.")
+                .arg(sourceInfo.fileName());
+            return false;
+        }
+        copiedPaths.insert(cacheKey, relativePath);
+        storedPath = relativePath;
+        ++copiedAssetCount;
+        return true;
+    };
+
+    bool collected = true;
+    for (InstrumentTrack& track : portable.tracks)
+    {
+        for (MidiClip& clip : track.clips)
+        {
+            if (!collectPath(clip.audioSourcePath))
+            {
+                collected = false;
+                break;
+            }
+        }
+        if (!collected)
+            break;
+        for (DrumPadSample& sample : track.drumSamples)
+        {
+            if (!collectPath(sample.path) || !collectPath(sample.lowVelocityPath) ||
+                !collectPath(sample.highVelocityPath))
+            {
+                collected = false;
+                break;
+            }
+        }
+        if (!collected)
+            break;
+    }
+    if (!collected)
+    {
+        QMessageBox::critical(this, tr("Could not collect project media"), copyError);
+        return;
+    }
+    portable.title = baseName;
+
+    bool mediaInstalled = false;
+    if (copiedAssetCount > 0)
+    {
+        QDir outputDirectory(outputDirectoryPath);
+        const QString stagedRelative = outputDirectory.relativeFilePath(stagedMediaDirectory);
+        if (!outputDirectory.rename(stagedRelative, mediaDirectoryName))
+        {
+            QMessageBox::critical(this, tr("Could not install portable media"),
+                                  tr("The media folder could not be moved into the destination."));
+            return;
+        }
+        mediaInstalled = true;
+    }
+
+    QString saveError;
+    if (!ProjectFile::save(savePath, portable, &saveError))
+    {
+        if (mediaInstalled)
+            QDir(finalMediaDirectory).removeRecursively();
+        QMessageBox::critical(this, tr("Could not save portable copy"), saveError);
+        return;
+    }
+
+    const QString summary = unavailableAssetCount == 0
+        ? tr("Saved portable copy with %1 media file(s): %2")
+              .arg(copiedAssetCount).arg(savePath)
+        : tr("Saved portable copy with %1 media file(s); %2 unavailable source(s) remain linked by path: %3")
+              .arg(copiedAssetCount).arg(unavailableAssetCount).arg(savePath);
+    statusBar()->showMessage(summary, 8000);
 }
 
 void MainWindow::autosaveProject()

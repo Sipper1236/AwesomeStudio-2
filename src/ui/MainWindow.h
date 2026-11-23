@@ -129,6 +129,7 @@ private:
     MidiClip* selectedClip();
     bool maybeSave();
     bool saveToPath(const QString& path);
+    void savePortableProjectCopy();
     void autosaveProject();
     void updateProjectTitle();
     void refreshDirtyState();
