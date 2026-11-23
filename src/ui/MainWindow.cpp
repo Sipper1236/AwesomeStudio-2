@@ -7940,7 +7940,7 @@ void MainWindow::beginMidiControllerLearn(int target)
         midiControllerListenAction->setChecked(true);
     }
     pendingMidiControllerTarget = target;
-    statusBar()->showMessage(tr("Move a MIDI CC control to assign it to the selected target…"), 5000);
+    statusBar()->showMessage(tr("Move a MIDI CC or NRPN control to assign it to the selected target…"), 5000);
 }
 
 void MainWindow::clearMidiControllerMapping(int target)
@@ -7966,8 +7966,12 @@ void MainWindow::loadMidiControllerMappings()
         const QString prefix = QString::number(target);
         const int controller = settings.value(prefix + QStringLiteral("/controller"), -1).toInt();
         const int channel = settings.value(prefix + QStringLiteral("/channel"), -1).toInt();
-        if (controller >= 0 && controller <= 127 && channel >= 0 && channel <= 15)
-            midiControllerMappings.insert(target, {channel, controller});
+        const bool nrpn = settings.value(prefix + QStringLiteral("/nrpn"), false).toBool();
+        const int maximumNumber = nrpn ? 16383 : 127;
+        if (controller >= 0 && controller <= maximumNumber && channel >= 0 && channel <= 15)
+        {
+            midiControllerMappings.insert(target, {channel, controller, nrpn});
+        }
     }
     settings.endGroup();
 }
@@ -7983,27 +7987,35 @@ void MainWindow::saveMidiControllerMappings() const
         const QString prefix = QString::number(target);
         settings.setValue(prefix + QStringLiteral("/controller"), mapping.controller);
         settings.setValue(prefix + QStringLiteral("/channel"), mapping.channel);
+        settings.setValue(prefix + QStringLiteral("/nrpn"), mapping.nrpn);
     }
     settings.endGroup();
     settings.sync();
 }
 
-void MainWindow::handleMidiControlChange(int channel, int controller, int value)
+void MainWindow::handleMidiControlChange(int channel, int controller, int value, bool nrpn)
 {
     if (pendingMidiControllerTarget >= 0)
     {
         const int target = pendingMidiControllerTarget;
         pendingMidiControllerTarget = -1;
-        midiControllerMappings.insert(target, {channel, controller});
+        midiControllerMappings.insert(target, {channel, controller, nrpn});
         saveMidiControllerMappings();
-        statusBar()->showMessage(tr("Mapped MIDI CC %1 on channel %2").arg(controller).arg(channel + 1), 3000);
+        statusBar()->showMessage(nrpn
+            ? tr("Mapped MIDI NRPN %1 on channel %2").arg(controller).arg(channel + 1)
+            : tr("Mapped MIDI CC %1 on channel %2").arg(controller).arg(channel + 1), 3000);
         return;
     }
 
     for (auto it = midiControllerMappings.cbegin(); it != midiControllerMappings.cend(); ++it)
     {
-        if (it->channel == channel && it->controller == controller)
-            applyMidiControllerTarget(it.key(), value);
+        if (it->channel == channel && it->controller == controller && it->nrpn == nrpn)
+        {
+            const int normalizedValue = nrpn
+                ? static_cast<int>(std::lround(std::clamp(value, 0, 16383) * 127.0 / 16383.0))
+                : std::clamp(value, 0, 127);
+            applyMidiControllerTarget(it.key(), normalizedValue);
+        }
     }
 }
 
@@ -8600,6 +8612,13 @@ void MainWindow::pollMidiInput()
 
     for (const MidiInputEvent& event : events)
     {
+        if (event.registeredParameter)
+        {
+            handleMidiControlChange(event.channel, event.parameterNumber,
+                                    event.parameterValue, true);
+            continue;
+        }
+
         if (event.controlChange)
         {
             handleMidiControlChange(event.channel, event.controller, event.value);

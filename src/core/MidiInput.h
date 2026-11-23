@@ -22,6 +22,9 @@ struct MidiInputEvent
     int controller = 0;
     int value = 0;
     bool pitchBend = false;
+    bool registeredParameter = false;
+    int parameterNumber = 0;
+    int parameterValue = 0;
 };
 
 class MidiInput

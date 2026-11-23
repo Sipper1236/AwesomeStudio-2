@@ -3,6 +3,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 
 #ifdef AWESOME_STUDIO_HAS_ALSA
 #include <alsa/asoundlib.h>
@@ -15,6 +16,18 @@ struct MidiInput::Impl
 #ifdef AWESOME_STUDIO_HAS_ALSA
     snd_seq_t* sequencer = nullptr;
     int localPort = -1;
+    std::array<int, 16> nrpnMsb;
+    std::array<int, 16> nrpnLsb;
+    std::array<int, 16> nrpnDataMsb{};
+    std::array<int, 16> nrpnDataLsb{};
+
+    Impl()
+    {
+        nrpnMsb.fill(-1);
+        nrpnLsb.fill(-1);
+        nrpnDataMsb.fill(0);
+        nrpnDataLsb.fill(0);
+    }
 #endif
     QString error;
 };
@@ -150,6 +163,10 @@ void MidiInput::disconnect()
         impl->sequencer = nullptr;
         impl->localPort = -1;
     }
+    impl->nrpnMsb.fill(-1);
+    impl->nrpnLsb.fill(-1);
+    impl->nrpnDataMsb.fill(0);
+    impl->nrpnDataLsb.fill(0);
 #endif
 }
 
@@ -186,11 +203,49 @@ QVector<MidiInputEvent> MidiInput::readAvailable()
         else if (event->type == SND_SEQ_EVENT_CONTROLLER)
         {
             MidiInputEvent control;
-            control.channel = event->data.control.channel;
-            control.controlChange = true;
-            control.controller = event->data.control.param;
-            control.value = event->data.control.value;
-            events.push_back(control);
+            control.channel = std::clamp(static_cast<int>(event->data.control.channel), 0, 15);
+            control.controller = std::clamp(static_cast<int>(event->data.control.param), 0, 127);
+            control.value = std::clamp(event->data.control.value, 0, 127);
+            const size_t channel = static_cast<size_t>(control.channel);
+            if (control.controller == 101 || control.controller == 100)
+            {
+                impl->nrpnMsb[channel] = -1;
+                impl->nrpnLsb[channel] = -1;
+                impl->nrpnDataMsb[channel] = 0;
+                impl->nrpnDataLsb[channel] = 0;
+            }
+            else if (control.controller == 99)
+            {
+                impl->nrpnMsb[channel] = control.value;
+                impl->nrpnLsb[channel] = -1;
+                impl->nrpnDataMsb[channel] = 0;
+                impl->nrpnDataLsb[channel] = 0;
+            }
+            else if (control.controller == 98)
+            {
+                impl->nrpnLsb[channel] = control.value;
+                impl->nrpnDataMsb[channel] = 0;
+                impl->nrpnDataLsb[channel] = 0;
+            }
+            else if ((control.controller == 6 || control.controller == 38) &&
+                     impl->nrpnMsb[channel] >= 0 && impl->nrpnLsb[channel] >= 0)
+            {
+                if (control.controller == 6)
+                    impl->nrpnDataMsb[channel] = control.value;
+                else
+                    impl->nrpnDataLsb[channel] = control.value;
+                control.registeredParameter = true;
+                control.parameterNumber = (impl->nrpnMsb[channel] << 7) |
+                                          impl->nrpnLsb[channel];
+                control.parameterValue = (impl->nrpnDataMsb[channel] << 7) |
+                                         impl->nrpnDataLsb[channel];
+                events.push_back(control);
+            }
+            else
+            {
+                control.controlChange = true;
+                events.push_back(control);
+            }
         }
         else if (event->type == SND_SEQ_EVENT_PITCHBEND)
         {

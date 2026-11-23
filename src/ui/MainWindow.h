@@ -186,7 +186,7 @@ private:
     void clearMidiControllerMapping(int target);
     void loadMidiControllerMappings();
     void saveMidiControllerMappings() const;
-    void handleMidiControlChange(int channel, int controller, int value);
+    void handleMidiControlChange(int channel, int controller, int value, bool nrpn = false);
     void applyMidiControllerTarget(int target, int value);
     double currentMidiRecordingBeat();
 
@@ -205,6 +205,7 @@ private:
     {
         int channel = -1;
         int controller = -1;
+        bool nrpn = false;
     };
 
     AudioEngine& audioEngine;
