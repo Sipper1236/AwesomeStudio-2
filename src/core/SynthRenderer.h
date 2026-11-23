@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Lv2AudioEffect.h"
 #include "Project.h"
 
 #include <array>
@@ -145,6 +146,7 @@ private:
         std::array<float, 2> filterX2{};
         std::array<float, 2> filterY1{};
         std::array<float, 2> filterY2{};
+        std::unique_ptr<Lv2AudioEffectInstance> lv2Effect;
         float filterB0 = 1.0f;
         float filterB1 = 0.0f;
         float filterB2 = 0.0f;

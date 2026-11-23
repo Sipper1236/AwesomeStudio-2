@@ -61,7 +61,7 @@ void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBud
     for (MixerEffect& effect : effects)
     {
         effect.type = static_cast<MixerEffectType>(
-            std::clamp(static_cast<int>(effect.type), 0, 3));
+            std::clamp(static_cast<int>(effect.type), 0, 4));
         if (!std::isfinite(effect.wet)) effect.wet = 0.25f;
         if (!std::isfinite(effect.delayMs)) effect.delayMs = 250.0f;
         if (!std::isfinite(effect.feedback)) effect.feedback = 0.3f;
@@ -86,6 +86,10 @@ void normalizeEffectChain(QVector<MixerEffect>& effects, qsizetype& remainingBud
         effect.makeupDb = std::clamp(effect.makeupDb, -12.0f, 24.0f);
         effect.cutoffHz = std::clamp(effect.cutoffHz, 20.0f, 20000.0f);
         effect.resonance = std::clamp(effect.resonance, 0.1f, 10.0f);
+        if (effect.pluginParameterValues.size() > 256)
+            effect.pluginParameterValues.resize(256);
+        for (float& value : effect.pluginParameterValues)
+            if (!std::isfinite(value)) value = 0.0f;
     }
 }
 }
@@ -94,7 +98,8 @@ MixerEffect defaultMixerEffect(MixerEffectType type)
 {
     MixerEffect effect;
     effect.type = type;
-    if (type == MixerEffectType::Compressor || type == MixerEffectType::LowPass)
+    if (type == MixerEffectType::Compressor || type == MixerEffectType::LowPass ||
+        type == MixerEffectType::Lv2Plugin)
         effect.wet = 1.0f;
     return effect;
 }

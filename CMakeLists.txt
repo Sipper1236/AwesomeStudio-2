@@ -12,6 +12,7 @@ if(UNIX AND NOT APPLE)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(ALSA QUIET IMPORTED_TARGET alsa)
+        pkg_check_modules(LILV QUIET IMPORTED_TARGET lilv-0)
     endif()
 endif()
 
@@ -25,6 +26,8 @@ add_executable(AwesomeStudio
     src/core/ProjectFile.h
     src/core/AudioFile.cpp
     src/core/AudioFile.h
+    src/core/Lv2AudioEffect.cpp
+    src/core/Lv2AudioEffect.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
     src/core/MidiFile.cpp
@@ -52,6 +55,11 @@ target_compile_features(AwesomeStudio PRIVATE cxx_std_17)
 if(TARGET PkgConfig::ALSA)
     target_link_libraries(AwesomeStudio PRIVATE PkgConfig::ALSA)
     target_compile_definitions(AwesomeStudio PRIVATE AWESOME_STUDIO_HAS_ALSA=1)
+endif()
+
+if(TARGET PkgConfig::LILV)
+    target_link_libraries(AwesomeStudio PRIVATE PkgConfig::LILV)
+    target_compile_definitions(AwesomeStudio PRIVATE AWESOME_STUDIO_HAS_LILV=1)
 endif()
 
 if(MSVC)

@@ -232,6 +232,39 @@ WavExportOptions& previousWavExportOptions()
     return options;
 }
 
+bool chooseMixerEffect(QWidget* parent, MixerEffectType type, MixerEffect& effect, QString& error)
+{
+    effect = defaultMixerEffect(type);
+    if (type != MixerEffectType::Lv2Plugin)
+        return true;
+
+    const QVector<Lv2EffectDescriptor> plugins = Lv2AudioEffectInstance::availableEffects();
+    if (plugins.isEmpty())
+    {
+        error = QObject::tr("No real-time-safe LV2 audio effects are installed.");
+        return false;
+    }
+    QStringList choices;
+    choices.reserve(plugins.size());
+    for (const Lv2EffectDescriptor& plugin : plugins)
+        choices.push_back(QStringLiteral("%1 — %2").arg(plugin.name, plugin.uri));
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(parent, QObject::tr("Add LV2 effect"),
+        QObject::tr("Audio effect"), choices, 0, false, &accepted);
+    if (!accepted)
+        return false;
+    const int index = choices.indexOf(selected);
+    if (index < 0)
+        return false;
+
+    const Lv2EffectDescriptor& plugin = plugins[index];
+    effect.pluginUri = plugin.uri;
+    effect.pluginName = plugin.name;
+    for (const Lv2EffectParameter& parameter : plugin.parameters)
+        effect.pluginParameterValues.push_back(parameter.defaultValue);
+    return true;
+}
+
 bool chooseExportRange(QWidget* parent, double songLengthBeats, bool& useRange,
                        double& startBeat, double& endBeat)
 {
@@ -2428,7 +2461,9 @@ void MainWindow::refreshMixer()
             const MixerEffect effect = effects[index];
             const QString effectName = effect.type == MixerEffectType::Delay ? tr("Delay") :
                 effect.type == MixerEffectType::Reverb ? tr("Reverb") :
-                effect.type == MixerEffectType::Compressor ? tr("Compressor") : tr("Low-pass filter");
+                effect.type == MixerEffectType::Compressor ? tr("Compressor") :
+                effect.type == MixerEffectType::LowPass ? tr("Low-pass filter") :
+                effect.pluginName.isEmpty() ? tr("LV2 plug-in") : effect.pluginName;
             auto* effectBox = new QGroupBox(tr("%1. %2").arg(index + 1).arg(effectName), chain);
             auto* effectForm = new QFormLayout(effectBox);
             auto* stateRow = new QWidget(effectBox);
@@ -2505,6 +2540,46 @@ void MainWindow::refreshMixer()
                                 0.5f, 1, tr(" dB"), index, updateEffect,
                                 [](MixerEffect& target, float value) { target.makeupDb = value; });
             }
+            else if (effect.type == MixerEffectType::Lv2Plugin)
+            {
+                auto* pluginUri = new QLabel(effect.pluginUri, effectBox);
+                pluginUri->setWordWrap(true);
+                pluginUri->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                effectForm->addRow(tr("LV2 URI"), pluginUri);
+                Lv2EffectDescriptor descriptor;
+                if (Lv2AudioEffectInstance::describe(effect.pluginUri, descriptor))
+                {
+                    for (qsizetype parameterIndex = 0;
+                         parameterIndex < descriptor.parameters.size(); ++parameterIndex)
+                    {
+                        const Lv2EffectParameter parameter = descriptor.parameters[parameterIndex];
+                        const float value = parameterIndex < effect.pluginParameterValues.size()
+                            ? effect.pluginParameterValues[parameterIndex] : parameter.defaultValue;
+                        const float step = parameter.toggled || parameter.integer ? 1.0f :
+                            std::max(0.001f, (parameter.maximum - parameter.minimum) / 1000.0f);
+                        const int decimals = parameter.toggled || parameter.integer ? 0 :
+                            parameter.maximum - parameter.minimum > 100.0f ? 2 : 3;
+                        addFloatControl(effectForm, parameter.name,
+                            std::clamp(value, parameter.minimum, parameter.maximum),
+                            parameter.minimum, parameter.maximum, step, decimals, QString(),
+                            index, updateEffect,
+                            [parameterIndex, defaultValue = parameter.defaultValue]
+                            (MixerEffect& target, float newValue)
+                        {
+                            while (target.pluginParameterValues.size() <= parameterIndex)
+                                target.pluginParameterValues.push_back(defaultValue);
+                            target.pluginParameterValues[parameterIndex] = newValue;
+                        });
+                    }
+                }
+                else
+                {
+                    auto* missing = new QLabel(tr("Plug-in unavailable; its saved settings are retained."),
+                                               effectBox);
+                    missing->setWordWrap(true);
+                    effectForm->addRow(missing);
+                }
+            }
             else
             {
                 addFloatControl(effectForm, tr("Cutoff"), effect.cutoffHz, 20.0f, 20000.0f,
@@ -2524,6 +2599,7 @@ void MainWindow::refreshMixer()
         type->addItem(tr("Reverb"), static_cast<int>(MixerEffectType::Reverb));
         type->addItem(tr("Compressor"), static_cast<int>(MixerEffectType::Compressor));
         type->addItem(tr("Low-pass filter"), static_cast<int>(MixerEffectType::LowPass));
+        type->addItem(tr("LV2 plug-in…"), static_cast<int>(MixerEffectType::Lv2Plugin));
         auto* add = new QPushButton(tr("Add effect"), addRow);
         add->setEnabled(canAddEffect && effects.size() < 8);
         addLayout->addWidget(type, 1);
@@ -2577,7 +2653,15 @@ void MainWindow::refreshMixer()
                         for (const InstrumentTrack& track : project.tracks) count += track.effects.size();
                         return count >= 48;
                     }()) return;
-                project.masterEffects.push_back(defaultMixerEffect(type));
+                MixerEffect effect;
+                QString pluginError;
+                if (!chooseMixerEffect(this, type, effect, pluginError))
+                {
+                    if (!pluginError.isEmpty())
+                        statusBar()->showMessage(pluginError, 5000);
+                    return;
+                }
+                project.masterEffects.push_back(std::move(effect));
                 commitEffectChange();
                 refreshMixer();
             });
@@ -2799,7 +2883,15 @@ void MainWindow::refreshMixer()
                     {
                         if (bus.id != busId) continue;
                         if (bus.effects.size() >= 8 || effectCount() >= 48) return;
-                        bus.effects.push_back(defaultMixerEffect(type));
+                        MixerEffect effect;
+                        QString pluginError;
+                        if (!chooseMixerEffect(this, type, effect, pluginError))
+                        {
+                            if (!pluginError.isEmpty())
+                                statusBar()->showMessage(pluginError, 5000);
+                            return;
+                        }
+                        bus.effects.push_back(std::move(effect));
                         commitEffectChange();
                         refreshMixer();
                         return;
@@ -3007,7 +3099,15 @@ void MainWindow::refreshMixer()
                 {
                     InstrumentTrack* track = project.findTrack(trackId);
                     if (track == nullptr || track->effects.size() >= 8 || effectCount() >= 48) return;
-                    track->effects.push_back(defaultMixerEffect(type));
+                    MixerEffect effect;
+                    QString pluginError;
+                    if (!chooseMixerEffect(this, type, effect, pluginError))
+                    {
+                        if (!pluginError.isEmpty())
+                            statusBar()->showMessage(pluginError, 5000);
+                        return;
+                    }
+                    track->effects.push_back(std::move(effect));
                     commitEffectChange();
                     refreshMixer();
                 });

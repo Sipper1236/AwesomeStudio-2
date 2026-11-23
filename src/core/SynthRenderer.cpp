@@ -874,6 +874,12 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
             state.filterA1 = static_cast<float>((-2.0 * cosine) / a0);
             state.filterA2 = static_cast<float>((1.0 - alpha) / a0);
         }
+        else if (effect.enabled && effect.wet > 0.0f &&
+                 effect.type == MixerEffectType::Lv2Plugin && !effect.pluginUri.isEmpty())
+        {
+            state.lv2Effect = std::make_unique<Lv2AudioEffectInstance>(
+                effect.pluginUri, sampleRate, effect.pluginParameterValues);
+        }
         states.push_back(std::move(state));
     }
 }
@@ -1031,6 +1037,18 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
                     static_cast<qint64>(std::ceil(tailSeconds * sampleRate)));
             }
         }
+        else if (effect.type == MixerEffectType::Lv2Plugin &&
+                 state.lv2Effect != nullptr && state.lv2Effect->isValid())
+        {
+            state.lv2Effect->process(wet.left, wet.right);
+            if (!std::isfinite(wet.left) || !std::isfinite(wet.right))
+                wet = dry;
+            tailLevel = std::max(std::abs(wet.left), std::abs(wet.right));
+            if (std::max(std::abs(dry.left), std::abs(dry.right)) > 1.0e-5f ||
+                tailLevel > 1.0e-5f)
+                state.tailFramesRemaining = std::max(state.tailFramesRemaining,
+                    static_cast<qint64>(std::ceil(5.0 * sampleRate)));
+        }
 
         if (state.tailFramesRemaining > 0)
             --state.tailFramesRemaining;
@@ -1055,6 +1073,11 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
             state.tailFramesRemaining = std::max(state.tailFramesRemaining,
                 static_cast<qint64>(std::ceil(tailSeconds * sampleRate)));
         }
+        else if (effect.type == MixerEffectType::Lv2Plugin && tailLevel > 1.0e-5f)
+        {
+            state.tailFramesRemaining = std::max(state.tailFramesRemaining,
+                static_cast<qint64>(std::ceil(5.0 * sampleRate)));
+        }
         output = {dry.left * (1.0f - effect.wet) + wet.left * effect.wet,
                   dry.right * (1.0f - effect.wet) + wet.right * effect.wet};
     }
@@ -1070,11 +1093,13 @@ double SynthRenderer::effectTailSeconds() const
 {
     if (!project)
         return 0.0;
-    const auto chainTail = [this](const QVector<MixerEffect>& effects)
+    const auto chainTail = [this](const QVector<MixerEffect>& effects,
+                                  const std::vector<EffectState>& states)
     {
         double seconds = 0.0;
-        for (const MixerEffect& effect : effects)
+        for (qsizetype index = 0; index < effects.size(); ++index)
         {
+            const MixerEffect& effect = effects[index];
             if (!effect.enabled || effect.wet <= 0.0f)
                 continue;
             if (effect.type == MixerEffectType::Delay)
@@ -1091,6 +1116,11 @@ double SynthRenderer::effectTailSeconds() const
                 seconds += std::min(4.0,
                     7.0 * effect.resonance / (3.14159265358979323846 * cutoff));
             }
+            else if (effect.type == MixerEffectType::Lv2Plugin &&
+                     static_cast<size_t>(index) < states.size() &&
+                     states[static_cast<size_t>(index)].lv2Effect != nullptr &&
+                     states[static_cast<size_t>(index)].lv2Effect->isValid())
+                seconds += 5.0;
         }
         return seconds;
     };
@@ -1106,8 +1136,9 @@ double SynthRenderer::effectTailSeconds() const
     for (const VoiceNote& note : notes)
         renderOverrunSeconds = std::max(renderOverrunSeconds,
             std::max(0.0, note.endFrame + note.releaseFrames - songEndFrame) / sampleRate);
-    for (const InstrumentTrack& track : project->tracks)
+    for (qsizetype trackIndex = 0; trackIndex < project->tracks.size(); ++trackIndex)
     {
+        const InstrumentTrack& track = project->tracks[trackIndex];
         double instrumentFilterTail = 0.0;
         if (track.instrumentType == InstrumentType::Synth && track.synthFilterEnabled)
         {
@@ -1117,13 +1148,15 @@ double SynthRenderer::effectTailSeconds() const
                 7.0 * track.synthFilterResonance / (3.14159265358979323846 * cutoff));
         }
         longestTrackTail = std::max(longestTrackTail,
-            instrumentFilterTail + chainTail(track.effects));
+            instrumentFilterTail + chainTail(track.effects,
+                trackEffectStates[static_cast<size_t>(trackIndex)]));
     }
     longestTrackTail += renderOverrunSeconds;
     double busTail = 0.0;
-    for (const MixerBus& bus : project->buses)
-        busTail += chainTail(bus.effects);
-    return longestTrackTail + busTail + chainTail(project->masterEffects);
+    for (qsizetype busIndex = 0; busIndex < project->buses.size(); ++busIndex)
+        busTail += chainTail(project->buses[busIndex].effects,
+            busEffectStates[static_cast<size_t>(busIndex)]);
+    return longestTrackTail + busTail + chainTail(project->masterEffects, masterEffectStates);
 }
 
 void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, float value)

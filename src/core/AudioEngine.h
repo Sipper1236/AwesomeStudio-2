@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <vector>
 
 class QAudioFormat;
 class QAudioSink;
@@ -139,15 +140,18 @@ private:
     };
 
     qint64 renderAudio(char* destination, qint64 maxBytes);
-    void prepareNotes(const std::shared_ptr<const ProjectData>& project);
     bool enqueueLiveMidiEvent(const LiveMidiEvent& event);
     void applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame);
-    void renderLiveMidiVoices(qint64 frame);
+    void renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer);
     void clearLiveMidiVoices();
 
-    std::shared_ptr<const ProjectData> projectSnapshot;
-    std::shared_ptr<const ProjectData> preparedProject;
-    SynthRenderer renderer;
+    struct PreparedRenderState
+    {
+        std::shared_ptr<const ProjectData> project;
+        std::shared_ptr<SynthRenderer> renderer;
+    };
+    std::shared_ptr<const PreparedRenderState> preparedRenderState;
+    std::vector<std::shared_ptr<const PreparedRenderState>> retiredRenderStates;
     std::unique_ptr<AudioStream> stream;
     std::unique_ptr<QAudioSink> sink;
     std::unique_ptr<QAudioFormat> outputFormat;

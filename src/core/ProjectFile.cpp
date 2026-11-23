@@ -17,7 +17,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 33;
+constexpr int currentProjectVersion = 34;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -126,6 +126,9 @@ QJsonArray saveEffects(const QVector<MixerEffect>& effects)
     QJsonArray result;
     for (const MixerEffect& effect : effects)
     {
+        QJsonArray pluginParameters;
+        for (float value : effect.pluginParameterValues)
+            pluginParameters.push_back(value);
         result.push_back(QJsonObject{
             {QStringLiteral("type"), static_cast<int>(effect.type)},
             {QStringLiteral("enabled"), effect.enabled},
@@ -140,14 +143,17 @@ QJsonArray saveEffects(const QVector<MixerEffect>& effects)
             {QStringLiteral("releaseMs"), effect.releaseMs},
             {QStringLiteral("makeupDb"), effect.makeupDb},
             {QStringLiteral("cutoffHz"), effect.cutoffHz},
-            {QStringLiteral("resonance"), effect.resonance}
+            {QStringLiteral("resonance"), effect.resonance},
+            {QStringLiteral("pluginUri"), effect.pluginUri},
+            {QStringLiteral("pluginName"), effect.pluginName},
+            {QStringLiteral("pluginParameterValues"), pluginParameters}
         });
     }
     return result;
 }
 
 bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
-                 const QString& ownerName, QString* error)
+                 const QString& ownerName, int version, QString* error)
 {
     if (!value.isArray() || value.toArray().size() > 8)
     {
@@ -163,7 +169,7 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
         }
         const QJsonObject object = effectValue.toObject();
         const int type = object.value(QStringLiteral("type")).toInt(-1);
-        if (type < 0 || type > 3)
+        if (type < 0 || type > (version >= 34 ? 4 : 3))
         {
             setError(error, QStringLiteral("The %1 contains an unsupported effect type.").arg(ownerName));
             return false;
@@ -212,6 +218,36 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
         effect.makeupDb = static_cast<float>(makeupDb);
         effect.cutoffHz = static_cast<float>(cutoffHz);
         effect.resonance = static_cast<float>(resonance);
+        if (version >= 34)
+        {
+            effect.pluginUri = object.value(QStringLiteral("pluginUri")).toString();
+            effect.pluginName = object.value(QStringLiteral("pluginName")).toString();
+            const QJsonValue parameterValues = object.value(QStringLiteral("pluginParameterValues"));
+            if (!parameterValues.isArray() || parameterValues.toArray().size() > 256)
+            {
+                setError(error, QStringLiteral("The %1 contains invalid plugin parameter data.")
+                                    .arg(ownerName));
+                return false;
+            }
+            for (const QJsonValue& parameterValue : parameterValues.toArray())
+            {
+                const double number = parameterValue.toDouble(
+                    std::numeric_limits<double>::quiet_NaN());
+                if (!std::isfinite(number) || std::abs(number) > 1.0e9)
+                {
+                    setError(error, QStringLiteral("The %1 contains invalid plugin parameter data.")
+                                        .arg(ownerName));
+                    return false;
+                }
+                effect.pluginParameterValues.push_back(static_cast<float>(number));
+            }
+            if (effect.type == MixerEffectType::Lv2Plugin && effect.pluginUri.isEmpty())
+            {
+                setError(error, QStringLiteral("The %1 contains a plugin effect without a URI.")
+                                    .arg(ownerName));
+                return false;
+            }
+        }
         effects.push_back(effect);
     }
     return true;
@@ -604,7 +640,7 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
     }
     if (version >= 19 &&
         !loadEffects(object.value(QStringLiteral("effects")), track.effects,
-                     QStringLiteral("track"), error))
+                     QStringLiteral("track"), version, error))
         return false;
     if (!loadAutomation(object.value(QStringLiteral("volumeAutomation")), track.volumeAutomation,
                         QStringLiteral("volume"), error) ||
@@ -867,7 +903,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     }
     if (version >= 19 &&
         !loadEffects(root.value(QStringLiteral("masterEffects")), loaded.masterEffects,
-                     QStringLiteral("Master channel"), error))
+                     QStringLiteral("Master channel"), version, error))
         return false;
     if (version >= 12)
     {
@@ -951,7 +987,7 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
             }
             if (version >= 19 &&
                 !loadEffects(busObject.value(QStringLiteral("effects")), bus.effects,
-                             QStringLiteral("mixer bus"), error))
+                             QStringLiteral("mixer bus"), version, error))
                 return false;
             bus.name = busObject.value(QStringLiteral("name")).toString().trimmed();
             const double gain = busObject.value(QStringLiteral("gain")).toDouble(

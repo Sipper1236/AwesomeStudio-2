@@ -125,6 +125,10 @@ bool AudioEngine::initialize()
     outputChannels = format.channelCount();
     bytesPerFrame = format.bytesPerFrame();
     outputFormat = std::make_unique<QAudioFormat>(format);
+    const auto preparedState = std::atomic_load_explicit(&preparedRenderState,
+                                                          std::memory_order_acquire);
+    if (preparedState != nullptr && preparedState->project != nullptr)
+        setProject(*preparedState->project);
     stream = std::make_unique<AudioStream>(*this);
     stream->open(QIODevice::ReadOnly);
     sink = std::make_unique<QAudioSink>(device, format);
@@ -175,9 +179,22 @@ void AudioEngine::setProject(const ProjectData& project)
     for (auto& peak : busPeakValues)
         peak.store(0.0f, std::memory_order_release);
     masterPeakValue.store(0.0f, std::memory_order_release);
-    std::atomic_store_explicit(&projectSnapshot,
-                               std::make_shared<const ProjectData>(std::move(safeProject)),
-                               std::memory_order_release);
+    auto nextState = std::make_shared<PreparedRenderState>();
+    nextState->project = std::make_shared<const ProjectData>(std::move(safeProject));
+    nextState->renderer = std::make_shared<SynthRenderer>();
+    nextState->renderer->setProject(nextState->project, outputSampleRate);
+    std::shared_ptr<const PreparedRenderState> immutableState = std::move(nextState);
+    auto previousState = std::atomic_exchange_explicit(&preparedRenderState,
+        std::move(immutableState), std::memory_order_acq_rel);
+    if (previousState != nullptr)
+        retiredRenderStates.push_back(std::move(previousState));
+    for (auto state = retiredRenderStates.begin(); state != retiredRenderStates.end();)
+    {
+        if (state->use_count() == 1)
+            state = retiredRenderStates.erase(state);
+        else
+            ++state;
+    }
 }
 
 void AudioEngine::startPlayback()
@@ -198,7 +215,8 @@ void AudioEngine::stopPlayback()
 
 void AudioEngine::seekToBeat(double beat)
 {
-    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
     if (!project || !std::isfinite(beat))
         return;
     const double maximumBeat = std::max(0.0, project->songLengthBeats() - 1.0 / 64.0);
@@ -217,7 +235,8 @@ bool AudioEngine::isPlaying() const
 
 double AudioEngine::positionBeats() const
 {
-    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
     if (!project)
         return 0.0;
 
@@ -229,7 +248,8 @@ double AudioEngine::positionBeats() const
 
 float AudioEngine::trackPeakLevel(quint64 trackId) const
 {
-    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
     if (!project)
         return 0.0f;
     for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
@@ -255,7 +275,8 @@ void AudioEngine::setLiveTrackMixOverride(quint64 trackId, int parameter, float 
 {
     if (parameter != 0 && parameter != 1)
         return;
-    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
     if (!project)
         return;
     for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
@@ -275,7 +296,8 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
 {
     if (parameter != 0 && parameter != 1)
         return;
-    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
     if (!project)
         return;
     for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
@@ -302,7 +324,8 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
     event.channel = std::clamp(channel, 0, 15);
     event.pitch = std::clamp(midiPitch, 0, 127);
     event.velocity = std::clamp(velocity, 1, 127);
-    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
+    const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
     bool hasSolo = false;
     if (project != nullptr)
     {
@@ -522,7 +545,7 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame)
     }
 }
 
-void AudioEngine::renderLiveMidiVoices(qint64 frame)
+void AudioEngine::renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer)
 {
     liveMidiTouchedTrackCount = 0;
     const auto addTrackFrameSample = [this](size_t trackIndex, float left, float right)
@@ -881,14 +904,6 @@ void AudioEngine::pushAudioInputMonitorFrames(const float* interleavedSamples, q
     }
 }
 
-void AudioEngine::prepareNotes(const std::shared_ptr<const ProjectData>& project)
-{
-    if (preparedProject.get() == project.get())
-        return;
-    renderer.setProject(project, outputSampleRate);
-    preparedProject = project;
-}
-
 qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
 {
     if (destination == nullptr || !outputFormat || bytesPerFrame <= 0)
@@ -899,10 +914,11 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         return 0;
 
     // The UI publishes immutable snapshots; this callback takes one snapshot per block.
-    const auto project = std::atomic_load_explicit(&projectSnapshot, std::memory_order_acquire);
-    if (!project)
+    const auto renderState = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+    if (renderState == nullptr || renderState->project == nullptr || renderState->renderer == nullptr)
         return 0;
-    prepareNotes(project);
+    const auto& project = renderState->project;
+    SynthRenderer& renderer = *renderState->renderer;
     renderer.resetTrackPeakLevels();
     renderer.resetBusPeakLevels();
     liveMidiBlockPeaks.fill(0.0f);
@@ -989,7 +1005,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         renderer.beginMixerFrame();
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;
-        renderLiveMidiVoices(clockFrame);
+        renderLiveMidiVoices(clockFrame, renderer);
         const StereoSample mixerOutput = renderer.finishMixerFrame();
         mixed.left += mixerOutput.left;
         mixed.right += mixerOutput.right;

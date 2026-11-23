@@ -158,7 +158,8 @@ enum class MixerEffectType
     Delay,
     Reverb,
     Compressor,
-    LowPass
+    LowPass,
+    Lv2Plugin
 };
 
 struct MixerEffect
@@ -177,6 +178,9 @@ struct MixerEffect
     float makeupDb = 0.0f;
     float cutoffHz = 20000.0f;
     float resonance = 0.707f;
+    QString pluginUri;
+    QString pluginName;
+    QVector<float> pluginParameterValues;
 };
 
 MixerEffect defaultMixerEffect(MixerEffectType type);
