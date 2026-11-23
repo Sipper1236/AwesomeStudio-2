@@ -2,6 +2,9 @@
 
 #include "SynthRenderer.h"
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QSaveFile>
 
 #include <algorithm>
@@ -35,6 +38,25 @@ void write32(char* destination, quint32 value)
     destination[1] = static_cast<char>((value >> 8) & 0xff);
     destination[2] = static_cast<char>((value >> 16) & 0xff);
     destination[3] = static_cast<char>((value >> 24) & 0xff);
+}
+
+QString safeStemName(const QString& source)
+{
+    QString result;
+    for (const QChar character : source.trimmed())
+    {
+        if (character.isLetterOrNumber() || character == QLatin1Char('-') || character == QLatin1Char('_'))
+        {
+            result.append(character);
+        }
+        else if (!result.isEmpty() && !result.endsWith(QLatin1Char('_')))
+        {
+            result.append(QLatin1Char('_'));
+        }
+    }
+    while (result.endsWith(QLatin1Char('_')))
+        result.chop(1);
+    return result.isEmpty() ? QStringLiteral("Track") : result;
 }
 }
 
@@ -117,6 +139,66 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
     {
         setError(error, file.errorString());
         return false;
+    }
+    return true;
+}
+
+bool WavExporter::exportStems(const ProjectData& project, const QString& directoryPath, QString* error)
+{
+    ProjectData source = project;
+    source.normalize();
+    if (source.tracks.isEmpty())
+    {
+        setError(error, QStringLiteral("The project has no tracks to export."));
+        return false;
+    }
+
+    const QDir directory(directoryPath);
+    if (!directory.exists())
+    {
+        setError(error, QStringLiteral("The selected stem output folder does not exist."));
+        return false;
+    }
+
+    QVector<QString> paths;
+    paths.reserve(source.tracks.size());
+    for (int index = 0; index < source.tracks.size(); ++index)
+    {
+        const InstrumentTrack& track = source.tracks[index];
+        const QString fileName = QStringLiteral("%1_%2_%3.wav")
+            .arg(index + 1, 3, 10, QLatin1Char('0'))
+            .arg(track.id)
+            .arg(safeStemName(track.name));
+        const QString path = directory.filePath(fileName);
+        if (QFileInfo::exists(path))
+        {
+            setError(error, QStringLiteral("Stem file already exists: %1. Choose an empty folder.").arg(fileName));
+            return false;
+        }
+        paths.push_back(path);
+    }
+
+    QVector<QString> createdPaths;
+    createdPaths.reserve(paths.size());
+    for (int trackIndex = 0; trackIndex < source.tracks.size(); ++trackIndex)
+    {
+        ProjectData stemProject = source;
+        for (int index = 0; index < stemProject.tracks.size(); ++index)
+        {
+            stemProject.tracks[index].muted = index != trackIndex;
+            stemProject.tracks[index].solo = false;
+        }
+
+        QString renderError;
+        if (!exportProject(stemProject, paths[trackIndex], &renderError))
+        {
+            for (const QString& createdPath : createdPaths)
+                QFile::remove(createdPath);
+            setError(error, QStringLiteral("Could not export %1: %2")
+                                  .arg(QFileInfo(paths[trackIndex]).fileName(), renderError));
+            return false;
+        }
+        createdPaths.push_back(paths[trackIndex]);
     }
     return true;
 }

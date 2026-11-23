@@ -51,6 +51,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Touch recording for volume/pan automation from Mixer controls during playback
 - [x] Latch recording for volume/pan automation until playback stops or Write is disarmed
 - [x] Realtime per-track and master peak meters in the Mixer
+- [x] Export each arrangement track as an isolated WAV stem
 - [ ] Automation trim mode and plugin parameter automation
 
 ### 3. Plugin and production workflow

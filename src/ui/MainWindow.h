@@ -87,6 +87,7 @@ private:
     void applyNoteHistory(quint64 trackId, quint64 clipId, const QVector<MidiNote>& notes,
                           double clipLengthBeats = -1.0);
     void exportAudio();
+    void exportStems();
     void importAudio();
     void importMidi();
     void exportMidi();

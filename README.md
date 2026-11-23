@@ -34,6 +34,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Enable Automation lanes in the Playlist toolbar to show track volume or pan. Click a lane to add a point, drag points to reshape it, and right-click or press Delete to remove a point. Edits share undo/redo with the keyframe list; playback and WAV export interpolate linearly.
 - Arm Write automation, choose Volume or Pan and Touch or Latch, then move the matching Mixer control during playback. Touch commits when you release the control; Latch keeps writing its last value until playback stops or Write is disarmed. Each pass is one undoable edit and is audible while recording.
 - Import Standard MIDI Files (formats 0 and 1 with PPQN timing), and export arrangements as multitrack MIDI or stereo 16-bit WAV.
+- Use **File → Export track stems…** to render every track to a separate stereo WAV in a folder. Each stem includes that track's level/pan automation and the master level; mute and solo state do not omit tracks.
 - Save and reopen `.aws` projects.
 - Use the editor without an audio device; connect an output device to audition notes.
 

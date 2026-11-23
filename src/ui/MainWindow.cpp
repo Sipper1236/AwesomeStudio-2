@@ -1115,6 +1115,7 @@ void MainWindow::createMenus()
     fileMenu->addAction(tr("Import MIDI…"), this, &MainWindow::importMidi);
     fileMenu->addAction(tr("Export arrangement to MIDI…"), this, &MainWindow::exportMidi);
     fileMenu->addAction(tr("Export arrangement to WAV…"), this, &MainWindow::exportAudio);
+    fileMenu->addAction(tr("Export track stems…"), this, &MainWindow::exportStems);
     fileMenu->addSeparator();
     auto* quitAction = fileMenu->addAction(tr("Quit"));
     quitAction->setShortcut(QKeySequence::Quit);
@@ -2221,6 +2222,29 @@ void MainWindow::exportAudio()
         return;
     }
     statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(path).fileName()), 3500);
+}
+
+void MainWindow::exportStems()
+{
+    const QString defaultDirectory = projectPath.isEmpty()
+        ? QDir::homePath() : QFileInfo(projectPath).absolutePath();
+    const QString directory = QFileDialog::getExistingDirectory(
+        this, tr("Export track stems"), defaultDirectory);
+    if (directory.isEmpty())
+        return;
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString error;
+    const bool success = WavExporter::exportStems(project, directory, &error);
+    QApplication::restoreOverrideCursor();
+    if (!success)
+    {
+        QMessageBox::critical(this, tr("Could not export track stems"), error);
+        return;
+    }
+    statusBar()->showMessage(tr("Exported %1 track stems to %2")
+                                 .arg(project.tracks.size())
+                                 .arg(QDir(directory).dirName()), 4000);
 }
 
 void MainWindow::importAudio()
