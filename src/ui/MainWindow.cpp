@@ -99,6 +99,44 @@ bool upsertAutomationPoint(QVector<AutomationPoint>& points, double beat, float 
     points.insert(position, {beat, value});
     return true;
 }
+
+double audioRegionEndBeat(const ProjectData& project, const MidiClip& clip)
+{
+    double durationBeats = clip.lengthBeats;
+    if (clip.audioSource == nullptr || clip.audioSource->sampleRate <= 0 ||
+        clip.audioStartFrame < 0 || clip.audioStartFrame >= clip.audioSource->frameCount())
+        return clip.startBeat;
+    const double sourceDurationBeats = static_cast<double>(clip.audioSource->frameCount() - clip.audioStartFrame) /
+                                       clip.audioSource->sampleRate * project.tempoBpm / 60.0;
+    durationBeats = std::min(durationBeats, sourceDurationBeats);
+    return clip.startBeat + std::max(0.0, durationBeats);
+}
+
+QVector<const MidiClip*> overlappingAudioRegions(const ProjectData& project,
+                                                  const InstrumentTrack& track,
+                                                  const MidiClip& selected)
+{
+    QVector<const MidiClip*> overlaps;
+    if (!selected.isAudioRegion() || selected.audioSource == nullptr)
+        return overlaps;
+    for (const MidiClip& candidate : track.clips)
+    {
+        if (candidate.id == selected.id || !candidate.isAudioRegion() || candidate.audioSource == nullptr ||
+            std::abs(candidate.startBeat - selected.startBeat) < 1.0e-6)
+            continue;
+        const bool selectedIsOutgoing = selected.startBeat < candidate.startBeat;
+        const MidiClip& outgoing = selectedIsOutgoing ? selected : candidate;
+        const MidiClip& incoming = selectedIsOutgoing ? candidate : selected;
+        const double outgoingEnd = audioRegionEndBeat(project, outgoing);
+        const double incomingEnd = audioRegionEndBeat(project, incoming);
+        if (incomingEnd <= outgoingEnd + 1.0e-6)
+            continue;
+        const double overlap = outgoingEnd - incoming.startBeat;
+        if (overlap > 1.0e-6)
+            overlaps.push_back(&candidate);
+    }
+    return overlaps;
+}
 }
 
 class NoteEditCommand final : public QUndoCommand
@@ -198,6 +236,36 @@ private:
     QPointer<MainWindow> window;
     QVector<TimelineMarker> before;
     QVector<TimelineMarker> after;
+};
+
+class AudioFadeEditCommand final : public QUndoCommand
+{
+public:
+    AudioFadeEditCommand(MainWindow* window, quint64 trackId,
+                         QVector<MainWindow::AudioFadeState> before,
+                         QVector<MainWindow::AudioFadeState> after)
+        : window(window), trackId(trackId), before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Create audio crossfade"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyAudioFadeHistory(trackId, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyAudioFadeHistory(trackId, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    QVector<MainWindow::AudioFadeState> before;
+    QVector<MainWindow::AudioFadeState> after;
 };
 
 MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
@@ -1066,12 +1134,16 @@ void MainWindow::createDocks()
     }
     audioFadeForm->addRow(tr("Fade in"), audioFadeInControl);
     audioFadeForm->addRow(tr("Fade out"), audioFadeOutControl);
+    audioCrossfadeButton = new QPushButton(tr("Create crossfade with overlapping region"), audioRegionControls);
+    audioFadeForm->addRow(audioCrossfadeButton);
     browserLayout->addWidget(audioRegionControls);
     audioRegionControls->hide();
     connect(audioFadeInControl, &QDoubleSpinBox::valueChanged, this,
             [this](double beats) { setSelectedAudioFade(true, beats); });
     connect(audioFadeOutControl, &QDoubleSpinBox::valueChanged, this,
             [this](double beats) { setSelectedAudioFade(false, beats); });
+    connect(audioCrossfadeButton, &QPushButton::clicked,
+            this, &MainWindow::createSelectedAudioCrossfade);
 
     drumSampleControls = new QGroupBox(tr("DRUM SAMPLES"), browser);
     auto* drumSampleLayout = new QVBoxLayout(drumSampleControls);
@@ -1373,6 +1445,8 @@ void MainWindow::refreshProjectUi()
     audioFadeOutControl->setValue(audioRegionSelected ? clip->audioFadeOutBeats : 0.0);
     audioFadeInControl->setEnabled(audioRegionSelected);
     audioFadeOutControl->setEnabled(audioRegionSelected);
+    audioCrossfadeButton->setEnabled(audioRegionSelected && track != nullptr &&
+        !overlappingAudioRegions(project, *track, *clip).isEmpty());
     const bool drumRackSelected = track != nullptr && track->instrumentType == InstrumentType::DrumRack;
     drumSampleControls->setVisible(drumRackSelected);
     const std::array<QString, 4> drumPadNames = {
@@ -1885,6 +1959,83 @@ void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     settingsDirty = true;
+    refreshDirtyState();
+}
+
+void MainWindow::createSelectedAudioCrossfade()
+{
+    InstrumentTrack* track = selectedTrack();
+    MidiClip* selected = selectedClip();
+    if (track == nullptr || selected == nullptr || !selected->isAudioRegion())
+        return;
+
+    const QVector<const MidiClip*> candidates = overlappingAudioRegions(project, *track, *selected);
+    if (candidates.isEmpty())
+    {
+        statusBar()->showMessage(tr("Load an overlapping audio region on this track to create a crossfade"), 3000);
+        return;
+    }
+
+    int candidateIndex = 0;
+    if (candidates.size() > 1)
+    {
+        QStringList choices;
+        for (const MidiClip* candidate : candidates)
+        {
+            choices.push_back(tr("%1  ·  beats %2–%3")
+                .arg(candidate->name)
+                .arg(candidate->startBeat + 1.0, 0, 'f', 2)
+                .arg(audioRegionEndBeat(project, *candidate) + 1.0, 0, 'f', 2) +
+                tr("  ·  clip %1").arg(candidate->id));
+        }
+        bool accepted = false;
+        const QString choice = QInputDialog::getItem(this, tr("Choose overlapping audio region"),
+                                                      tr("Crossfade with"), choices, 0, false, &accepted);
+        if (!accepted)
+            return;
+        candidateIndex = choices.indexOf(choice);
+        if (candidateIndex < 0)
+            return;
+    }
+
+    const MidiClip* partner = candidates[candidateIndex];
+    const double overlapStart = std::max(selected->startBeat, partner->startBeat);
+    const double overlapEnd = std::min(audioRegionEndBeat(project, *selected),
+                                       audioRegionEndBeat(project, *partner));
+    const double overlapBeats = overlapEnd - overlapStart;
+    if (overlapBeats <= 1.0e-6)
+        return;
+
+    const MidiClip* outgoing = selected->startBeat < partner->startBeat ? selected : partner;
+    const MidiClip* incoming = outgoing == selected ? partner : selected;
+    QVector<AudioFadeState> before{
+        {outgoing->id, outgoing->audioFadeInBeats, outgoing->audioFadeOutBeats},
+        {incoming->id, incoming->audioFadeInBeats, incoming->audioFadeOutBeats}
+    };
+    QVector<AudioFadeState> after = before;
+    after[0].fadeOutBeats = overlapBeats;
+    after[1].fadeInBeats = overlapBeats;
+    undoStack.push(new AudioFadeEditCommand(this, track->id, before, after));
+    statusBar()->showMessage(tr("Created a linear crossfade over %1 beats")
+                                 .arg(overlapBeats, 0, 'f', 2), 2500);
+}
+
+void MainWindow::applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+    for (const AudioFadeState& fade : fades)
+    {
+        MidiClip* clip = project.findClip(trackId, fade.clipId);
+        if (clip == nullptr || !clip->isAudioRegion())
+            continue;
+        clip->audioFadeInBeats = fade.fadeInBeats;
+        clip->audioFadeOutBeats = fade.fadeOutBeats;
+    }
+    project.normalize();
+    audioEngine.setProject(project);
+    refreshProjectUi();
     refreshDirtyState();
 }
 

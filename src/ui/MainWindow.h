@@ -37,6 +37,7 @@ class MainWindow final : public QMainWindow
     friend class NoteEditCommand;
     friend class AutomationEditCommand;
     friend class MarkerEditCommand;
+    friend class AudioFadeEditCommand;
 
 public:
     explicit MainWindow(AudioEngine& audioEngine, QWidget* parent = nullptr);
@@ -46,6 +47,13 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
+    struct AudioFadeState
+    {
+        quint64 clipId = 0;
+        double fadeInBeats = 0.0;
+        double fadeOutBeats = 0.0;
+    };
+
     void createActions();
     void createToolBars();
     void createDocks();
@@ -66,6 +74,8 @@ private:
     void trimAudioRegion(quint64 trackId, quint64 clipId, double startBeat,
                          double lengthBeats, qint64 audioStartFrame);
     void setSelectedAudioFade(bool fadeIn, double beats);
+    void createSelectedAudioCrossfade();
+    void applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades);
     void setSelectedSynthEnvelope(int parameter, double value);
     void refreshAutomationEditor();
     void addAutomationPoint();
@@ -157,6 +167,7 @@ private:
     std::array<QDoubleSpinBox*, 4> envelopeControls{};
     QDoubleSpinBox* audioFadeInControl = nullptr;
     QDoubleSpinBox* audioFadeOutControl = nullptr;
+    QPushButton* audioCrossfadeButton = nullptr;
     QComboBox* automationParameterControl = nullptr;
     QListWidget* automationPointsList = nullptr;
     QDoubleSpinBox* automationBeatControl = nullptr;
