@@ -981,11 +981,6 @@ QString automationCurveName(AutomationPoint::Curve curve)
 constexpr int synthFilterCutoffAutomationTarget = 2;
 constexpr int synthFilterResonanceAutomationTarget = 3;
 constexpr int pluginAutomationTargetBase = 4;
-constexpr int trackEqLowGainAutomationTarget = 10000;
-constexpr int trackEqMidGainAutomationTarget = 10001;
-constexpr int trackEqHighGainAutomationTarget = 10002;
-constexpr int trackEqLowCrossoverAutomationTarget = 10003;
-constexpr int trackEqHighCrossoverAutomationTarget = 10004;
 constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
 constexpr int clapInstrumentAutomationTargetBase =
@@ -8473,6 +8468,37 @@ void MainWindow::setSelectedTrackEqualizer(int band, double gainDb)
     if (track == nullptr || band < 0 || band > 2)
         return;
     const float normalizedGain = static_cast<float>(std::clamp(gainDb, -18.0, 18.0));
+    const int automationTarget = trackEqLowGainAutomationTarget + band;
+    const std::array<float, 3> currentGains = {
+        track->eqLowDb, track->eqMidDb, track->eqHighDb
+    };
+    const std::array<QString, 3> parameterNames = {
+        tr("low EQ gain"), tr("mid EQ gain"), tr("high EQ gain")
+    };
+    if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+        automationWriteSession.parameter == automationTarget)
+    {
+        recordAutomationValue(track->id, automationTarget, normalizedGain);
+        if (automationWriteModeControl->currentData().toInt() != 1)
+            automationWriteIdleTimer->start(250);
+        return;
+    }
+    if (automationWriteAction != nullptr && automationWriteAction->isChecked() &&
+        audioEngine.isPlaying() && automationLaneParameterControl != nullptr &&
+        automationLaneParameterControl->currentData().toInt() == automationTarget)
+    {
+        beginAutomationWrite(track->id, automationTarget, currentGains[static_cast<size_t>(band)],
+                             QString(), -1, -1, -18.0f, 18.0f,
+                             parameterNames[static_cast<size_t>(band)]);
+        if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+            automationWriteSession.parameter == automationTarget)
+        {
+            recordAutomationValue(track->id, automationTarget, normalizedGain);
+            if (automationWriteModeControl->currentData().toInt() != 1)
+                automationWriteIdleTimer->start(250);
+            return;
+        }
+    }
     switch (band)
     {
         case 0: track->eqLowDb = normalizedGain; break;
@@ -8491,6 +8517,38 @@ void MainWindow::setSelectedTrackEqualizerCrossover(int band, double frequencyHz
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || band < 0 || band > 1)
         return;
+    const int automationTarget = band == 0 ? trackEqLowCrossoverAutomationTarget
+                                           : trackEqHighCrossoverAutomationTarget;
+    const float minimum = band == 0 ? 20.0f : 500.0f;
+    const float maximum = band == 0 ? 2000.0f : 20000.0f;
+    const float currentValue = band == 0 ? track->eqLowCrossoverHz : track->eqHighCrossoverHz;
+    const QString parameterName = band == 0 ? tr("low/mid EQ crossover")
+                                            : tr("mid/high EQ crossover");
+    const float normalizedFrequency = static_cast<float>(std::clamp(
+        frequencyHz, static_cast<double>(minimum), static_cast<double>(maximum)));
+    if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+        automationWriteSession.parameter == automationTarget)
+    {
+        recordAutomationValue(track->id, automationTarget, normalizedFrequency);
+        if (automationWriteModeControl->currentData().toInt() != 1)
+            automationWriteIdleTimer->start(250);
+        return;
+    }
+    if (automationWriteAction != nullptr && automationWriteAction->isChecked() &&
+        audioEngine.isPlaying() && automationLaneParameterControl != nullptr &&
+        automationLaneParameterControl->currentData().toInt() == automationTarget)
+    {
+        beginAutomationWrite(track->id, automationTarget, currentValue, QString(), -1, -1,
+                             minimum, maximum, parameterName);
+        if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+            automationWriteSession.parameter == automationTarget)
+        {
+            recordAutomationValue(track->id, automationTarget, normalizedFrequency);
+            if (automationWriteModeControl->currentData().toInt() != 1)
+                automationWriteIdleTimer->start(250);
+            return;
+        }
+    }
     if (band == 0)
         track->eqLowCrossoverHz = static_cast<float>(std::clamp(
             frequencyHz, 20.0, std::min(2000.0, static_cast<double>(track->eqHighCrossoverHz) - 1.0)));
@@ -8645,6 +8703,8 @@ void MainWindow::refreshArrangementAutomationView()
     const float defaultValue = automationLaneParameterControl->itemData(index, Qt::UserRole + 3).toFloat();
     const QString pluginUri = automationLaneParameterControl->itemData(index, Qt::UserRole + 4).toString();
     const bool writeAutomationTarget = target == 0 || target == 1 ||
+        (target >= trackEqLowGainAutomationTarget &&
+         target <= trackEqHighCrossoverAutomationTarget) ||
         target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget || !pluginUri.isEmpty();
     if (!writeAutomationTarget && automationWriteAction != nullptr && automationWriteAction->isChecked())

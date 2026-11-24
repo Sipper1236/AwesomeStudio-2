@@ -165,33 +165,39 @@ const SynthRenderer::TrackMixValue& SynthRenderer::trackMixAt(size_t trackIndex,
                                         0.0f, 1.0f);
         const float pan = std::clamp(automationValue(automation.pan, beat, automation.basePan),
                                      -1.0f, 1.0f);
+        const LiveTrackMixOverride& live = liveTrackMixOverrides[trackIndex];
         for (size_t bandIndex = 0; bandIndex < automation.equalizerGain.size(); ++bandIndex)
         {
-            const float gainDb = std::clamp(
-                automationValue(automation.equalizerGain[bandIndex], beat,
-                                automation.baseEqualizerDb[bandIndex]),
-                -18.0f, 18.0f);
+            float gainDb = automationValue(automation.equalizerGain[bandIndex], beat,
+                                           automation.baseEqualizerDb[bandIndex]);
+            if (live.equalizerGainDb[bandIndex] >= -18.0f &&
+                live.equalizerGainDb[bandIndex] <= 18.0f)
+                gainDb = live.equalizerGainDb[bandIndex];
+            gainDb = std::clamp(
+                gainDb, -18.0f, 18.0f);
             rendered.equalizerGains[bandIndex] = static_cast<float>(
                 std::pow(10.0, static_cast<double>(gainDb) / 20.0));
         }
         const double maximumCrossoverHz = std::max(20.0, sampleRate * 0.49);
         const float lowCrossoverMaximum = static_cast<float>(
             std::max(20.0, std::min(2000.0, maximumCrossoverHz)));
-        const float lowCrossoverHz = std::clamp(
-            automationValue(automation.equalizerCrossover[0], beat,
-                            automation.baseEqualizerCrossoverHz[0]),
-            20.0f, lowCrossoverMaximum);
+        float lowCrossoverHz = automationValue(automation.equalizerCrossover[0], beat,
+                                               automation.baseEqualizerCrossoverHz[0]);
+        if (live.equalizerCrossoverHz[0] > 0.0f)
+            lowCrossoverHz = live.equalizerCrossoverHz[0];
+        lowCrossoverHz = std::clamp(lowCrossoverHz, 20.0f, lowCrossoverMaximum);
         const float highCrossoverMinimum = static_cast<float>(std::min(
             maximumCrossoverHz, std::max(500.0, static_cast<double>(lowCrossoverHz) + 1.0)));
-        const float highCrossoverHz = std::clamp(
-            automationValue(automation.equalizerCrossover[1], beat,
-                            automation.baseEqualizerCrossoverHz[1]),
-            highCrossoverMinimum, static_cast<float>(maximumCrossoverHz));
+        float highCrossoverHz = automationValue(automation.equalizerCrossover[1], beat,
+                                                automation.baseEqualizerCrossoverHz[1]);
+        if (live.equalizerCrossoverHz[1] > 0.0f)
+            highCrossoverHz = live.equalizerCrossoverHz[1];
+        highCrossoverHz = std::clamp(highCrossoverHz, highCrossoverMinimum,
+                                     static_cast<float>(maximumCrossoverHz));
         rendered.lowBandCoefficient = static_cast<float>(
             1.0 - std::exp(-twoPi * lowCrossoverHz / sampleRate));
         rendered.highBandCoefficient = static_cast<float>(
             1.0 - std::exp(-twoPi * highCrossoverHz / sampleRate));
-        const LiveTrackMixOverride& live = liveTrackMixOverrides[trackIndex];
         const float effectiveVolume = live.volume >= 0.0f ? std::clamp(live.volume, 0.0f, 1.0f) : volume;
         const float effectivePan = live.pan >= -1.0f && live.pan <= 1.0f
             ? std::clamp(live.pan, -1.0f, 1.0f) : pan;
@@ -2019,6 +2025,14 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
         liveTrackMixOverrides[trackIndex].volume = value;
     else if (parameter == 1)
         liveTrackMixOverrides[trackIndex].pan = value;
+    else if (parameter >= trackEqLowGainAutomationTarget &&
+             parameter <= trackEqHighGainAutomationTarget)
+        liveTrackMixOverrides[trackIndex].equalizerGainDb[
+            static_cast<size_t>(parameter - trackEqLowGainAutomationTarget)] = value;
+    else if (parameter == trackEqLowCrossoverAutomationTarget)
+        liveTrackMixOverrides[trackIndex].equalizerCrossoverHz[0] = value;
+    else if (parameter == trackEqHighCrossoverAutomationTarget)
+        liveTrackMixOverrides[trackIndex].equalizerCrossoverHz[1] = value;
 }
 
 void SynthRenderer::setLiveSynthFilterOverride(size_t trackIndex, int parameter, float value)

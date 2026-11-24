@@ -138,6 +138,10 @@ AudioEngine::AudioEngine()
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_relaxed);
         liveTrackPans[index].store(2.0f, std::memory_order_relaxed);
+        for (auto& gain : liveTrackEqGainDb[index])
+            gain.store(1000.0f, std::memory_order_relaxed);
+        for (auto& crossover : liveTrackEqCrossoverHz[index])
+            crossover.store(-1.0f, std::memory_order_relaxed);
         liveSynthFilterCutoffOverrides[index].store(-1.0f, std::memory_order_relaxed);
         liveSynthFilterResonanceOverrides[index].store(-1.0f, std::memory_order_relaxed);
         trackPeakValues[index].store(0.0f, std::memory_order_relaxed);
@@ -226,6 +230,10 @@ void AudioEngine::setProject(const ProjectData& project)
     {
         liveTrackVolumes[index].store(-1.0f, std::memory_order_release);
         liveTrackPans[index].store(2.0f, std::memory_order_release);
+        for (auto& gain : liveTrackEqGainDb[index])
+            gain.store(1000.0f, std::memory_order_release);
+        for (auto& crossover : liveTrackEqCrossoverHz[index])
+            crossover.store(-1.0f, std::memory_order_release);
         liveSynthFilterCutoffOverrides[index].store(-1.0f, std::memory_order_release);
         liveSynthFilterResonanceOverrides[index].store(-1.0f, std::memory_order_release);
         trackPeakValues[index].store(0.0f, std::memory_order_release);
@@ -409,7 +417,12 @@ float AudioEngine::masterPeakLevel() const
 
 void AudioEngine::setLiveTrackMixOverride(quint64 trackId, int parameter, float value)
 {
-    if (parameter != 0 && parameter != 1)
+    const bool eqGain = parameter >= trackEqLowGainAutomationTarget &&
+                        parameter <= trackEqHighGainAutomationTarget;
+    const bool eqLowCrossover = parameter == trackEqLowCrossoverAutomationTarget;
+    const bool eqHighCrossover = parameter == trackEqHighCrossoverAutomationTarget;
+    if (parameter != 0 && parameter != 1 && !eqGain &&
+        !eqLowCrossover && !eqHighCrossover)
         return;
     const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
     const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
@@ -422,15 +435,30 @@ void AudioEngine::setLiveTrackMixOverride(quint64 trackId, int parameter, float 
             continue;
         if (parameter == 0)
             liveTrackVolumes[index].store(std::clamp(value, 0.0f, 1.0f), std::memory_order_release);
-        else
+        else if (parameter == 1)
             liveTrackPans[index].store(std::clamp(value, -1.0f, 1.0f), std::memory_order_release);
+        else if (eqGain)
+            liveTrackEqGainDb[index][static_cast<size_t>(
+                parameter - trackEqLowGainAutomationTarget)].store(
+                    std::clamp(value, -18.0f, 18.0f), std::memory_order_release);
+        else if (eqLowCrossover)
+            liveTrackEqCrossoverHz[index][0].store(std::clamp(value, 20.0f, 2000.0f),
+                                                   std::memory_order_release);
+        else if (eqHighCrossover)
+            liveTrackEqCrossoverHz[index][1].store(std::clamp(value, 500.0f, 20000.0f),
+                                                   std::memory_order_release);
         return;
     }
 }
 
 void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
 {
-    if (parameter != 0 && parameter != 1)
+    const bool eqGain = parameter >= trackEqLowGainAutomationTarget &&
+                        parameter <= trackEqHighGainAutomationTarget;
+    const bool eqLowCrossover = parameter == trackEqLowCrossoverAutomationTarget;
+    const bool eqHighCrossover = parameter == trackEqHighCrossoverAutomationTarget;
+    if (parameter != 0 && parameter != 1 && !eqGain &&
+        !eqLowCrossover && !eqHighCrossover)
         return;
     const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
     const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
@@ -443,8 +471,16 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
             continue;
         if (parameter == 0)
             liveTrackVolumes[index].store(-1.0f, std::memory_order_release);
-        else
+        else if (parameter == 1)
             liveTrackPans[index].store(2.0f, std::memory_order_release);
+        else if (eqGain)
+            liveTrackEqGainDb[index][static_cast<size_t>(
+                parameter - trackEqLowGainAutomationTarget)].store(
+                    1000.0f, std::memory_order_release);
+        else if (eqLowCrossover)
+            liveTrackEqCrossoverHz[index][0].store(-1.0f, std::memory_order_release);
+        else if (eqHighCrossover)
+            liveTrackEqCrossoverHz[index][1].store(-1.0f, std::memory_order_release);
         return;
     }
 }
@@ -1530,6 +1566,14 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             liveTrackVolumes[index].load(std::memory_order_acquire));
         renderer.setLiveTrackMixOverride(index, 1,
             liveTrackPans[index].load(std::memory_order_acquire));
+        for (size_t band = 0; band < liveTrackEqGainDb[index].size(); ++band)
+            renderer.setLiveTrackMixOverride(index,
+                trackEqLowGainAutomationTarget + static_cast<int>(band),
+                liveTrackEqGainDb[index][band].load(std::memory_order_acquire));
+        renderer.setLiveTrackMixOverride(index, trackEqLowCrossoverAutomationTarget,
+            liveTrackEqCrossoverHz[index][0].load(std::memory_order_acquire));
+        renderer.setLiveTrackMixOverride(index, trackEqHighCrossoverAutomationTarget,
+            liveTrackEqCrossoverHz[index][1].load(std::memory_order_acquire));
         renderer.setLiveSynthFilterOverride(index, 0,
             liveSynthFilterCutoffOverrides[index].load(std::memory_order_acquire));
         renderer.setLiveSynthFilterOverride(index, 1,

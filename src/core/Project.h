@@ -265,6 +265,12 @@ struct AutomationPoint
     } curveToNext = Curve::Linear;
 };
 
+inline constexpr int trackEqLowGainAutomationTarget = 10000;
+inline constexpr int trackEqMidGainAutomationTarget = 10001;
+inline constexpr int trackEqHighGainAutomationTarget = 10002;
+inline constexpr int trackEqLowCrossoverAutomationTarget = 10003;
+inline constexpr int trackEqHighCrossoverAutomationTarget = 10004;
+
 inline double automationCurveProgress(AutomationPoint::Curve curve, double position)
 {
     const double t = position <= 0.0 ? 0.0 : position >= 1.0 ? 1.0 : position;

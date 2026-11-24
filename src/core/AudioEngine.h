@@ -246,6 +246,8 @@ private:
     std::atomic<float> masterGain{0.8f};
     std::array<std::atomic<float>, maximumTrackCount> liveTrackVolumes;
     std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
+    std::array<std::array<std::atomic<float>, 3>, maximumTrackCount> liveTrackEqGainDb;
+    std::array<std::array<std::atomic<float>, 2>, maximumTrackCount> liveTrackEqCrossoverHz;
     std::array<std::atomic<float>, maximumTrackCount> liveSynthFilterCutoffOverrides;
     std::array<std::atomic<float>, maximumTrackCount> liveSynthFilterResonanceOverrides;
     std::atomic<quint64> livePluginTrackId{0};
