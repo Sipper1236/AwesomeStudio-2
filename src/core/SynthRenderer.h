@@ -43,6 +43,8 @@ public:
     void setLiveSynthFilterOverride(size_t trackIndex, int parameter, float value);
     void setLivePluginParameterOverride(size_t trackIndex, qsizetype effectIndex,
                                         qsizetype parameterIndex, float value);
+    void setLiveVst3InstrumentParameterOverride(size_t trackIndex,
+                                               qsizetype parameterIndex, float value);
     void capturePluginStates(ProjectData& target) const;
     void servicePluginCallbacks();
     void stopPluginProcessing();
@@ -297,6 +299,7 @@ private:
     std::vector<std::unique_ptr<ClapAudioPluginInstance>> clapInstruments;
     std::vector<std::unique_ptr<Vst3AudioInstrumentInstance>> vst3Instruments;
     std::vector<std::vector<float>> pluginInstrumentLiveParameterOverrides;
+    std::vector<std::vector<float>> vst3InstrumentManualParameterOverrides;
     std::vector<unsigned char> trackEffectHasTail;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;

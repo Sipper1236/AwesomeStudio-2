@@ -202,6 +202,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     clapInstruments.clear();
     vst3Instruments.clear();
     pluginInstrumentLiveParameterOverrides.clear();
+    vst3InstrumentManualParameterOverrides.clear();
     trackEffectHasTail.clear();
     activeEqualizerTailTracks.clear();
     trackBusIndices.clear();
@@ -257,6 +258,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     clapInstruments.resize(static_cast<size_t>(project->tracks.size()));
     vst3Instruments.resize(static_cast<size_t>(project->tracks.size()));
     pluginInstrumentLiveParameterOverrides.resize(static_cast<size_t>(project->tracks.size()));
+    vst3InstrumentManualParameterOverrides.resize(static_cast<size_t>(project->tracks.size()));
     trackEffectHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackBusIndices.resize(static_cast<size_t>(project->tracks.size()), -1);
     trackMainLatencyDelays.resize(static_cast<size_t>(project->tracks.size()));
@@ -332,6 +334,9 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             vst3Instruments[trackIndex] = std::make_unique<Vst3AudioInstrumentInstance>(
                 track.vst3PluginId, sampleRate, track.vst3ParameterValues, track.vst3PluginState);
             pluginInstrumentLiveParameterOverrides[trackIndex].assign(
+                static_cast<size_t>(vst3Instruments[trackIndex]->parameterCount()),
+                std::numeric_limits<float>::quiet_NaN());
+            vst3InstrumentManualParameterOverrides[trackIndex].assign(
                 static_cast<size_t>(vst3Instruments[trackIndex]->parameterCount()),
                 std::numeric_limits<float>::quiet_NaN());
         }
@@ -1058,6 +1063,8 @@ StereoSample SynthRenderer::finishMixerFrame()
         const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
         const std::vector<float>& liveOverrides =
             pluginInstrumentLiveParameterOverrides[trackIndex];
+        const std::vector<float>& manualOverrides =
+            vst3InstrumentManualParameterOverrides[trackIndex];
         static const QVector<AutomationPoint> empty;
         for (qsizetype parameterIndex = 0; parameterIndex < instrument->parameterCount();
              ++parameterIndex)
@@ -1068,12 +1075,17 @@ StereoSample SynthRenderer::finishMixerFrame()
             const float liveValue = static_cast<size_t>(parameterIndex) < liveOverrides.size()
                 ? liveOverrides[static_cast<size_t>(parameterIndex)]
                 : std::numeric_limits<float>::quiet_NaN();
-            if (points.isEmpty() && !std::isfinite(liveValue))
+            const float manualValue = static_cast<size_t>(parameterIndex) < manualOverrides.size()
+                ? manualOverrides[static_cast<size_t>(parameterIndex)]
+                : std::numeric_limits<float>::quiet_NaN();
+            if (points.isEmpty() && !std::isfinite(liveValue) && !std::isfinite(manualValue))
                 continue;
             const float baseValue = parameterIndex < track.vst3ParameterValues.size()
                 ? track.vst3ParameterValues[parameterIndex]
                 : instrument->parameterValue(parameterIndex);
             float value = automationValue(points, currentBeat, baseValue);
+            if (points.isEmpty() && std::isfinite(manualValue))
+                value = manualValue;
             if (std::isfinite(liveValue))
                 value = liveValue;
             instrument->setParameter(parameterIndex, value);
@@ -1945,6 +1957,18 @@ void SynthRenderer::setLivePluginParameterOverride(size_t trackIndex, qsizetype 
     std::vector<float>& overrides =
         trackEffectStates[trackIndex][static_cast<size_t>(effectIndex)].liveParameterOverrides;
     if (parameterIndex < 0 || parameterIndex >= static_cast<qsizetype>(overrides.size()))
+        return;
+    overrides[static_cast<size_t>(parameterIndex)] = value;
+}
+
+void SynthRenderer::setLiveVst3InstrumentParameterOverride(size_t trackIndex,
+                                                           qsizetype parameterIndex,
+                                                           float value)
+{
+    if (trackIndex >= vst3InstrumentManualParameterOverrides.size() || parameterIndex < 0)
+        return;
+    std::vector<float>& overrides = vst3InstrumentManualParameterOverrides[trackIndex];
+    if (static_cast<size_t>(parameterIndex) >= overrides.size())
         return;
     overrides[static_cast<size_t>(parameterIndex)] = value;
 }

@@ -7,6 +7,7 @@
 #include "core/MidiFile.h"
 #include "core/MidiInput.h"
 #include "core/Vst3AudioEffect.h"
+#include "ui/Vst3PluginEditor.h"
 #include "core/WavExporter.h"
 #include "ui/ArrangementEditor.h"
 #include "ui/MidiEditor.h"
@@ -2822,7 +2823,13 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     autosaveTimer->start();
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    const auto childDialogs = findChildren<QDialog*>(QString(), Qt::FindDirectChildrenOnly);
+    for (QDialog* child : childDialogs)
+        if (child->property("vst3NativeEditorWindow").toBool())
+            delete child;
+}
 
 void MainWindow::createActions()
 {
@@ -3519,6 +3526,13 @@ void MainWindow::createDocks()
     connect(pluginInstrumentControlsButton, &QPushButton::clicked,
             this, &MainWindow::editSelectedPluginInstrument);
     browserLayout->addWidget(pluginInstrumentControlsButton);
+    pluginInstrumentEditorButton = new QPushButton(tr("Plug-in editor…"), browser);
+    pluginInstrumentEditorButton->setToolTip(
+        tr("Open the selected VST3 instrument's native editor window"));
+    pluginInstrumentEditorButton->setVisible(false);
+    connect(pluginInstrumentEditorButton, &QPushButton::clicked,
+            this, &MainWindow::editSelectedVst3InstrumentEditor);
+    browserLayout->addWidget(pluginInstrumentEditorButton);
     synthPresetPanel = new QWidget(browser);
     auto* synthPresetRow = new QHBoxLayout(synthPresetPanel);
     synthPresetRow->setContentsMargins(0, 0, 0, 0);
@@ -4706,6 +4720,13 @@ void MainWindow::refreshProjectUi()
         !pluginInstrumentAvailable ? tr("This plug-in instrument is not installed") :
         !pluginInstrumentHasControls ? tr("This instrument exposes no editable parameters") :
         tr("Edit the selected plug-in instrument's advertised parameters"));
+    const bool vst3InstrumentSelected = track != nullptr &&
+        track->instrumentType == InstrumentType::Vst3Instrument;
+    pluginInstrumentEditorButton->setVisible(vst3InstrumentSelected);
+    pluginInstrumentEditorButton->setEnabled(pluginInstrumentAvailable);
+    pluginInstrumentEditorButton->setToolTip(
+        !pluginInstrumentAvailable ? tr("This VST3 instrument is not installed") :
+        tr("Open the selected VST3 instrument's native editor window"));
     equalizerControls->setVisible(track != nullptr);
     const std::array<float, 3> equalizerValues = track == nullptr
         ? std::array<float, 3>{0.0f, 0.0f, 0.0f}
@@ -6752,6 +6773,111 @@ void MainWindow::editSelectedPluginInstrument()
     project.normalize();
     settingsDirty = true;
     refreshProjectUi();
+}
+
+void MainWindow::editSelectedVst3InstrumentEditor()
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::Vst3Instrument)
+        return;
+
+    const quint64 trackId = track->id;
+    const QString pluginId = track->vst3PluginId;
+    Vst3PluginDescriptor descriptor;
+    if (!Vst3AudioInstrumentInstance::describe(pluginId, descriptor))
+    {
+        QMessageBox::warning(this, tr("VST3 instrument unavailable"),
+            tr("Install %1 before opening its editor.")
+                .arg(track->vst3PluginName.isEmpty() ? track->name : track->vst3PluginName));
+        return;
+    }
+
+    audioEngine.capturePluginStates(project);
+    track = project.findTrack(trackId);
+    if (track == nullptr || track->instrumentType != InstrumentType::Vst3Instrument ||
+        track->vst3PluginId != pluginId)
+        return;
+
+    auto* editor = new Vst3PluginEditorWindow(
+        descriptor, track->vst3PluginState, track->vst3ParameterValues,
+        [this, trackId, pluginId, descriptor](std::uint32_t parameterId, float value)
+        {
+            const auto parameterIt = std::find_if(
+                descriptor.parameters.cbegin(), descriptor.parameters.cend(),
+                [parameterId](const Vst3PluginParameter& parameter)
+                { return parameter.id == parameterId; });
+            if (parameterIt == descriptor.parameters.cend())
+                return;
+            const qsizetype parameterIndex = parameterIt - descriptor.parameters.cbegin();
+            if (parameterIndex < 0 || parameterIndex >= pluginParametersPerEffect ||
+                parameterIt->maximum <= parameterIt->minimum)
+                return;
+
+            InstrumentTrack* currentTrack = project.findTrack(trackId);
+            if (currentTrack == nullptr ||
+                currentTrack->instrumentType != InstrumentType::Vst3Instrument ||
+                currentTrack->vst3PluginId != pluginId)
+                return;
+
+            const float previousValue = parameterIndex < currentTrack->vst3ParameterValues.size()
+                ? currentTrack->vst3ParameterValues[parameterIndex]
+                : parameterIt->defaultValue;
+            value = std::isfinite(value)
+                ? std::clamp(value, parameterIt->minimum, parameterIt->maximum)
+                : parameterIt->defaultValue;
+            if (parameterIt->toggled)
+                value = value >= (parameterIt->minimum + parameterIt->maximum) * 0.5f
+                    ? parameterIt->maximum : parameterIt->minimum;
+            else if (parameterIt->integer)
+                value = std::round(value);
+
+            while (currentTrack->vst3ParameterValues.size() <= parameterIndex)
+                currentTrack->vst3ParameterValues.push_back(parameterIt->defaultValue);
+            currentTrack->vst3ParameterValues[parameterIndex] = value;
+            settingsDirty = true;
+            refreshDirtyState();
+
+            const int automationTarget = vst3InstrumentAutomationTarget(parameterIndex);
+            bool wroteAutomation = false;
+            if (automationWriteSession.active &&
+                automationWriteSession.trackId == trackId &&
+                automationWriteSession.parameter == automationTarget &&
+                automationWriteSession.pluginUri == pluginId)
+            {
+                recordAutomationValue(trackId, automationTarget, value);
+                if (automationWriteModeControl->currentData().toInt() != 1)
+                    automationWriteIdleTimer->start(250);
+                wroteAutomation = true;
+            }
+            else if (automationWriteAction != nullptr && automationWriteAction->isChecked() &&
+                     audioEngine.isPlaying() && automationLaneParameterControl != nullptr &&
+                     automationLaneParameterControl->currentData().toInt() == automationTarget)
+            {
+                beginAutomationWrite(trackId, automationTarget, previousValue, pluginId,
+                                     -1, parameterIndex, parameterIt->minimum,
+                                     parameterIt->maximum, parameterIt->name);
+                if (automationWriteSession.active &&
+                    automationWriteSession.trackId == trackId &&
+                    automationWriteSession.parameter == automationTarget &&
+                    automationWriteSession.pluginUri == pluginId)
+                {
+                    recordAutomationValue(trackId, automationTarget, value);
+                    if (automationWriteModeControl->currentData().toInt() != 1)
+                        automationWriteIdleTimer->start(250);
+                    wroteAutomation = true;
+                }
+            }
+            if (!wroteAutomation && !audioEngine.setLiveVst3InstrumentParameterOverride(
+                    trackId, pluginId, parameterIndex, value))
+                audioEngine.setLivePluginParameterOverride(trackId, -1, parameterIndex, value);
+        }, this);
+
+    QString error;
+    if (!editor->openNativeEditor(error))
+    {
+        delete editor;
+        QMessageBox::warning(this, tr("VST3 plug-in editor"), error);
+    }
 }
 
 void MainWindow::addClipAt(quint64 trackId, double startBeat)

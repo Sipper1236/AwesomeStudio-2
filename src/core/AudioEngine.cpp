@@ -429,6 +429,26 @@ void AudioEngine::setLivePluginParameterOverride(quint64 trackId, qsizetype effe
     livePluginParameterOverrideActive.store(true, std::memory_order_release);
 }
 
+bool AudioEngine::setLiveVst3InstrumentParameterOverride(quint64 trackId,
+                                                         const QString& pluginId,
+                                                         qsizetype parameterIndex,
+                                                         float value)
+{
+    if (trackId == 0 || pluginId.isEmpty() || parameterIndex < 0 ||
+        parameterIndex >= 256 || !std::isfinite(value))
+        return false;
+
+    const size_t writeIndex = liveVst3ParameterEditWriteIndex.load(std::memory_order_relaxed);
+    const size_t readIndex = liveVst3ParameterEditReadIndex.load(std::memory_order_acquire);
+    if (writeIndex - readIndex >= liveVst3ParameterEditQueueCapacity)
+        return false;
+
+    liveVst3ParameterEdits[writeIndex % liveVst3ParameterEditQueueCapacity] =
+        {trackId, pluginId, parameterIndex, value};
+    liveVst3ParameterEditWriteIndex.store(writeIndex + 1, std::memory_order_release);
+    return true;
+}
+
 void AudioEngine::clearLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
                                                    qsizetype parameterIndex)
 {
@@ -1382,6 +1402,32 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         renderer.setLiveSynthFilterOverride(index, 1,
             liveSynthFilterResonanceOverrides[index].load(std::memory_order_acquire));
     }
+    size_t parameterEditRead =
+        liveVst3ParameterEditReadIndex.load(std::memory_order_relaxed);
+    const size_t parameterEditWrite =
+        liveVst3ParameterEditWriteIndex.load(std::memory_order_acquire);
+    while (parameterEditRead < parameterEditWrite)
+    {
+        const LiveVst3ParameterEdit& edit = liveVst3ParameterEdits[
+            parameterEditRead % liveVst3ParameterEditQueueCapacity];
+        for (size_t trackIndex = 0;
+             trackIndex < static_cast<size_t>(project->tracks.size()) &&
+                 trackIndex < maximumTrackCount; ++trackIndex)
+        {
+            const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
+            if (track.id == edit.trackId &&
+                track.instrumentType == InstrumentType::Vst3Instrument &&
+                track.vst3PluginId == edit.pluginId)
+            {
+                renderer.setLiveVst3InstrumentParameterOverride(
+                    trackIndex, edit.parameterIndex, edit.value);
+                break;
+            }
+        }
+        ++parameterEditRead;
+    }
+    liveVst3ParameterEditReadIndex.store(parameterEditRead, std::memory_order_release);
+
     const quint64 livePluginTrackId = this->livePluginTrackId.load(std::memory_order_acquire);
     const qsizetype livePluginEffectIndex = this->livePluginEffectIndex.load(std::memory_order_relaxed);
     const qsizetype livePluginParameterIndex = this->livePluginParameterIndex.load(std::memory_order_relaxed);

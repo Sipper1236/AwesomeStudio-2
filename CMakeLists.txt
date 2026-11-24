@@ -64,6 +64,8 @@ add_executable(AwesomeStudio
     src/core/WavExporter.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/Vst3PluginEditor.cpp
+    src/ui/Vst3PluginEditor.h
     src/ui/ArrangementEditor.cpp
     src/ui/ArrangementEditor.h
     src/ui/StepSequencer.cpp

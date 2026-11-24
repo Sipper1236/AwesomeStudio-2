@@ -76,7 +76,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Compensate the fixed CLAP host buffering delay and activation-reported plug-in latency across Mixer routes
 - [x] Cross-platform VST3 audio-effect hosting with generic controls, automation, saved state, and latency compensation
 - [x] Cross-platform VST3 instrument tracks with generic controls, per-parameter Playlist automation, saved parameter and plug-in state, playback/export, and MIDI audition
-- [ ] Native plug-in editor windows and VST3 note expression and pitch bend
+- [x] Native VST3 editor windows on Windows, macOS, and Linux/X11, with generic controls retained on Wayland
+- [ ] VST3 note expression and pitch bend
 - [ ] Dynamic plug-in latency changes and transport context/timing compensation
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
 - [ ] Broader controller target coverage

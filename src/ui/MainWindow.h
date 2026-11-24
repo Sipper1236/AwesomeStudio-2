@@ -32,6 +32,7 @@ class ArrangementEditor;
 class StepSequencer;
 class AudioRecorder;
 class MidiInput;
+class Vst3PluginEditorWindow;
 
 class MainWindow final : public QMainWindow
 {
@@ -121,6 +122,7 @@ private:
     void addClapInstrumentTrack();
     void addVst3InstrumentTrack();
     void editSelectedPluginInstrument();
+    void editSelectedVst3InstrumentEditor();
     void addClipAt(quint64 trackId, double startBeat);
     void addNewPattern();
     void duplicateSelectedClip();
@@ -381,6 +383,7 @@ private:
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
     QPushButton* pluginInstrumentControlsButton = nullptr;
+    QPushButton* pluginInstrumentEditorButton = nullptr;
     QLabel* playheadLabel = nullptr;
     QLabel* audioDeviceLabel = nullptr;
     QAction* playAction = nullptr;

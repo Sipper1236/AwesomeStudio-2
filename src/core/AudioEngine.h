@@ -39,6 +39,9 @@ public:
     void clearLiveSynthFilterOverride(quint64 trackId, int parameter);
     void setLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
                                         qsizetype parameterIndex, float value);
+    bool setLiveVst3InstrumentParameterOverride(quint64 trackId,
+                                                const QString& pluginId,
+                                                qsizetype parameterIndex, float value);
     void clearLivePluginParameterOverride(quint64 trackId, qsizetype effectIndex,
                                           qsizetype parameterIndex);
     void capturePluginStates(ProjectData& project);
@@ -89,6 +92,7 @@ private:
     static constexpr size_t maximumTrackCount = 256;
     static constexpr size_t maximumBusCount = 64;
     static constexpr size_t liveMidiQueueCapacity = 1024;
+    static constexpr size_t liveVst3ParameterEditQueueCapacity = 1024;
     static constexpr size_t maximumLiveMidiVoices = 128;
     static constexpr size_t audioMonitorBufferCapacity = 32768;
     class AudioStream;
@@ -128,6 +132,14 @@ private:
         qint64 sampleEndFrame = 0;
         double samplePlaybackRate = 1.0;
         bool sampleLoopEnabled = false;
+    };
+
+    struct LiveVst3ParameterEdit
+    {
+        quint64 trackId = 0;
+        QString pluginId;
+        qsizetype parameterIndex = -1;
+        float value = 0.0f;
     };
 
     struct LiveMidiVoice
@@ -220,6 +232,10 @@ private:
     std::atomic<qsizetype> livePluginParameterIndex{-1};
     std::atomic<float> livePluginParameterValue{0.0f};
     std::atomic<bool> livePluginParameterOverrideActive{false};
+    std::array<LiveVst3ParameterEdit, liveVst3ParameterEditQueueCapacity>
+        liveVst3ParameterEdits;
+    std::atomic<size_t> liveVst3ParameterEditWriteIndex{0};
+    std::atomic<size_t> liveVst3ParameterEditReadIndex{0};
     std::array<LiveMidiEvent, liveMidiQueueCapacity> liveMidiEvents;
     std::array<LiveMidiVoice, maximumLiveMidiVoices> liveMidiVoices;
     std::array<float, 16> liveMidiChannelPitchBends{};
