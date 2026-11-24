@@ -1,5 +1,6 @@
 # Build artifacts
 build/
+build-hybrid/
 bin/
 lib/
 *.o
