@@ -14,6 +14,7 @@ public:
     void setProject(const ProjectData& project);
     void setSelection(quint64 trackId, quint64 clipId);
     void setPixelsPerBeat(int pixels);
+    void setSnapDivisions(int divisions);
     void setPlayheadBeat(double beat);
     void setPunchRange(bool enabled, double punchInBeat, double punchOutBeat);
     void setAutomationView(bool enabled, int parameter, float minimum = 0.0f,

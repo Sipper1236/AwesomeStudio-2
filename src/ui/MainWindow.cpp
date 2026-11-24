@@ -3586,6 +3586,26 @@ void MainWindow::createToolBars()
     clipLengthControl->setFixedWidth(118);
     clipLengthControl->setToolTip(tr("Length of the selected MIDI clip in quarter-note beats"));
     arrangementBar->addWidget(clipLengthControl);
+    arrangementBar->addWidget(new QLabel(tr("SNAP"), arrangementBar));
+    auto* playlistSnapControl = new QComboBox(arrangementBar);
+    playlistSnapControl->setObjectName(QStringLiteral("playlistSnapControl"));
+    playlistSnapControl->addItem(tr("Bar"), 1);
+    playlistSnapControl->addItem(tr("1/2 bar"), 2);
+    playlistSnapControl->addItem(tr("1/4 bar"), 4);
+    playlistSnapControl->addItem(tr("1/8 bar"), 8);
+    playlistSnapControl->addItem(tr("1/16 bar"), 16);
+    playlistSnapControl->addItem(tr("1/32 bar"), 32);
+    playlistSnapControl->addItem(tr("1/64 bar"), 64);
+    playlistSnapControl->setCurrentIndex(4);
+    playlistSnapControl->setToolTip(tr("Meter-relative grid for Playlist clips, audio trim edges, automation points, and ruler edits"));
+    arrangementBar->addWidget(playlistSnapControl);
+    arrangementEditor->setSnapDivisions(16);
+    connect(playlistSnapControl, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this, playlistSnapControl](int index)
+    {
+        if (index >= 0)
+            arrangementEditor->setSnapDivisions(playlistSnapControl->itemData(index).toInt());
+    });
     connect(clipLengthControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double length)
     {
         MidiClip* clip = selectedClip();

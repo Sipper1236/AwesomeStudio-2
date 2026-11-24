@@ -128,6 +128,11 @@ public:
         updateCanvasSize();
     }
 
+    void setSnapDivisions(int divisions)
+    {
+        snapDivisions = std::clamp(divisions, 1, 64);
+    }
+
     void setPlayheadBeat(double beat)
     {
         playheadBeat = beat;
@@ -548,16 +553,17 @@ protected:
         const QPoint point = event->position().toPoint();
         if (point.y() >= 0 && point.y() < rulerHeight && point.x() >= trackHeaderWidth)
         {
-            const double beat = std::clamp(
+            const double rawBeat = std::clamp(
                 (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
             const int markerIndex = markerAt(point);
             if (event->button() == Qt::LeftButton)
             {
-                emit owner->markerSeekRequested(markerIndex >= 0 ? project.markers[markerIndex].beat : beat);
+                emit owner->markerSeekRequested(markerIndex >= 0 ? project.markers[markerIndex].beat : rawBeat);
                 return;
             }
             if (event->button() == Qt::RightButton)
             {
+                const double beat = snappedPlaylistBeat(rawBeat);
                 QMenu menu(this);
                 QAction* addAction = nullptr;
                 QAction* renameAction = nullptr;
@@ -639,7 +645,8 @@ protected:
                     emit owner->automationPointLimitReached();
                     return;
                 }
-                const double beat = std::clamp((point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+                const double beat = snappedPlaylistBeat(std::clamp(
+                    (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0));
                 const int laneY = rulerHeight + row * currentRowHeight() + trackHeight;
                 const float value = automationValueAtY(laneY, point.y());
                 auto insertAt = std::lower_bound(curve.begin(), curve.end(), beat,
@@ -704,8 +711,8 @@ protected:
                     return;
                 }
                 QVector<AutomationPoint>& points = mutableAutomationPoints(track);
-                const double beat = std::clamp(
-                    (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+                const double beat = snappedPlaylistBeat(std::clamp(
+                    (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0));
                 const float value = automationValueAtY(rowY + trackHeight, point.y());
                 auto insertAt = std::lower_bound(points.begin(), points.end(), beat,
                     [](const AutomationPoint& current, double targetBeat)
@@ -914,7 +921,8 @@ protected:
                 if (selectedAutomationPoint < 0 || selectedAutomationPoint >= points.size()) return;
                 const int index = static_cast<int>(bus - project.buses.begin());
                 const int rowY = rulerHeight + (static_cast<int>(project.tracks.size()) + index) * currentRowHeight();
-                double beat = std::clamp((point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+                double beat = snappedPlaylistBeat(std::clamp(
+                    (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0));
                 const double lo = selectedAutomationPoint > 0 ? points[selectedAutomationPoint - 1].beat + 0.001 : 0.0;
                 const double hi = selectedAutomationPoint + 1 < points.size() ? points[selectedAutomationPoint + 1].beat - 0.001 : 16384.0;
                 beat = lo <= hi ? std::clamp(beat, lo, hi) : points[selectedAutomationPoint].beat;
@@ -931,8 +939,8 @@ protected:
             if (selectedAutomationPoint < 0 || selectedAutomationPoint >= points.size())
                 return;
             const int rowY = rulerHeight + trackIndex * currentRowHeight();
-            double beat = std::clamp((point.x() - trackHeaderWidth) /
-                                     static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+            double beat = snappedPlaylistBeat(std::clamp((point.x() - trackHeaderWidth) /
+                                     static_cast<double>(pixelsPerBeat), 0.0, 16384.0));
             double minimumBeat = 0.0;
             double maximumBeat = 16384.0;
             if (selectedAutomationPoint > 0)
@@ -999,9 +1007,6 @@ protected:
             const double rawDelta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
             const double edgeBeat = resizeLeftEdge ? initialClipStart + rawDelta
                 : initialClipStart + initialClipLength + rawDelta;
-            const double edgeBarLength = project.quarterNotesPerBarAtBeat(std::max(0.0, edgeBeat));
-            const int snapDivisions = std::clamp(
-                static_cast<int>(std::floor(edgeBarLength / 0.25)), 1, 4);
             const double snappedEdgeBeat = std::abs(rawDelta) < 1.0e-9 ? edgeBeat
                 : project.snapBeatToBarDivision(edgeBeat, snapDivisions);
             const double snappedDelta = resizeLeftEdge
@@ -1065,8 +1070,6 @@ protected:
 
         const double delta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
         const double targetBeat = std::max(0.0, initialClipStart + delta);
-        const double barLength = project.quarterNotesPerBarAtBeat(targetBeat);
-        const int snapDivisions = std::clamp(static_cast<int>(std::floor(barLength / 0.25)), 1, 4);
         const double startBeat = project.snapBeatToBarDivision(targetBeat, snapDivisions);
         const int row = std::clamp((point.y() - rulerHeight) / currentRowHeight(), 0,
                                    static_cast<int>(project.tracks.size()) - 1);
@@ -1223,6 +1226,11 @@ protected:
     }
 
 private:
+    double snappedPlaylistBeat(double beat) const
+    {
+        return project.snapBeatToBarDivision(beat, snapDivisions);
+    }
+
     int markerAt(const QPoint& position) const
     {
         const QFont font(QStringLiteral("Sans Serif"), 8, QFont::DemiBold);
@@ -2089,6 +2097,7 @@ private:
     qint64 initialAudioStartFrame = 0;
     int dragStartX = 0;
     int pixelsPerBeat = 28;
+    int snapDivisions = 16;
     double playheadBeat = -1.0;
     double punchInBeat = 0.0;
     double punchOutBeat = 0.0;
@@ -2150,6 +2159,11 @@ void ArrangementEditor::setSelection(quint64 trackId, quint64 clipId)
 void ArrangementEditor::setPixelsPerBeat(int pixels)
 {
     canvas->setPixelsPerBeat(pixels);
+}
+
+void ArrangementEditor::setSnapDivisions(int divisions)
+{
+    canvas->setSnapDivisions(divisions);
 }
 
 void ArrangementEditor::setPlayheadBeat(double beat)
