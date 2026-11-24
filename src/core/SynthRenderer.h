@@ -263,6 +263,7 @@ private:
     {
         int busIndex = -1;
         float gain = 0.0f;
+        QVector<AutomationPoint> automation;
         LatencyDelayLine latencyDelay;
     };
 

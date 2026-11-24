@@ -304,7 +304,9 @@ protected:
                     painter.drawText(QRect(12, rowY + 31, trackHeaderWidth - 20, 18), Qt::AlignLeft | Qt::AlignVCenter,
                                      automationParameter == mixerBusGainAutomationTarget ? tr("MIXER BUS · LEVEL") :
                                      automationParameter == mixerBusPanAutomationTarget ? tr("MIXER BUS · PAN") :
-                                     automationParameter == mixerBusMuteAutomationTarget ? tr("MIXER BUS · MUTE") : tr("MIXER BUS · SOLO"));
+                                     automationParameter == mixerBusMuteAutomationTarget ? tr("MIXER BUS · MUTE") :
+                                     automationParameter == mixerBusSoloAutomationTarget ? tr("MIXER BUS · SOLO") :
+                                     tr("MIXER BUS · SEND %1").arg(automationParameter - mixerSendLevelAutomationTargetBase + 1));
                     drawBusAutomationLane(painter, bus, rowY, gridWidth);
                 }
             }
@@ -583,7 +585,7 @@ protected:
             const int busIndex = row - static_cast<int>(project.tracks.size());
             MixerBus& bus = project.buses[busIndex];
             if (point.y() < rulerHeight + (row + 1) * currentRowHeight() - automationLaneHeight ||
-                point.x() < trackHeaderWidth)
+                point.x() < trackHeaderWidth || !hasBusAutomationTarget(bus))
                 return;
             selectedAutomationBusId = bus.id;
             selectedAutomationTrackId = 0;
@@ -1230,7 +1232,14 @@ private:
         return automationParameter == mixerBusGainAutomationTarget ||
             automationParameter == mixerBusPanAutomationTarget ||
             automationParameter == mixerBusMuteAutomationTarget ||
-            automationParameter == mixerBusSoloAutomationTarget;
+            automationParameter == mixerBusSoloAutomationTarget ||
+            isBusSendAutomationTarget();
+    }
+
+    bool isBusSendAutomationTarget() const
+    {
+        const int index = automationParameter - mixerSendLevelAutomationTargetBase;
+        return index >= 0 && index < 64;
     }
 
     bool isDiscreteBusAutomationTarget() const
@@ -1244,6 +1253,13 @@ private:
         if (automationParameter == mixerBusPanAutomationTarget) return bus.panAutomation;
         if (automationParameter == mixerBusMuteAutomationTarget) return bus.muteAutomation;
         if (automationParameter == mixerBusSoloAutomationTarget) return bus.soloAutomation;
+        if (isBusSendAutomationTarget())
+        {
+            const int index = automationParameter - mixerSendLevelAutomationTargetBase;
+            if (index < bus.sends.size()) return bus.sends[index].automation;
+            static QVector<AutomationPoint> invalid;
+            return invalid;
+        }
         return bus.gainAutomation;
     }
 
@@ -1252,7 +1268,20 @@ private:
         if (automationParameter == mixerBusPanAutomationTarget) return bus.panAutomation;
         if (automationParameter == mixerBusMuteAutomationTarget) return bus.muteAutomation;
         if (automationParameter == mixerBusSoloAutomationTarget) return bus.soloAutomation;
+        if (isBusSendAutomationTarget())
+        {
+            const int index = automationParameter - mixerSendLevelAutomationTargetBase;
+            if (index < bus.sends.size()) return bus.sends[index].automation;
+            static const QVector<AutomationPoint> empty;
+            return empty;
+        }
         return bus.gainAutomation;
+    }
+
+    bool hasBusAutomationTarget(const MixerBus& bus) const
+    {
+        return !isBusSendAutomationTarget() ||
+            automationParameter - mixerSendLevelAutomationTargetBase < bus.sends.size();
     }
 
     int busAutomationPointAt(const MixerBus& bus, int row, const QPoint& position) const
@@ -1275,6 +1304,9 @@ private:
             return track.volumeAutomation;
         if (automationParameter == 1)
             return track.panAutomation;
+        const int sendIndex = automationParameter - mixerSendLevelAutomationTargetBase;
+        if (sendIndex >= 0 && sendIndex < track.sends.size())
+            return track.sends[sendIndex].automation;
         if (automationParameter == trackEqLowGainAutomationTarget)
             return track.eqLowGainAutomation;
         if (automationParameter == trackEqMidGainAutomationTarget)
@@ -1338,6 +1370,9 @@ private:
             return track.gain;
         if (automationParameter == 1)
             return track.pan;
+        const int sendIndex = automationParameter - mixerSendLevelAutomationTargetBase;
+        if (sendIndex >= 0 && sendIndex < track.sends.size())
+            return track.sends[sendIndex].gain;
         if (automationParameter == trackEqLowGainAutomationTarget)
             return track.eqLowDb;
         if (automationParameter == trackEqMidGainAutomationTarget)
@@ -1408,6 +1443,9 @@ private:
             return track.volumeAutomation;
         if (automationParameter == 1)
             return track.panAutomation;
+        const int sendIndex = automationParameter - mixerSendLevelAutomationTargetBase;
+        if (sendIndex >= 0 && sendIndex < track.sends.size())
+            return track.sends[sendIndex].automation;
         if (automationParameter == trackEqLowGainAutomationTarget)
             return track.eqLowGainAutomation;
         if (automationParameter == trackEqMidGainAutomationTarget)
@@ -1472,6 +1510,9 @@ private:
     {
         if (automationParameter == 0 || automationParameter == 1)
             return true;
+        const int sendIndex = automationParameter - mixerSendLevelAutomationTargetBase;
+        if (sendIndex >= 0 && sendIndex < 64)
+            return sendIndex < track.sends.size();
         if (automationParameter == trackEqLowGainAutomationTarget ||
             automationParameter == trackEqMidGainAutomationTarget ||
             automationParameter == trackEqHighGainAutomationTarget ||
@@ -1649,9 +1690,19 @@ private:
         painter.drawLine(trackHeaderWidth, laneY + automationLaneHeight - 7,
                          trackHeaderWidth + gridWidth, laneY + automationLaneHeight - 7);
         const auto& points = busAutomationPoints(bus);
+        if (!hasBusAutomationTarget(bus))
+        {
+            painter.setPen(QColor(QStringLiteral("#78838f")));
+            painter.drawText(laneRect, Qt::AlignCenter, tr("No matching auxiliary send"));
+            return;
+        }
         const float base = automationParameter == mixerBusPanAutomationTarget ? bus.pan :
             automationParameter == mixerBusMuteAutomationTarget ? (bus.muted ? 1.0f : 0.0f) :
-            automationParameter == mixerBusSoloAutomationTarget ? (bus.solo ? 1.0f : 0.0f) : bus.gain;
+            automationParameter == mixerBusSoloAutomationTarget ? (bus.solo ? 1.0f : 0.0f) :
+            isBusSendAutomationTarget()
+                ? automationParameter - mixerSendLevelAutomationTargetBase < bus.sends.size()
+                    ? bus.sends[automationParameter - mixerSendLevelAutomationTargetBase].gain : 0.0f
+                : bus.gain;
         QPainterPath path;
         if (points.isEmpty())
         {

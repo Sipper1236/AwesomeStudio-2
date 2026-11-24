@@ -444,7 +444,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         {
             const auto sendBus = busIndexById.find(send.busId);
             if (sendBus != busIndexById.end())
-                busSends[busIndex].push_back({sendBus->second, send.gain, {}});
+                busSends[busIndex].push_back({sendBus->second, send.gain, send.automation, {}});
         }
     }
 
@@ -516,7 +516,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         {
             const auto sendBusPosition = busIndexById.find(send.busId);
             if (sendBusPosition != busIndexById.end())
-                trackSends[trackIndex].push_back({sendBusPosition->second, send.gain, {}});
+                trackSends[trackIndex].push_back({sendBusPosition->second, send.gain, send.automation, {}});
         }
         const bool audible = !track.muted && (!hasTrackSolo || track.solo);
         trackAudible[trackIndex] = audible ? 1 : 0;
@@ -1349,12 +1349,14 @@ StereoSample SynthRenderer::finishMixerFrame()
         }
         for (TrackSendMix& send : trackSends[trackIndex])
         {
-            if (send.gain > 0.0f && send.busIndex >= 0 &&
+            const float sendGain = std::clamp(automationValue(send.automation, currentBeat,
+                                                               send.gain), 0.0f, 1.0f);
+            if (sendGain > 0.0f && send.busIndex >= 0 &&
                 static_cast<size_t>(send.busIndex) < busFrameSamples.size() &&
                 busInputAudible[static_cast<size_t>(send.busIndex)] != 0)
             {
                 const StereoSample sendSample = send.latencyDelay.process(
-                    {trackSample.left * send.gain, trackSample.right * send.gain});
+                    {trackSample.left * sendGain, trackSample.right * sendGain});
                 addBusFrameSample(static_cast<size_t>(send.busIndex),
                                   sendSample);
             }
@@ -1428,8 +1430,10 @@ StereoSample SynthRenderer::finishMixerFrame()
         }
         for (TrackSendMix& send : busSends[busIndex])
         {
+            const float sendGain = std::clamp(automationValue(send.automation, currentBeat,
+                                                               send.gain), 0.0f, 1.0f);
             if (send.busIndex < 0 || static_cast<size_t>(send.busIndex) >= busSoloDownstreamAudible.size() ||
-                send.gain <= 0.0f)
+                sendGain <= 0.0f)
                 continue;
             const size_t destination = static_cast<size_t>(send.busIndex);
             const bool routeAudible = !hasBusSolo
@@ -1440,7 +1444,7 @@ StereoSample SynthRenderer::finishMixerFrame()
             if (!routeAudible)
                 continue;
             const StereoSample sendSample = send.latencyDelay.process(
-                {output.left * send.gain, output.right * send.gain});
+                {output.left * sendGain, output.right * sendGain});
             addBusFrameSample(destination, sendSample);
         }
         busFrameSamples[busIndex] = {};

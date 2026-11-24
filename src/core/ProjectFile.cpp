@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 62;
+constexpr int currentProjectVersion = 63;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -672,7 +672,8 @@ QJsonObject saveTrack(const InstrumentTrack& track)
              for (const MixerSend& send : track.sends)
                  sends.push_back(QJsonObject{
                      {QStringLiteral("busId"), static_cast<qint64>(send.busId)},
-                     {QStringLiteral("gain"), send.gain}
+                     {QStringLiteral("gain"), send.gain},
+                     {QStringLiteral("automation"), saveAutomation(send.automation)}
                  });
              return sends;
          }()},
@@ -1107,6 +1108,10 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                 return false;
             }
             send.gain = static_cast<float>(gain);
+            if (version >= 63 &&
+                !loadAutomation(sendObject.value(QStringLiteral("automation")), send.automation,
+                                QStringLiteral("mixer send level"), version, error))
+                return false;
             track.sends.push_back(send);
         }
     }
@@ -1418,7 +1423,8 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
                  for (const MixerSend& send : bus.sends)
                      sends.push_back(QJsonObject{
                          {QStringLiteral("busId"), static_cast<qint64>(send.busId)},
-                         {QStringLiteral("gain"), send.gain}
+                         {QStringLiteral("gain"), send.gain},
+                         {QStringLiteral("automation"), saveAutomation(send.automation)}
                      });
                  return sends;
              }()},
@@ -1639,6 +1645,10 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
                         return false;
                     }
                     send.gain = static_cast<float>(sendGain);
+                    if (version >= 63 &&
+                        !loadAutomation(sendObject.value(QStringLiteral("automation")), send.automation,
+                                        QStringLiteral("mixer bus send level"), version, error))
+                        return false;
                     bus.sends.push_back(send);
                 }
             }

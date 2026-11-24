@@ -643,6 +643,7 @@ void ProjectData::normalize()
                 continue;
             if (!std::isfinite(send.gain)) send.gain = 0.0f;
             send.gain = std::clamp(send.gain, 0.0f, 1.0f);
+            normalizeAutomation(send.automation, 0.0f, 1.0f);
 
             bool createsCycle = false;
             std::vector<quint64> pending{send.busId};
@@ -701,6 +702,7 @@ void ProjectData::normalize()
                 continue;
             if (!std::isfinite(send.gain)) send.gain = 0.0f;
             send.gain = std::clamp(send.gain, 0.0f, 1.0f);
+            normalizeAutomation(send.automation, 0.0f, 1.0f);
             validSends.push_back(send);
         }
         track.sends = std::move(validSends);

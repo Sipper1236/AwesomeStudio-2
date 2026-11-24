@@ -1203,6 +1203,9 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    const int sendIndex = target - mixerSendLevelAutomationTargetBase;
+    if (sendIndex >= 0 && sendIndex < track.sends.size())
+        return &track.sends[sendIndex].automation;
     if (target == trackEqLowGainAutomationTarget)
         return &track.eqLowGainAutomation;
     if (target == trackEqMidGainAutomationTarget)
@@ -1268,6 +1271,9 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    const int sendIndex = target - mixerSendLevelAutomationTargetBase;
+    if (sendIndex >= 0 && sendIndex < track.sends.size())
+        return &track.sends[sendIndex].automation;
     if (target == trackEqLowGainAutomationTarget)
         return &track.eqLowGainAutomation;
     if (target == trackEqMidGainAutomationTarget)
@@ -1323,7 +1329,8 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
     return &effect.pluginParameterAutomation[parameterIndex];
 }
 
-void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
+void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track,
+                               bool includePlaylistTargets = false)
 {
     if (control == nullptr)
         return;
@@ -1514,6 +1521,20 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
                 }
             }
         }
+    }
+    if (includePlaylistTargets)
+    {
+        addTarget(QObject::tr("Mixer bus level"), mixerBusGainAutomationTarget,
+                  0.0f, 2.0f, 1.0f, QString());
+        addTarget(QObject::tr("Mixer bus pan"), mixerBusPanAutomationTarget,
+                  -1.0f, 1.0f, 0.0f, QString());
+        addTarget(QObject::tr("Mixer bus mute"), mixerBusMuteAutomationTarget,
+                  0.0f, 1.0f, 0.0f, QString());
+        addTarget(QObject::tr("Mixer bus solo"), mixerBusSoloAutomationTarget,
+                  0.0f, 1.0f, 0.0f, QString());
+        for (int sendIndex = 0; sendIndex < 64; ++sendIndex)
+            addTarget(QObject::tr("Send %1 level").arg(sendIndex + 1),
+                      mixerSendLevelAutomationTarget(sendIndex), 0.0f, 1.0f, 0.0f, QString());
     }
     int previousIndex = -1;
     for (int index = 0; index < control->count(); ++index)
@@ -3537,6 +3558,15 @@ void MainWindow::createToolBars()
     automationLaneParameterControl->setItemData(3, 0.0, Qt::UserRole + 3);
     for (int index = 4; index < 6; ++index)
     {
+        automationLaneParameterControl->setItemData(index, 0.0, Qt::UserRole + 1);
+        automationLaneParameterControl->setItemData(index, 1.0, Qt::UserRole + 2);
+        automationLaneParameterControl->setItemData(index, 0.0, Qt::UserRole + 3);
+    }
+    for (int sendIndex = 0; sendIndex < 64; ++sendIndex)
+    {
+        const int index = automationLaneParameterControl->count();
+        automationLaneParameterControl->addItem(tr("Send %1 level").arg(sendIndex + 1),
+                                                  mixerSendLevelAutomationTarget(sendIndex));
         automationLaneParameterControl->setItemData(index, 0.0, Qt::UserRole + 1);
         automationLaneParameterControl->setItemData(index, 1.0, Qt::UserRole + 2);
         automationLaneParameterControl->setItemData(index, 0.0, Qt::UserRole + 3);
@@ -6025,6 +6055,7 @@ void MainWindow::refreshMixer()
             auto* sendLevel = new QSlider(Qt::Horizontal, sendRow);
             sendLevel->setRange(0, 100);
             sendLevel->setValue(static_cast<int>(std::round(send.gain * 100.0f)));
+            const int sendAutomationTarget = mixerSendLevelAutomationTarget(static_cast<int>(sendIndex));
             auto* sendLevelLabel = new QLabel(tr("%1%").arg(sendLevel->value()), sendRow);
             auto* removeSend = new QPushButton(tr("×"), sendRow);
             removeSend->setToolTip(tr("Remove this auxiliary send"));
@@ -6040,10 +6071,54 @@ void MainWindow::refreshMixer()
                     setMixerBusSend(busId, sendIndex, sendBus->currentData().toULongLong(),
                                     sendLevel->value() / 100.0f);
             });
+            connect(sendLevel, &QSlider::sliderPressed, this,
+                    [this, busId, sendAutomationTarget, sendLevel]
+            {
+                beginBusAutomationWrite(busId, sendAutomationTarget, sendLevel->value() / 100.0f);
+            });
+            connect(sendLevel, &QSlider::sliderReleased, this,
+                    [this, busId, sendAutomationTarget]
+            {
+                if (automationWriteSession.active && automationWriteSession.bus &&
+                    automationWriteSession.busId == busId &&
+                    automationWriteSession.parameter == sendAutomationTarget &&
+                    automationWriteModeControl->currentData().toInt() != 1)
+                    finishAutomationWrite();
+            });
             connect(sendLevel, &QSlider::valueChanged, this,
-                    [this, busId, sendIndex, sendBus, sendLevelLabel](int value)
+                    [this, busId, sendIndex, sendAutomationTarget, sendBus, sendLevel, sendLevelLabel](int value)
             {
                 sendLevelLabel->setText(tr("%1%").arg(value));
+                const float level = value / 100.0f;
+                if (automationWriteSession.active && automationWriteSession.bus &&
+                    automationWriteSession.busId == busId &&
+                    automationWriteSession.parameter == sendAutomationTarget)
+                {
+                    recordBusAutomationValue(busId, sendAutomationTarget, level);
+                    if (!sendLevel->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                        automationWriteIdleTimer->start(250);
+                    return;
+                }
+                if (automationWriteAction->isChecked() &&
+                    automationLaneParameterControl->currentData().toInt() == sendAutomationTarget &&
+                    audioEngine.isPlaying())
+                {
+                    auto bus = std::find_if(project.buses.cbegin(), project.buses.cend(),
+                        [busId](const MixerBus& candidate) { return candidate.id == busId; });
+                    if (bus != project.buses.cend() && sendIndex < bus->sends.size())
+                    {
+                        beginBusAutomationWrite(busId, sendAutomationTarget, bus->sends[sendIndex].gain);
+                        if (automationWriteSession.active && automationWriteSession.bus &&
+                            automationWriteSession.busId == busId &&
+                            automationWriteSession.parameter == sendAutomationTarget)
+                        {
+                            recordBusAutomationValue(busId, sendAutomationTarget, level);
+                            if (!sendLevel->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                                automationWriteIdleTimer->start(250);
+                            return;
+                        }
+                    }
+                }
                 setMixerBusSend(busId, sendIndex, sendBus->currentData().toULongLong(), value / 100.0f);
             });
             connect(removeSend, &QPushButton::clicked, this, [this, busId, sendIndex]
@@ -6350,6 +6425,7 @@ void MainWindow::refreshMixer()
             auto* sendLevel = new QSlider(Qt::Horizontal, sendRow);
             sendLevel->setRange(0, 100);
             sendLevel->setValue(static_cast<int>(std::round(send.gain * 100.0f)));
+            const int sendAutomationTarget = mixerSendLevelAutomationTarget(static_cast<int>(sendIndex));
             auto* sendLevelLabel = new QLabel(tr("%1%").arg(sendLevel->value()), sendRow);
             auto* removeSend = new QPushButton(tr("×"), sendRow);
             removeSend->setToolTip(tr("Remove this auxiliary send"));
@@ -6365,10 +6441,57 @@ void MainWindow::refreshMixer()
                     setTrackSend(trackId, sendIndex, sendBus->currentData().toULongLong(),
                                  sendLevel->value() / 100.0f);
             });
+            connect(sendLevel, &QSlider::sliderPressed, this,
+                    [this, trackId, sendAutomationTarget, sendLevel, send]
+            {
+                beginAutomationWrite(trackId, sendAutomationTarget, sendLevel->value() / 100.0f,
+                                     QString(), -1, -1, 0.0f, 1.0f,
+                                     tr("send to %1").arg(send.busId));
+            });
+            connect(sendLevel, &QSlider::sliderReleased, this,
+                    [this, trackId, sendAutomationTarget]
+            {
+                if (automationWriteSession.active && !automationWriteSession.bus &&
+                    automationWriteSession.trackId == trackId &&
+                    automationWriteSession.parameter == sendAutomationTarget &&
+                    automationWriteModeControl->currentData().toInt() != 1)
+                    finishAutomationWrite();
+            });
             connect(sendLevel, &QSlider::valueChanged, this,
-                    [this, trackId, sendIndex, sendBus, sendLevelLabel](int value)
+                    [this, trackId, sendIndex, sendAutomationTarget, sendBus, sendLevel, sendLevelLabel](int value)
             {
                 sendLevelLabel->setText(tr("%1%").arg(value));
+                const float level = value / 100.0f;
+                if (automationWriteSession.active && !automationWriteSession.bus &&
+                    automationWriteSession.trackId == trackId &&
+                    automationWriteSession.parameter == sendAutomationTarget)
+                {
+                    recordAutomationValue(trackId, sendAutomationTarget, level);
+                    if (!sendLevel->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                        automationWriteIdleTimer->start(250);
+                    return;
+                }
+                if (automationWriteAction->isChecked() &&
+                    automationLaneParameterControl->currentData().toInt() == sendAutomationTarget &&
+                    audioEngine.isPlaying())
+                {
+                    const InstrumentTrack* track = project.findTrack(trackId);
+                    if (track != nullptr && sendIndex < track->sends.size())
+                    {
+                        beginAutomationWrite(trackId, sendAutomationTarget, track->sends[sendIndex].gain,
+                                             QString(), -1, -1, 0.0f, 1.0f,
+                                             tr("send to %1").arg(track->sends[sendIndex].busId));
+                        if (automationWriteSession.active && !automationWriteSession.bus &&
+                            automationWriteSession.trackId == trackId &&
+                            automationWriteSession.parameter == sendAutomationTarget)
+                        {
+                            recordAutomationValue(trackId, sendAutomationTarget, level);
+                            if (!sendLevel->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                                automationWriteIdleTimer->start(250);
+                            return;
+                        }
+                    }
+                }
                 setTrackSend(trackId, sendIndex, sendBus->currentData().toULongLong(), value / 100.0f);
             });
             connect(removeSend, &QPushButton::clicked, this, [this, trackId, sendIndex]
@@ -9130,7 +9253,7 @@ void MainWindow::refreshAutomationEditor()
         return;
     InstrumentTrack* track = selectedTrack();
     populateAutomationTargets(automationParameterControl, track);
-    populateAutomationTargets(automationLaneParameterControl, track);
+    populateAutomationTargets(automationLaneParameterControl, track, true);
     const int target = automationParameterControl->currentData().toInt();
     const bool volume = target == 0;
     const bool pan = target == 1;
@@ -9208,6 +9331,8 @@ void MainWindow::refreshArrangementAutomationView()
     const bool writeAutomationTarget = target == 0 || target == 1 ||
         target == mixerBusGainAutomationTarget || target == mixerBusPanAutomationTarget ||
         target == mixerBusMuteAutomationTarget || target == mixerBusSoloAutomationTarget ||
+        (target >= mixerSendLevelAutomationTargetBase &&
+         target < mixerSendLevelAutomationTargetBase + 64) ||
         (target >= trackEqLowGainAutomationTarget &&
          target <= trackEqHighCrossoverAutomationTarget) ||
         (target >= trackEqParametricAutomationTargetBase &&
@@ -9404,6 +9529,10 @@ void MainWindow::beginBusAutomationWrite(quint64 busId, int target, float value)
     const double beat = audioEngine.positionBeats();
     if (bus == project.buses.end() || beat < 0.0)
         return;
+    const int sendIndex = target - mixerSendLevelAutomationTargetBase;
+    if (target >= mixerSendLevelAutomationTargetBase &&
+        target < mixerSendLevelAutomationTargetBase + 64 && sendIndex >= bus->sends.size())
+        return;
 
     automationWriteSession.active = true;
     automationWriteSession.changed = false;
@@ -9414,18 +9543,27 @@ void MainWindow::beginBusAutomationWrite(quint64 busId, int target, float value)
     automationWriteSession.maximum = target == mixerBusGainAutomationTarget ? 2.0f : 1.0f;
     automationWriteSession.parameterName = target == mixerBusGainAutomationTarget ? tr("mixer bus level") :
         target == mixerBusPanAutomationTarget ? tr("mixer bus pan") :
-        target == mixerBusMuteAutomationTarget ? tr("mixer bus mute") : tr("mixer bus solo");
+        target == mixerBusMuteAutomationTarget ? tr("mixer bus mute") :
+        target == mixerBusSoloAutomationTarget ? tr("mixer bus solo") :
+        tr("mixer send %1 level").arg(target - mixerSendLevelAutomationTargetBase + 1);
     automationWriteSession.initialValue = value;
     automationWriteSession.baseValue = target == mixerBusGainAutomationTarget ? bus->gain :
         target == mixerBusPanAutomationTarget ? bus->pan :
         target == mixerBusMuteAutomationTarget ? (bus->muted ? 1.0f : 0.0f) :
-        (bus->solo ? 1.0f : 0.0f);
+        target == mixerBusSoloAutomationTarget ? (bus->solo ? 1.0f : 0.0f) :
+        sendIndex >= 0 && sendIndex < bus->sends.size() ? bus->sends[sendIndex].gain : 0.0f;
     automationWriteSession.lastValue = value;
     automationWriteSession.lastSampleBeat = beat;
     automationWriteSession.lastPointBeat = beat;
     QVector<AutomationPoint>& points = target == mixerBusGainAutomationTarget ? bus->gainAutomation :
         target == mixerBusPanAutomationTarget ? bus->panAutomation :
-        target == mixerBusMuteAutomationTarget ? bus->muteAutomation : bus->soloAutomation;
+        target == mixerBusMuteAutomationTarget ? bus->muteAutomation :
+        target == mixerBusSoloAutomationTarget ? bus->soloAutomation :
+        sendIndex >= 0 && sendIndex < bus->sends.size()
+            ? bus->sends[sendIndex].automation : bus->gainAutomation;
+    if (sendIndex >= bus->sends.size() && target >= mixerSendLevelAutomationTargetBase &&
+        target < mixerSendLevelAutomationTargetBase + 64)
+        return;
     automationWriteSession.before = points;
     const float initialAutomationValue = automationValueAt(
         automationWriteSession.before, beat, automationWriteSession.baseValue);
@@ -9455,7 +9593,15 @@ void MainWindow::recordBusAutomationValue(quint64 busId, int target, float value
         return;
     QVector<AutomationPoint>& points = target == mixerBusGainAutomationTarget ? bus->gainAutomation :
         target == mixerBusPanAutomationTarget ? bus->panAutomation :
-        target == mixerBusMuteAutomationTarget ? bus->muteAutomation : bus->soloAutomation;
+        target == mixerBusMuteAutomationTarget ? bus->muteAutomation :
+        target == mixerBusSoloAutomationTarget ? bus->soloAutomation :
+        target - mixerSendLevelAutomationTargetBase >= 0 &&
+            target - mixerSendLevelAutomationTargetBase < bus->sends.size()
+            ? bus->sends[target - mixerSendLevelAutomationTargetBase].automation : bus->gainAutomation;
+    if (target >= mixerSendLevelAutomationTargetBase &&
+        target < mixerSendLevelAutomationTargetBase + 64 &&
+        target - mixerSendLevelAutomationTargetBase >= bus->sends.size())
+        return;
     const bool trim = automationWriteModeControl->currentData().toInt() == 2;
     const float base = automationValueAt(automationWriteSession.before, beat,
                                          automationWriteSession.baseValue);
@@ -9537,6 +9683,9 @@ void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float val
          parameter == synthFilterResonanceAutomationTarget))
         audioEngine.setLiveSynthFilterOverride(trackId,
             parameter - synthFilterCutoffAutomationTarget, writeValue);
+    else if (parameter >= mixerSendLevelAutomationTargetBase &&
+             parameter < mixerSendLevelAutomationTargetBase + 64)
+        audioEngine.setProject(project);
     else if (automationWriteSession.pluginUri.isEmpty())
         audioEngine.setLiveTrackMixOverride(trackId, parameter, writeValue);
     else
@@ -9560,7 +9709,15 @@ void MainWindow::finishAutomationWrite()
         QVector<AutomationPoint>& current = session.parameter == mixerBusGainAutomationTarget
             ? bus->gainAutomation : session.parameter == mixerBusPanAutomationTarget
                 ? bus->panAutomation : session.parameter == mixerBusMuteAutomationTarget
-                    ? bus->muteAutomation : bus->soloAutomation;
+                    ? bus->muteAutomation : session.parameter == mixerBusSoloAutomationTarget
+                        ? bus->soloAutomation :
+                        session.parameter - mixerSendLevelAutomationTargetBase < bus->sends.size()
+                            ? bus->sends[session.parameter - mixerSendLevelAutomationTargetBase].automation
+                            : bus->gainAutomation;
+        if (session.parameter >= mixerSendLevelAutomationTargetBase &&
+            session.parameter < mixerSendLevelAutomationTargetBase + 64 &&
+            session.parameter - mixerSendLevelAutomationTargetBase >= bus->sends.size())
+            return;
         if (!session.changed || sameAutomationPoints(session.before, current))
         {
             current = session.before;
@@ -9639,6 +9796,9 @@ void MainWindow::applyBusAutomationHistory(quint64 busId, int parameter,
     else if (parameter == mixerBusPanAutomationTarget) bus->panAutomation = points;
     else if (parameter == mixerBusMuteAutomationTarget) bus->muteAutomation = points;
     else if (parameter == mixerBusSoloAutomationTarget) bus->soloAutomation = points;
+    else if (parameter >= mixerSendLevelAutomationTargetBase &&
+             parameter < mixerSendLevelAutomationTargetBase + bus->sends.size())
+        bus->sends[parameter - mixerSendLevelAutomationTargetBase].automation = points;
     else return;
     audioEngine.setProject(project);
     arrangementEditor->setProject(project);

@@ -274,6 +274,11 @@ inline constexpr int mixerBusGainAutomationTarget = 11000;
 inline constexpr int mixerBusPanAutomationTarget = 11001;
 inline constexpr int mixerBusMuteAutomationTarget = 11002;
 inline constexpr int mixerBusSoloAutomationTarget = 11003;
+inline constexpr int mixerSendLevelAutomationTargetBase = 11004;
+constexpr int mixerSendLevelAutomationTarget(int sendIndex)
+{
+    return mixerSendLevelAutomationTargetBase + sendIndex;
+}
 
 inline double automationCurveProgress(AutomationPoint::Curve curve, double position)
 {
@@ -318,6 +323,7 @@ struct MixerSend
 {
     quint64 busId = 0;
     float gain = 0.0f;
+    QVector<AutomationPoint> automation;
 };
 
 enum class MixerEffectType
