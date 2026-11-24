@@ -393,7 +393,11 @@ bool Lv2AudioEffectInstance::isValid() const
 
 qsizetype Lv2AudioEffectInstance::parameterCount() const
 {
+#if defined(AWESOME_STUDIO_HAS_LILV)
     return d == nullptr ? 0 : d->descriptor.parameters.size();
+#else
+    return 0;
+#endif
 }
 
 void Lv2AudioEffectInstance::setParameter(qsizetype index, float value)
