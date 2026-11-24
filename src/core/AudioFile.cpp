@@ -7,6 +7,11 @@
 #include <cstring>
 #include <algorithm>
 #include <utility>
+#include <vector>
+
+#ifdef AWESOME_STUDIO_HAS_SNDFILE
+#include <sndfile.h>
+#endif
 
 namespace
 {
@@ -196,4 +201,88 @@ bool AudioFile::loadWav(const QString& path, std::shared_ptr<const AudioAsset>& 
     }
     asset = std::move(decoded);
     return true;
+}
+
+bool AudioFile::loadAudio(const QString& path, std::shared_ptr<const AudioAsset>& asset,
+                          QString* error)
+{
+    if (QFileInfo(path).suffix().compare(QStringLiteral("wav"), Qt::CaseInsensitive) == 0)
+        return loadWav(path, asset, error);
+
+#ifdef AWESOME_STUDIO_HAS_SNDFILE
+    SF_INFO info{};
+    const QByteArray encodedPath = QFile::encodeName(path);
+    SNDFILE* file = sf_open(encodedPath.constData(), SFM_READ, &info);
+    if (file == nullptr)
+    {
+        setError(error, QString::fromUtf8(sf_strerror(nullptr)));
+        return false;
+    }
+    struct FileCloser
+    {
+        SNDFILE* file;
+        ~FileCloser() { if (file != nullptr) sf_close(file); }
+    } fileCloser{file};
+
+    constexpr sf_count_t maximumDecodedSamples = 40000000;
+    if (info.channels < 1 || info.channels > 2 || info.samplerate < 8000 ||
+        info.samplerate > 192000 || info.frames <= 0 ||
+        info.frames > maximumDecodedSamples / info.channels)
+    {
+        setError(error, QStringLiteral(
+            "Supported audio must be mono or stereo at 8–192 kHz and contain no more than 40 million samples."));
+        return false;
+    }
+
+    auto decoded = std::make_shared<AudioAsset>();
+    decoded->path = QFileInfo(path).absoluteFilePath();
+    decoded->sampleRate = info.samplerate;
+    decoded->channelCount = info.channels;
+    decoded->samples.reserve(static_cast<qsizetype>(info.frames * info.channels));
+    decoded->waveformPeaks.reserve(static_cast<qsizetype>(
+        (info.frames + AudioAsset::waveformBlockFrames - 1) / AudioAsset::waveformBlockFrames));
+
+    constexpr sf_count_t readBlockFrames = 4096;
+    std::vector<float> block(static_cast<size_t>(readBlockFrames) * info.channels);
+    sf_count_t framesRead = 0;
+    while (framesRead < info.frames)
+    {
+        const sf_count_t requestFrames = std::min(readBlockFrames, info.frames - framesRead);
+        const sf_count_t receivedFrames = sf_readf_float(file, block.data(), requestFrames);
+        if (receivedFrames <= 0)
+        {
+            setError(error, QStringLiteral("The audio file ended before all decoded frames were read."));
+            return false;
+        }
+        for (sf_count_t frame = 0; frame < receivedFrames; ++frame)
+        {
+            float framePeak = 0.0f;
+            for (int channel = 0; channel < info.channels; ++channel)
+            {
+                const size_t sampleIndex = static_cast<size_t>(frame) * info.channels + channel;
+                const float decodedSample = block[sampleIndex];
+                const float sample = std::isfinite(decodedSample)
+                    ? std::clamp(decodedSample, -4.0f, 4.0f) : 0.0f;
+                decoded->samples.push_back(sample);
+                framePeak = std::max(framePeak, std::abs(sample));
+            }
+            const qsizetype peakIndex = static_cast<qsizetype>(
+                (framesRead + frame) / AudioAsset::waveformBlockFrames);
+            if (peakIndex == decoded->waveformPeaks.size())
+                decoded->waveformPeaks.push_back(framePeak);
+            else
+                decoded->waveformPeaks[peakIndex] = std::max(decoded->waveformPeaks[peakIndex], framePeak);
+        }
+        framesRead += receivedFrames;
+    }
+
+    asset = std::move(decoded);
+    if (error != nullptr)
+        error->clear();
+    return true;
+#else
+    setError(error, QStringLiteral(
+        "This build can import compressed audio only when libsndfile support is available."));
+    return false;
+#endif
 }

@@ -87,6 +87,15 @@ namespace
 constexpr double automationWritePointSpacingBeats = 0.04;
 constexpr int customSynthPresetRole = Qt::UserRole + 1;
 
+QString importableAudioFileDialogFilter()
+{
+#ifdef AWESOME_STUDIO_HAS_SNDFILE
+    return QObject::tr("Audio files (*.wav *.flac *.ogg *.oga *.mp3);;All files (*)");
+#else
+    return QObject::tr("WAV audio (*.wav)");
+#endif
+}
+
 class TrackEqResponseWidget final : public QWidget
 {
 public:
@@ -4139,7 +4148,7 @@ void MainWindow::createDocks()
             this, &MainWindow::addVst3InstrumentTrack);
     browserLayout->addWidget(addVst3InstrumentButton);
 #endif
-    auto* importAudioButton = new QPushButton(tr("Import WAV audio"), browser);
+    auto* importAudioButton = new QPushButton(tr("Import audio"), browser);
     connect(importAudioButton, &QPushButton::clicked, this, &MainWindow::importAudio);
     browserLayout->addWidget(importAudioButton);
 
@@ -4887,7 +4896,7 @@ void MainWindow::createDocks()
     drumSampleControls->hide();
 
     browserLayout->addStretch();
-    auto* hint = new QLabel(tr("Import a WAV to add an audio track. Double-click MIDI clips to edit notes or drum steps."), browser);
+    auto* hint = new QLabel(tr("Import audio to add a Playlist track. Double-click MIDI clips to edit notes or drum steps."), browser);
     hint->setWordWrap(true);
     hint->setStyleSheet(QStringLiteral("color: #8996a2; font-size: 11px;"));
     browserLayout->addWidget(hint);
@@ -4939,7 +4948,7 @@ void MainWindow::createMenus()
     fileMenu->addAction(tr("Save portable project copy…"), this,
                         &MainWindow::savePortableProjectCopy);
     fileMenu->addSeparator();
-    fileMenu->addAction(tr("Import WAV audio…"), this, &MainWindow::importAudio);
+    fileMenu->addAction(tr("Import audio…"), this, &MainWindow::importAudio);
     fileMenu->addAction(tr("Import MIDI…"), this, &MainWindow::importMidi);
     fileMenu->addAction(tr("Export arrangement to MIDI…"), this, &MainWindow::exportMidi);
     fileMenu->addAction(tr("Export arrangement to WAV…"), this, &MainWindow::exportAudio);
@@ -7793,7 +7802,7 @@ void MainWindow::addClipAt(quint64 trackId, double startBeat)
         return;
     if (track->instrumentType == InstrumentType::Audio)
     {
-        statusBar()->showMessage(tr("Import a WAV file to add an audio region to this track"), 2500);
+        statusBar()->showMessage(tr("Import an audio file to add a region to this track"), 2500);
         return;
     }
     MidiClip clip;
@@ -7821,7 +7830,7 @@ void MainWindow::addNewPattern()
         return;
     if (track->instrumentType == InstrumentType::Audio)
     {
-        statusBar()->showMessage(tr("Use Import WAV audio to add another audio region"), 2500);
+        statusBar()->showMessage(tr("Use Import audio to add another audio region"), 2500);
         return;
     }
 
@@ -8413,13 +8422,13 @@ void MainWindow::relinkAudioRegion(quint64 trackId, quint64 clipId)
         !clip->isAudioRegion())
         return;
     const QString path = QFileDialog::getOpenFileName(this, tr("Relink audio region"),
-        QFileInfo(clip->audioSourcePath).absolutePath(), tr("WAV audio (*.wav)"));
+        QFileInfo(clip->audioSourcePath).absolutePath(), importableAudioFileDialogFilter());
     if (path.isEmpty())
         return;
 
     std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
     QString error;
-    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
+    if (asset == nullptr && !AudioFile::loadAudio(path, asset, &error))
     {
         QMessageBox::critical(this, tr("Could not relink audio region"), error);
         return;
@@ -11268,16 +11277,16 @@ void MainWindow::importAudio()
         statusBar()->showMessage(tr("The project has reached the 256-track limit"), 3000);
         return;
     }
-    const QString path = QFileDialog::getOpenFileName(this, tr("Import WAV audio"), QString(),
-                                                       tr("WAV audio (*.wav)"));
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import audio"), QString(),
+        importableAudioFileDialogFilter());
     if (path.isEmpty())
         return;
 
     std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
     QString error;
-    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
+    if (asset == nullptr && !AudioFile::loadAudio(path, asset, &error))
     {
-        QMessageBox::critical(this, tr("Could not import WAV audio"), error);
+        QMessageBox::critical(this, tr("Could not import audio"), error);
         return;
     }
     if (findProjectAudioAsset(path) == nullptr)
@@ -11337,13 +11346,13 @@ void MainWindow::importDrumSample(int pad)
     }
 
     const QString path = QFileDialog::getOpenFileName(this, tr("Load drum sample"), QString(),
-                                                       tr("WAV audio (*.wav)"));
+        importableAudioFileDialogFilter());
     if (path.isEmpty())
         return;
 
     std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
     QString error;
-    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
+    if (asset == nullptr && !AudioFile::loadAudio(path, asset, &error))
     {
         QMessageBox::critical(this, tr("Could not load drum sample"), error);
         return;
@@ -11393,12 +11402,12 @@ void MainWindow::relinkDrumSample(int pad, int layer)
         return;
 
     const QString selectedPath = QFileDialog::getOpenFileName(this, tr("Relink drum sample"),
-        QFileInfo(*sourcePath).absolutePath(), tr("WAV audio (*.wav)"));
+        QFileInfo(*sourcePath).absolutePath(), importableAudioFileDialogFilter());
     if (selectedPath.isEmpty())
         return;
     std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(selectedPath);
     QString error;
-    if (asset == nullptr && !AudioFile::loadWav(selectedPath, asset, &error))
+    if (asset == nullptr && !AudioFile::loadAudio(selectedPath, asset, &error))
     {
         QMessageBox::critical(this, tr("Could not relink drum sample"), error);
         return;
@@ -11556,13 +11565,13 @@ void MainWindow::importDrumVelocityLayer(int pad, int layer)
     }
     const QString path = QFileDialog::getOpenFileName(this,
         tr("Load %1-velocity drum layer").arg(layerName),
-        QFileInfo(existingPath).absolutePath(), tr("WAV audio (*.wav)"));
+        QFileInfo(existingPath).absolutePath(), importableAudioFileDialogFilter());
     if (path.isEmpty())
         return;
 
     std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(path);
     QString error;
-    if (asset == nullptr && !AudioFile::loadWav(path, asset, &error))
+    if (asset == nullptr && !AudioFile::loadAudio(path, asset, &error))
     {
         QMessageBox::critical(this, tr("Could not load drum sample layer"), error);
         return;
@@ -11826,7 +11835,7 @@ std::shared_ptr<const AudioAsset> MainWindow::resolveAudioAsset(
     }
 
     QString loadError;
-    if (!AudioFile::loadWav(path, asset, &loadError) && error != nullptr)
+    if (!AudioFile::loadAudio(path, asset, &loadError) && error != nullptr)
         *error = loadError;
     return asset;
 }

@@ -59,7 +59,7 @@ void loadAudioReference(QString& path, const QString& mediaBaseDir, MediaLoadCon
 
     std::shared_ptr<const AudioAsset> decoded;
     QString audioError;
-    if (!AudioFile::loadWav(path, decoded, &audioError))
+    if (!AudioFile::loadAudio(path, decoded, &audioError))
     {
         media.unavailableAssets.insert(cacheKey);
         return;
