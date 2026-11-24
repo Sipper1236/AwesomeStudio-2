@@ -423,46 +423,48 @@ QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
     appendVariableLength(track, 0);
     appendMeta(track, 0x03, QByteArrayLiteral("Awesome Studio"));
 
-    const quint32 microseconds = static_cast<quint32>(std::clamp(
-        std::llround(60000000.0 / project.tempoBpm), 1LL, 0xffffffLL));
-    appendVariableLength(track, 0);
-    appendByte(track, 0xff);
-    appendByte(track, 0x51);
-    appendByte(track, 3);
-    appendByte(track, static_cast<quint8>((microseconds >> 16) & 0xff));
-    appendByte(track, static_cast<quint8>((microseconds >> 8) & 0xff));
-    appendByte(track, static_cast<quint8>(microseconds & 0xff));
+    struct ConductorEvent
+    {
+        qint64 tick = 0;
+        int priority = 0;
+        QByteArray bytes;
+    };
+    QVector<ConductorEvent> events;
+    const auto addTempoEvent = [&events](qint64 tick, double bpm)
+    {
+        const quint32 microseconds = static_cast<quint32>(std::clamp(
+            std::llround(60000000.0 / bpm), 1LL, 0xffffffLL));
+        QByteArray bytes;
+        QByteArray payload;
+        appendByte(payload, static_cast<quint8>((microseconds >> 16) & 0xff));
+        appendByte(payload, static_cast<quint8>((microseconds >> 8) & 0xff));
+        appendByte(payload, static_cast<quint8>(microseconds & 0xff));
+        appendMeta(bytes, 0x51, payload);
+        events.push_back({tick, 0, std::move(bytes)});
+    };
+    const auto addMeterEvent = [&events](qint64 tick, int beatsPerBar, int beatUnit)
+    {
+        int exponent = 0;
+        for (int denominator = beatUnit; denominator > 1; denominator >>= 1)
+            ++exponent;
+        QByteArray bytes;
+        QByteArray payload;
+        appendByte(payload, static_cast<quint8>(beatsPerBar));
+        appendByte(payload, static_cast<quint8>(exponent));
+        appendByte(payload, 24);
+        appendByte(payload, 8);
+        appendMeta(bytes, 0x58, payload);
+        events.push_back({tick, 1, std::move(bytes)});
+    };
 
-    int denominatorExponent = 0;
-    for (int denominator = project.beatUnit; denominator > 1; denominator >>= 1)
-        ++denominatorExponent;
-    appendVariableLength(track, 0);
-    appendByte(track, 0xff);
-    appendByte(track, 0x58);
-    appendByte(track, 4);
-    appendByte(track, static_cast<quint8>(project.beatsPerBar));
-    appendByte(track, static_cast<quint8>(denominatorExponent));
-    appendByte(track, 24);
-    appendByte(track, 8);
-
-    qint64 previousMeterTick = 0;
+    addTempoEvent(0, project.tempoBpm);
+    addMeterEvent(0, project.beatsPerBar, project.beatUnit);
     for (const TimeSignatureChange& change : project.timeSignatureChanges)
     {
         const qint64 meterTick = std::llround(change.beat * exportPpqn);
-        if (meterTick <= previousMeterTick || meterTick > songEndTick)
+        if (meterTick <= 0 || meterTick > songEndTick)
             continue;
-        int exponent = 0;
-        for (int denominator = change.beatUnit; denominator > 1; denominator >>= 1)
-            ++exponent;
-        appendVariableLength(track, static_cast<quint32>(meterTick - previousMeterTick));
-        appendByte(track, 0xff);
-        appendByte(track, 0x58);
-        appendByte(track, 4);
-        appendByte(track, static_cast<quint8>(change.beatsPerBar));
-        appendByte(track, static_cast<quint8>(exponent));
-        appendByte(track, 24);
-        appendByte(track, 8);
-        previousMeterTick = meterTick;
+        addMeterEvent(meterTick, change.beatsPerBar, change.beatUnit);
     }
 
     qint64 previousTempoTick = 0;
@@ -492,21 +494,26 @@ QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
             const double bpm = subdivision == subdivisions ? change.bpm : project.tempoAtBeat(beat);
             const qint64 tempoTick = std::max<qint64>(previousTempoTick,
                 std::llround(beat * exportPpqn));
-            const quint32 tempoMicroseconds = static_cast<quint32>(std::clamp(
-                std::llround(60000000.0 / bpm), 1LL, 0xffffffLL));
-            appendVariableLength(track, static_cast<quint32>(tempoTick - previousTempoTick));
-            appendByte(track, 0xff);
-            appendByte(track, 0x51);
-            appendByte(track, 3);
-            appendByte(track, static_cast<quint8>((tempoMicroseconds >> 16) & 0xff));
-            appendByte(track, static_cast<quint8>((tempoMicroseconds >> 8) & 0xff));
-            appendByte(track, static_cast<quint8>(tempoMicroseconds & 0xff));
+            addTempoEvent(tempoTick, bpm);
             previousTempoTick = tempoTick;
         }
         previousTempoBeat = change.beat;
     }
 
-    appendVariableLength(track, static_cast<quint32>(std::max<qint64>(0, songEndTick - previousTempoTick)));
+    std::stable_sort(events.begin(), events.end(), [](const ConductorEvent& left, const ConductorEvent& right)
+    {
+        if (left.tick != right.tick)
+            return left.tick < right.tick;
+        return left.priority < right.priority;
+    });
+    qint64 previousTick = 0;
+    for (const ConductorEvent& event : events)
+    {
+        appendVariableLength(track, static_cast<quint32>(std::max<qint64>(0, event.tick - previousTick)));
+        track.append(event.bytes);
+        previousTick = event.tick;
+    }
+    appendVariableLength(track, static_cast<quint32>(std::max<qint64>(0, songEndTick - previousTick)));
     appendMeta(track, 0x2f, {});
     return track;
 }
