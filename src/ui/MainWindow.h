@@ -191,7 +191,7 @@ private:
     void setSelectedAutomationCurve(int curve);
     void applyAutomationHistory(quint64 trackId, int parameter, const QString& pluginUri,
                                 const QVector<AutomationPoint>& points);
-    void applyBusAutomationHistory(quint64 busId, bool pan,
+    void applyBusAutomationHistory(quint64 busId, int parameter,
                                    const QVector<AutomationPoint>& points);
     void addTimelineMarker(double beat);
     void renameTimelineMarker(double beat);
@@ -208,8 +208,8 @@ private:
                               float minimum = 0.0f, float maximum = 1.0f,
                               const QString& parameterName = QString());
     void recordAutomationValue(quint64 trackId, int parameter, float value);
-    void beginBusAutomationWrite(quint64 busId, bool pan, float value);
-    void recordBusAutomationValue(quint64 busId, bool pan, float value);
+    void beginBusAutomationWrite(quint64 busId, int parameter, float value);
+    void recordBusAutomationValue(quint64 busId, int parameter, float value);
     void finishAutomationWrite();
     void importDrumSample(int pad);
     void clearDrumSample(int pad);

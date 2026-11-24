@@ -591,6 +591,10 @@ void ProjectData::normalize()
         if (!std::isfinite(bus.pan)) bus.pan = 0.0f;
         bus.gain = std::clamp(bus.gain, 0.0f, 2.0f);
         bus.pan = std::clamp(bus.pan, -1.0f, 1.0f);
+        normalizeAutomation(bus.gainAutomation, 0.0f, 2.0f);
+        normalizeAutomation(bus.panAutomation, -1.0f, 1.0f);
+        normalizeAutomation(bus.muteAutomation, 0.0f, 1.0f);
+        normalizeAutomation(bus.soloAutomation, 0.0f, 1.0f);
     }
     std::unordered_map<quint64, MixerBus*> busById;
     for (MixerBus& bus : buses)

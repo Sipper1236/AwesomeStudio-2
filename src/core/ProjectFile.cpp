@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 61;
+constexpr int currentProjectVersion = 62;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -1427,6 +1427,8 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
             {QStringLiteral("pan"), bus.pan},
             {QStringLiteral("gainAutomation"), saveAutomation(bus.gainAutomation)},
             {QStringLiteral("panAutomation"), saveAutomation(bus.panAutomation)},
+            {QStringLiteral("muteAutomation"), saveAutomation(bus.muteAutomation)},
+            {QStringLiteral("soloAutomation"), saveAutomation(bus.soloAutomation)},
             {QStringLiteral("muted"), bus.muted},
             {QStringLiteral("solo"), bus.solo}
         });
@@ -1661,6 +1663,12 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
                                  bus.gainAutomation, QStringLiteral("mixer bus level"), version, error) ||
                  !loadAutomation(busObject.value(QStringLiteral("panAutomation")),
                                  bus.panAutomation, QStringLiteral("mixer bus pan"), version, error)))
+                return false;
+            if (version >= 62 &&
+                (!loadAutomation(busObject.value(QStringLiteral("muteAutomation")),
+                                 bus.muteAutomation, QStringLiteral("mixer bus mute"), version, error) ||
+                 !loadAutomation(busObject.value(QStringLiteral("soloAutomation")),
+                                 bus.soloAutomation, QStringLiteral("mixer bus solo"), version, error)))
                 return false;
             bus.muted = busObject.value(QStringLiteral("muted")).toBool(false);
             bus.solo = busObject.value(QStringLiteral("solo")).toBool(false);

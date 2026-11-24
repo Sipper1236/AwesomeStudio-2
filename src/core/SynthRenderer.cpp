@@ -279,6 +279,9 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     busInputAudible.clear();
     busOutputAudible.clear();
     busSoloDownstreamAudible.clear();
+    busMutedAtBeat.clear();
+    busSoloAtBeat.clear();
+    busAudibilityInitialized = false;
     busRouteOrder.clear();
     busFrameSamples.clear();
     lastBusOutputSamples.clear();
@@ -333,6 +336,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     busInputAudible.assign(static_cast<size_t>(project->buses.size()), 0);
     busOutputAudible.assign(static_cast<size_t>(project->buses.size()), 0);
     busSoloDownstreamAudible.assign(static_cast<size_t>(project->buses.size()), 0);
+    busMutedAtBeat.assign(static_cast<size_t>(project->buses.size()), 0);
+    busSoloAtBeat.assign(static_cast<size_t>(project->buses.size()), 0);
     busRouteOrder.resize(static_cast<size_t>(project->buses.size()));
     busFrameSamples.resize(static_cast<size_t>(project->buses.size()));
     lastBusOutputSamples.resize(static_cast<size_t>(project->buses.size()));
@@ -421,12 +426,10 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     }
 
     std::unordered_map<quint64, int> busIndexById;
-    hasBusSolo = false;
     for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
     {
         const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
         busIndexById.emplace(bus.id, static_cast<int>(busIndex));
-        hasBusSolo = hasBusSolo || bus.solo;
         const float leftBalance = bus.pan > 0.0f ? 1.0f - bus.pan : 1.0f;
         const float rightBalance = bus.pan < 0.0f ? 1.0f + bus.pan : 1.0f;
         busMixStates.push_back({bus.gain * leftBalance, bus.gain * rightBalance});
@@ -487,74 +490,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         }
     }
 
-    for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
-    {
-        const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
-        if (!hasBusSolo)
-        {
-            busInputAudible[busIndex] = bus.muted ? 0 : 1;
-            busSoloDownstreamAudible[busIndex] = busInputAudible[busIndex];
-            continue;
-        }
-
-        if (bus.muted)
-            continue;
-        std::vector<size_t> pending{busIndex};
-        std::vector<unsigned char> visited(busOutputIndices.size(), 0);
-        while (!pending.empty())
-        {
-            const size_t routeIndex = pending.back();
-            pending.pop_back();
-            if (routeIndex >= visited.size() || visited[routeIndex] != 0)
-                continue;
-            visited[routeIndex] = 1;
-            const MixerBus& routeBus = project->buses[static_cast<qsizetype>(routeIndex)];
-            if (routeBus.muted)
-                continue;
-            if (routeBus.solo)
-            {
-                busInputAudible[busIndex] = 1;
-                break;
-            }
-            const int parentIndex = busOutputIndices[routeIndex];
-            if (parentIndex >= 0)
-                pending.push_back(static_cast<size_t>(parentIndex));
-            for (const TrackSendMix& send : busSends[routeIndex])
-                if (send.busIndex >= 0)
-                    pending.push_back(static_cast<size_t>(send.busIndex));
-        }
-    }
-    if (hasBusSolo)
-    {
-        for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
-        {
-            const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
-            if (!bus.solo || bus.muted)
-                continue;
-            std::vector<size_t> pending{busIndex};
-            while (!pending.empty())
-            {
-                const size_t routeIndex = pending.back();
-                pending.pop_back();
-                if (routeIndex >= busSoloDownstreamAudible.size() ||
-                    busSoloDownstreamAudible[routeIndex] != 0)
-                    continue;
-                const MixerBus& routeBus = project->buses[static_cast<qsizetype>(routeIndex)];
-                if (routeBus.muted)
-                    continue;
-                busSoloDownstreamAudible[routeIndex] = 1;
-                const int parentIndex = busOutputIndices[routeIndex];
-                if (parentIndex >= 0)
-                    pending.push_back(static_cast<size_t>(parentIndex));
-                for (const TrackSendMix& send : busSends[routeIndex])
-                    if (send.busIndex >= 0)
-                        pending.push_back(static_cast<size_t>(send.busIndex));
-            }
-        }
-    }
-    for (size_t busIndex = 0; busIndex < busOutputAudible.size(); ++busIndex)
-        busOutputAudible[busIndex] = busInputAudible[busIndex] != 0 ||
-            busSoloDownstreamAudible[busIndex] != 0 ? 1 : 0;
+    busAudibilityInitialized = false;
+    updateBusAudibility();
 
     bool hasTrackSolo = false;
     for (const InstrumentTrack& track : project->tracks)
@@ -1040,6 +977,94 @@ void SynthRenderer::setTransportContext(qint64 projectFrame, bool playing, bool 
     if (!std::isfinite(transportProjectBeat))
         transportProjectBeat = 0.0;
     currentBeat = std::clamp(transportProjectBeat, 0.0, 16384.0);
+}
+
+void SynthRenderer::updateBusAudibility()
+{
+    if (project == nullptr)
+        return;
+    bool changed = !busAudibilityInitialized;
+    hasBusSolo = false;
+    for (size_t index = 0; index < static_cast<size_t>(project->buses.size()); ++index)
+    {
+        const MixerBus& bus = project->buses[static_cast<qsizetype>(index)];
+        const bool muted = automationValue(bus.muteAutomation, currentBeat, bus.muted ? 1.0f : 0.0f) >= 0.5f;
+        const bool solo = automationValue(bus.soloAutomation, currentBeat, bus.solo ? 1.0f : 0.0f) >= 0.5f;
+        const unsigned char mutedValue = muted ? 1 : 0;
+        const unsigned char soloValue = solo ? 1 : 0;
+        changed = changed || busMutedAtBeat[index] != mutedValue || busSoloAtBeat[index] != soloValue;
+        busMutedAtBeat[index] = mutedValue;
+        busSoloAtBeat[index] = soloValue;
+        hasBusSolo = hasBusSolo || solo;
+    }
+    if (!changed)
+        return;
+
+    std::fill(busInputAudible.begin(), busInputAudible.end(), 0);
+    std::fill(busSoloDownstreamAudible.begin(), busSoloDownstreamAudible.end(), 0);
+    std::fill(busOutputAudible.begin(), busOutputAudible.end(), 0);
+    for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
+    {
+        if (!hasBusSolo)
+        {
+            busInputAudible[busIndex] = busMutedAtBeat[busIndex] == 0 ? 1 : 0;
+            busSoloDownstreamAudible[busIndex] = busInputAudible[busIndex];
+            continue;
+        }
+        if (busMutedAtBeat[busIndex] != 0)
+            continue;
+        std::vector<size_t> pending{busIndex};
+        std::vector<unsigned char> visited(busOutputIndices.size(), 0);
+        while (!pending.empty())
+        {
+            const size_t routeIndex = pending.back();
+            pending.pop_back();
+            if (routeIndex >= visited.size() || visited[routeIndex] != 0)
+                continue;
+            visited[routeIndex] = 1;
+            if (busMutedAtBeat[routeIndex] != 0)
+                continue;
+            if (busSoloAtBeat[routeIndex] != 0)
+            {
+                busInputAudible[busIndex] = 1;
+                break;
+            }
+            const int parentIndex = busOutputIndices[routeIndex];
+            if (parentIndex >= 0)
+                pending.push_back(static_cast<size_t>(parentIndex));
+            for (const TrackSendMix& send : busSends[routeIndex])
+                if (send.busIndex >= 0)
+                    pending.push_back(static_cast<size_t>(send.busIndex));
+        }
+    }
+    if (hasBusSolo)
+    {
+        for (size_t busIndex = 0; busIndex < static_cast<size_t>(project->buses.size()); ++busIndex)
+        {
+            if (busSoloAtBeat[busIndex] == 0 || busMutedAtBeat[busIndex] != 0)
+                continue;
+            std::vector<size_t> pending{busIndex};
+            while (!pending.empty())
+            {
+                const size_t routeIndex = pending.back();
+                pending.pop_back();
+                if (routeIndex >= busSoloDownstreamAudible.size() ||
+                    busSoloDownstreamAudible[routeIndex] != 0 || busMutedAtBeat[routeIndex] != 0)
+                    continue;
+                busSoloDownstreamAudible[routeIndex] = 1;
+                const int parentIndex = busOutputIndices[routeIndex];
+                if (parentIndex >= 0)
+                    pending.push_back(static_cast<size_t>(parentIndex));
+                for (const TrackSendMix& send : busSends[routeIndex])
+                    if (send.busIndex >= 0)
+                        pending.push_back(static_cast<size_t>(send.busIndex));
+            }
+        }
+    }
+    for (size_t busIndex = 0; busIndex < busOutputAudible.size(); ++busIndex)
+        busOutputAudible[busIndex] = busInputAudible[busIndex] != 0 ||
+            busSoloDownstreamAudible[busIndex] != 0 ? 1 : 0;
+    busAudibilityInitialized = true;
 }
 
 Vst3TransportContext SynthRenderer::currentVst3TransportContext() const
@@ -2482,6 +2507,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     }
     lastFrame = projectFrame;
     setTransportContext(projectFrame, transportPlaying, transportCycleActive);
+    updateBusAudibility();
     const double projectBeat = transportProjectBeat;
 
     StereoSample sample;

@@ -302,7 +302,9 @@ protected:
                     painter.setPen(QColor(QStringLiteral("#85919d")));
                     painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
                     painter.drawText(QRect(12, rowY + 31, trackHeaderWidth - 20, 18), Qt::AlignLeft | Qt::AlignVCenter,
-                                     automationParameter == mixerBusGainAutomationTarget ? tr("MIXER BUS · LEVEL") : tr("MIXER BUS · PAN"));
+                                     automationParameter == mixerBusGainAutomationTarget ? tr("MIXER BUS · LEVEL") :
+                                     automationParameter == mixerBusPanAutomationTarget ? tr("MIXER BUS · PAN") :
+                                     automationParameter == mixerBusMuteAutomationTarget ? tr("MIXER BUS · MUTE") : tr("MIXER BUS · SOLO"));
                     drawBusAutomationLane(painter, bus, rowY, gridWidth);
                 }
             }
@@ -593,8 +595,7 @@ protected:
                 {
                     const QVector<AutomationPoint> before = curve;
                     curve.removeAt(hit);
-                    emit owner->busAutomationChanged(bus.id, automationParameter == mixerBusPanAutomationTarget,
-                                                     before, curve);
+                    emit owner->busAutomationChanged(bus.id, automationParameter, before, curve);
                     selectedAutomationPoint = -1;
                     update();
                 }
@@ -626,7 +627,8 @@ protected:
                 else
                 {
                     selectedAutomationPoint = static_cast<int>(insertAt - curve.begin());
-                    curve.insert(insertAt, {beat, value, automationDefaultCurve});
+                    curve.insert(insertAt, {beat, value, isDiscreteBusAutomationTarget()
+                        ? AutomationPoint::Curve::Hold : automationDefaultCurve});
                 }
             }
             draggingAutomationPoint = true;
@@ -1086,8 +1088,7 @@ protected:
                 const QVector<AutomationPoint> after = bus == project.buses.cend()
                     ? automationDragBefore : busAutomationPoints(*bus);
                 if (!automationPointsEqual(automationDragBefore, after))
-                    emit owner->busAutomationChanged(busId, automationParameter == mixerBusPanAutomationTarget,
-                                                     automationDragBefore, after);
+                    emit owner->busAutomationChanged(busId, automationParameter, automationDragBefore, after);
                 automationDragBefore.clear();
                 update();
                 return;
@@ -1155,11 +1156,10 @@ protected:
                         [this](const MixerBus& candidate) { return candidate.id == selectedAutomationBusId; });
                     if (bus != project.buses.end() && selectedAutomationPoint < busAutomationPoints(*bus).size())
                     {
-                        const bool pan = automationParameter == mixerBusPanAutomationTarget;
                         const QVector<AutomationPoint> before = busAutomationPoints(*bus);
                         auto after = before;
                         after.removeAt(selectedAutomationPoint);
-                        emit owner->busAutomationChanged(bus->id, pan, before, after);
+                        emit owner->busAutomationChanged(bus->id, automationParameter, before, after);
                         selectedAutomationPoint = -1;
                     }
                     update();
@@ -1228,17 +1228,31 @@ private:
     bool isBusAutomationTarget() const
     {
         return automationParameter == mixerBusGainAutomationTarget ||
-            automationParameter == mixerBusPanAutomationTarget;
+            automationParameter == mixerBusPanAutomationTarget ||
+            automationParameter == mixerBusMuteAutomationTarget ||
+            automationParameter == mixerBusSoloAutomationTarget;
+    }
+
+    bool isDiscreteBusAutomationTarget() const
+    {
+        return automationParameter == mixerBusMuteAutomationTarget ||
+            automationParameter == mixerBusSoloAutomationTarget;
     }
 
     QVector<AutomationPoint>& busAutomationPoints(MixerBus& bus) const
     {
-        return automationParameter == mixerBusPanAutomationTarget ? bus.panAutomation : bus.gainAutomation;
+        if (automationParameter == mixerBusPanAutomationTarget) return bus.panAutomation;
+        if (automationParameter == mixerBusMuteAutomationTarget) return bus.muteAutomation;
+        if (automationParameter == mixerBusSoloAutomationTarget) return bus.soloAutomation;
+        return bus.gainAutomation;
     }
 
     const QVector<AutomationPoint>& busAutomationPoints(const MixerBus& bus) const
     {
-        return automationParameter == mixerBusPanAutomationTarget ? bus.panAutomation : bus.gainAutomation;
+        if (automationParameter == mixerBusPanAutomationTarget) return bus.panAutomation;
+        if (automationParameter == mixerBusMuteAutomationTarget) return bus.muteAutomation;
+        if (automationParameter == mixerBusSoloAutomationTarget) return bus.soloAutomation;
+        return bus.gainAutomation;
     }
 
     int busAutomationPointAt(const MixerBus& bus, int row, const QPoint& position) const
@@ -1635,7 +1649,9 @@ private:
         painter.drawLine(trackHeaderWidth, laneY + automationLaneHeight - 7,
                          trackHeaderWidth + gridWidth, laneY + automationLaneHeight - 7);
         const auto& points = busAutomationPoints(bus);
-        const float base = automationParameter == mixerBusPanAutomationTarget ? bus.pan : bus.gain;
+        const float base = automationParameter == mixerBusPanAutomationTarget ? bus.pan :
+            automationParameter == mixerBusMuteAutomationTarget ? (bus.muted ? 1.0f : 0.0f) :
+            automationParameter == mixerBusSoloAutomationTarget ? (bus.solo ? 1.0f : 0.0f) : bus.gain;
         QPainterPath path;
         if (points.isEmpty())
         {

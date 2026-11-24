@@ -272,6 +272,8 @@ inline constexpr int trackEqLowCrossoverAutomationTarget = 10003;
 inline constexpr int trackEqHighCrossoverAutomationTarget = 10004;
 inline constexpr int mixerBusGainAutomationTarget = 11000;
 inline constexpr int mixerBusPanAutomationTarget = 11001;
+inline constexpr int mixerBusMuteAutomationTarget = 11002;
+inline constexpr int mixerBusSoloAutomationTarget = 11003;
 
 inline double automationCurveProgress(AutomationPoint::Curve curve, double position)
 {
@@ -373,6 +375,8 @@ struct MixerBus
     float pan = 0.0f;
     QVector<AutomationPoint> gainAutomation;
     QVector<AutomationPoint> panAutomation;
+    QVector<AutomationPoint> muteAutomation;
+    QVector<AutomationPoint> soloAutomation;
     bool muted = false;
     bool solo = false;
 };

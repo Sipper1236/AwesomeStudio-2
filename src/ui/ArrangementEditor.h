@@ -46,7 +46,7 @@ signals:
     void automationChanged(quint64 trackId, int parameter, const QString& pluginUri,
                            const QVector<AutomationPoint>& before,
                            const QVector<AutomationPoint>& after);
-    void busAutomationChanged(quint64 busId, bool pan,
+    void busAutomationChanged(quint64 busId, int parameter,
                               const QVector<AutomationPoint>& before,
                               const QVector<AutomationPoint>& after);
     void automationPointLimitReached();

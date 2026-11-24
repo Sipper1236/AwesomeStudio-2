@@ -56,6 +56,7 @@ public:
     void stopPluginProcessing();
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
+    void updateBusAudibility();
     float trackPeakLevel(size_t trackIndex) const;
     float busPeakLevel(size_t busIndex) const;
     StereoSample renderSample(qint64 projectFrame);
@@ -344,6 +345,9 @@ private:
     std::vector<unsigned char> busInputAudible;
     std::vector<unsigned char> busOutputAudible;
     std::vector<unsigned char> busSoloDownstreamAudible;
+    std::vector<unsigned char> busMutedAtBeat;
+    std::vector<unsigned char> busSoloAtBeat;
+    bool busAudibilityInitialized = false;
     std::vector<size_t> busRouteOrder;
     std::vector<StereoSample> busFrameSamples;
     std::vector<StereoSample> lastBusOutputSamples;

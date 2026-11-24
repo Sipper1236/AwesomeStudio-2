@@ -2056,7 +2056,8 @@ bool sameAutomationPoints(const QVector<AutomationPoint>& left, const QVector<Au
     return true;
 }
 
-bool upsertAutomationPoint(QVector<AutomationPoint>& points, double beat, float value)
+bool upsertAutomationPoint(QVector<AutomationPoint>& points, double beat, float value,
+                           AutomationPoint::Curve curve = AutomationPoint::Curve::Linear)
 {
     auto position = std::lower_bound(points.begin(), points.end(), beat,
         [](const AutomationPoint& point, double targetBeat) { return point.beat < targetBeat; });
@@ -2072,7 +2073,7 @@ bool upsertAutomationPoint(QVector<AutomationPoint>& points, double beat, float 
     }
     if (points.size() >= 10000)
         return false;
-    points.insert(position, {beat, value});
+    points.insert(position, {beat, value, curve});
     return true;
 }
 
@@ -2466,10 +2467,10 @@ private:
 class BusAutomationEditCommand final : public QUndoCommand
 {
 public:
-    BusAutomationEditCommand(MainWindow* window, quint64 busId, bool pan,
+    BusAutomationEditCommand(MainWindow* window, quint64 busId, int parameter,
                              QVector<AutomationPoint> before,
                              QVector<AutomationPoint> after)
-        : window(window), busId(busId), pan(pan),
+        : window(window), busId(busId), parameter(parameter),
           before(std::move(before)), after(std::move(after))
     {
         setText(QObject::tr("Edit mixer bus automation"));
@@ -2478,19 +2479,19 @@ public:
     void undo() override
     {
         if (window != nullptr)
-            window->applyBusAutomationHistory(busId, pan, before);
+            window->applyBusAutomationHistory(busId, parameter, before);
     }
 
     void redo() override
     {
         if (window != nullptr)
-            window->applyBusAutomationHistory(busId, pan, after);
+            window->applyBusAutomationHistory(busId, parameter, after);
     }
 
 private:
     QPointer<MainWindow> window;
     quint64 busId;
-    bool pan;
+    int parameter;
     QVector<AutomationPoint> before;
     QVector<AutomationPoint> after;
 };
@@ -3014,17 +3015,17 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         undoStack.push(new AutomationEditCommand(this, trackId, parameter, before, after, pluginUri));
     });
     connect(arrangementEditor, &ArrangementEditor::busAutomationChanged, this,
-            [this](quint64 busId, bool pan, const QVector<AutomationPoint>& before,
+            [this](quint64 busId, int parameter, const QVector<AutomationPoint>& before,
                    const QVector<AutomationPoint>& after)
     {
         const auto bus = std::find_if(project.buses.cbegin(), project.buses.cend(),
             [busId](const MixerBus& candidate) { return candidate.id == busId; });
         if (bus != project.buses.cend())
-            undoStack.push(new BusAutomationEditCommand(this, busId, pan, before, after));
+            undoStack.push(new BusAutomationEditCommand(this, busId, parameter, before, after));
     });
     connect(arrangementEditor, &ArrangementEditor::automationPointLimitReached, this, [this]
     {
-        statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
+        statusBar()->showMessage(tr("This automation lane has reached the 10,000 keyframe limit."), 4000);
     });
     connect(arrangementEditor, &ArrangementEditor::markerAddRequested,
             this, &MainWindow::addTimelineMarker);
@@ -3519,19 +3520,27 @@ void MainWindow::createToolBars()
     arrangementBar->addSeparator();
     automationViewAction = new QAction(tr("Automation lanes"), this);
     automationViewAction->setCheckable(true);
-    automationViewAction->setToolTip(tr("Show and edit track, built-in synth, or LV2/CLAP/VST3 effect parameter automation in the Playlist"));
+    automationViewAction->setToolTip(tr("Show and edit track, mixer bus, built-in synth, or plug-in automation in the Playlist"));
     arrangementBar->addAction(automationViewAction);
     automationLaneParameterControl = new QComboBox(arrangementBar);
     automationLaneParameterControl->addItem(tr("Volume"), 0);
     automationLaneParameterControl->addItem(tr("Pan"), 1);
     automationLaneParameterControl->addItem(tr("Mixer bus level"), mixerBusGainAutomationTarget);
     automationLaneParameterControl->addItem(tr("Mixer bus pan"), mixerBusPanAutomationTarget);
+    automationLaneParameterControl->addItem(tr("Mixer bus mute"), mixerBusMuteAutomationTarget);
+    automationLaneParameterControl->addItem(tr("Mixer bus solo"), mixerBusSoloAutomationTarget);
     automationLaneParameterControl->setItemData(2, 0.0, Qt::UserRole + 1);
     automationLaneParameterControl->setItemData(2, 2.0, Qt::UserRole + 2);
     automationLaneParameterControl->setItemData(2, 1.0, Qt::UserRole + 3);
     automationLaneParameterControl->setItemData(3, -1.0, Qt::UserRole + 1);
     automationLaneParameterControl->setItemData(3, 1.0, Qt::UserRole + 2);
     automationLaneParameterControl->setItemData(3, 0.0, Qt::UserRole + 3);
+    for (int index = 4; index < 6; ++index)
+    {
+        automationLaneParameterControl->setItemData(index, 0.0, Qt::UserRole + 1);
+        automationLaneParameterControl->setItemData(index, 1.0, Qt::UserRole + 2);
+        automationLaneParameterControl->setItemData(index, 0.0, Qt::UserRole + 3);
+    }
     automationLaneParameterControl->setMinimumWidth(190);
     automationLaneParameterControl->setEnabled(false);
     automationLaneParameterControl->setToolTip(tr("Choose the parameter shown in the Playlist lanes"));
@@ -5962,7 +5971,7 @@ void MainWindow::refreshMixer()
 
         connect(volume, &QSlider::sliderPressed, this, [this, busId, volume]
         {
-            beginBusAutomationWrite(busId, false, volume->value() / 100.0f);
+            beginBusAutomationWrite(busId, mixerBusGainAutomationTarget, volume->value() / 100.0f);
         });
         connect(volume, &QSlider::sliderReleased, this, [this, busId]
         {
@@ -5974,7 +5983,7 @@ void MainWindow::refreshMixer()
         });
         connect(pan, &QSlider::sliderPressed, this, [this, busId, pan]
         {
-            beginBusAutomationWrite(busId, true, pan->value() / 100.0f);
+            beginBusAutomationWrite(busId, mixerBusPanAutomationTarget, pan->value() / 100.0f);
         });
         connect(pan, &QSlider::sliderReleased, this, [this, busId]
         {
@@ -6128,6 +6137,29 @@ void MainWindow::refreshMixer()
             for (MixerBus& bus : project.buses)
             {
                 if (bus.id != busId) continue;
+                if (automationWriteSession.active && automationWriteSession.bus &&
+                    automationWriteSession.busId == busId &&
+                    automationWriteSession.parameter == mixerBusMuteAutomationTarget)
+                {
+                    recordBusAutomationValue(busId, mixerBusMuteAutomationTarget, enabled ? 1.0f : 0.0f);
+                    if (automationWriteModeControl->currentData().toInt() != 1)
+                        finishAutomationWrite();
+                    return;
+                }
+                if (automationWriteAction->isChecked() &&
+                    automationLaneParameterControl->currentData().toInt() == mixerBusMuteAutomationTarget &&
+                    audioEngine.isPlaying())
+                {
+                    beginBusAutomationWrite(busId, mixerBusMuteAutomationTarget, bus.muted ? 1.0f : 0.0f);
+                    if (automationWriteSession.active && automationWriteSession.bus &&
+                        automationWriteSession.busId == busId)
+                    {
+                        recordBusAutomationValue(busId, mixerBusMuteAutomationTarget, enabled ? 1.0f : 0.0f);
+                        if (automationWriteModeControl->currentData().toInt() != 1)
+                            finishAutomationWrite();
+                        return;
+                    }
+                }
                 bus.muted = enabled;
                 audioEngine.setProject(project);
                 settingsDirty = true;
@@ -6140,6 +6172,29 @@ void MainWindow::refreshMixer()
             for (MixerBus& bus : project.buses)
             {
                 if (bus.id != busId) continue;
+                if (automationWriteSession.active && automationWriteSession.bus &&
+                    automationWriteSession.busId == busId &&
+                    automationWriteSession.parameter == mixerBusSoloAutomationTarget)
+                {
+                    recordBusAutomationValue(busId, mixerBusSoloAutomationTarget, enabled ? 1.0f : 0.0f);
+                    if (automationWriteModeControl->currentData().toInt() != 1)
+                        finishAutomationWrite();
+                    return;
+                }
+                if (automationWriteAction->isChecked() &&
+                    automationLaneParameterControl->currentData().toInt() == mixerBusSoloAutomationTarget &&
+                    audioEngine.isPlaying())
+                {
+                    beginBusAutomationWrite(busId, mixerBusSoloAutomationTarget, bus.solo ? 1.0f : 0.0f);
+                    if (automationWriteSession.active && automationWriteSession.bus &&
+                        automationWriteSession.busId == busId)
+                    {
+                        recordBusAutomationValue(busId, mixerBusSoloAutomationTarget, enabled ? 1.0f : 0.0f);
+                        if (automationWriteModeControl->currentData().toInt() != 1)
+                            finishAutomationWrite();
+                        return;
+                    }
+                }
                 bus.solo = enabled;
                 audioEngine.setProject(project);
                 settingsDirty = true;
@@ -6158,7 +6213,7 @@ void MainWindow::refreshMixer()
                     automationWriteSession.busId == busId &&
                     automationWriteSession.parameter == mixerBusGainAutomationTarget)
                 {
-                    recordBusAutomationValue(busId, false, level);
+                    recordBusAutomationValue(busId, mixerBusGainAutomationTarget, level);
                     if (!volume->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
                         automationWriteIdleTimer->start(250);
                     settingsDirty = true;
@@ -6169,11 +6224,11 @@ void MainWindow::refreshMixer()
                     automationLaneParameterControl->currentData().toInt() == mixerBusGainAutomationTarget &&
                     audioEngine.isPlaying())
                 {
-                    beginBusAutomationWrite(busId, false, bus.gain);
+                    beginBusAutomationWrite(busId, mixerBusGainAutomationTarget, bus.gain);
                     if (automationWriteSession.active && automationWriteSession.bus &&
                         automationWriteSession.busId == busId)
                     {
-                        recordBusAutomationValue(busId, false, level);
+                        recordBusAutomationValue(busId, mixerBusGainAutomationTarget, level);
                         if (!volume->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
                             automationWriteIdleTimer->start(250);
                         settingsDirty = true;
@@ -6200,7 +6255,7 @@ void MainWindow::refreshMixer()
                     automationWriteSession.busId == busId &&
                     automationWriteSession.parameter == mixerBusPanAutomationTarget)
                 {
-                    recordBusAutomationValue(busId, true, balance);
+                    recordBusAutomationValue(busId, mixerBusPanAutomationTarget, balance);
                     if (!pan->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
                         automationWriteIdleTimer->start(250);
                     settingsDirty = true;
@@ -6211,11 +6266,11 @@ void MainWindow::refreshMixer()
                     automationLaneParameterControl->currentData().toInt() == mixerBusPanAutomationTarget &&
                     audioEngine.isPlaying())
                 {
-                    beginBusAutomationWrite(busId, true, bus.pan);
+                    beginBusAutomationWrite(busId, mixerBusPanAutomationTarget, bus.pan);
                     if (automationWriteSession.active && automationWriteSession.bus &&
                         automationWriteSession.busId == busId)
                     {
-                        recordBusAutomationValue(busId, true, balance);
+                        recordBusAutomationValue(busId, mixerBusPanAutomationTarget, balance);
                         if (!pan->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
                             automationWriteIdleTimer->start(250);
                         settingsDirty = true;
@@ -9152,6 +9207,7 @@ void MainWindow::refreshArrangementAutomationView()
     const QString pluginUri = automationLaneParameterControl->itemData(index, Qt::UserRole + 4).toString();
     const bool writeAutomationTarget = target == 0 || target == 1 ||
         target == mixerBusGainAutomationTarget || target == mixerBusPanAutomationTarget ||
+        target == mixerBusMuteAutomationTarget || target == mixerBusSoloAutomationTarget ||
         (target >= trackEqLowGainAutomationTarget &&
          target <= trackEqHighCrossoverAutomationTarget) ||
         (target >= trackEqParametricAutomationTargetBase &&
@@ -9337,9 +9393,8 @@ void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float valu
         audioEngine.setLivePluginParameterOverride(trackId, effectIndex, parameterIndex, initialWriteValue);
 }
 
-void MainWindow::beginBusAutomationWrite(quint64 busId, bool pan, float value)
+void MainWindow::beginBusAutomationWrite(quint64 busId, int target, float value)
 {
-    const int target = pan ? mixerBusPanAutomationTarget : mixerBusGainAutomationTarget;
     if (automationWriteSession.active || automationWriteAction == nullptr ||
         !automationWriteAction->isChecked() || !audioEngine.isPlaying() ||
         automationLaneParameterControl->currentData().toInt() != target)
@@ -9355,20 +9410,29 @@ void MainWindow::beginBusAutomationWrite(quint64 busId, bool pan, float value)
     automationWriteSession.bus = true;
     automationWriteSession.busId = busId;
     automationWriteSession.parameter = target;
-    automationWriteSession.minimum = pan ? -1.0f : 0.0f;
-    automationWriteSession.maximum = pan ? 1.0f : 2.0f;
-    automationWriteSession.parameterName = pan ? tr("mixer bus pan") : tr("mixer bus level");
+    automationWriteSession.minimum = target == mixerBusPanAutomationTarget ? -1.0f : 0.0f;
+    automationWriteSession.maximum = target == mixerBusGainAutomationTarget ? 2.0f : 1.0f;
+    automationWriteSession.parameterName = target == mixerBusGainAutomationTarget ? tr("mixer bus level") :
+        target == mixerBusPanAutomationTarget ? tr("mixer bus pan") :
+        target == mixerBusMuteAutomationTarget ? tr("mixer bus mute") : tr("mixer bus solo");
     automationWriteSession.initialValue = value;
-    automationWriteSession.baseValue = pan ? bus->pan : bus->gain;
+    automationWriteSession.baseValue = target == mixerBusGainAutomationTarget ? bus->gain :
+        target == mixerBusPanAutomationTarget ? bus->pan :
+        target == mixerBusMuteAutomationTarget ? (bus->muted ? 1.0f : 0.0f) :
+        (bus->solo ? 1.0f : 0.0f);
     automationWriteSession.lastValue = value;
     automationWriteSession.lastSampleBeat = beat;
     automationWriteSession.lastPointBeat = beat;
-    automationWriteSession.before = pan ? bus->panAutomation : bus->gainAutomation;
+    QVector<AutomationPoint>& points = target == mixerBusGainAutomationTarget ? bus->gainAutomation :
+        target == mixerBusPanAutomationTarget ? bus->panAutomation :
+        target == mixerBusMuteAutomationTarget ? bus->muteAutomation : bus->soloAutomation;
+    automationWriteSession.before = points;
     const float initialAutomationValue = automationValueAt(
         automationWriteSession.before, beat, automationWriteSession.baseValue);
     const bool trim = automationWriteModeControl->currentData().toInt() == 2;
-    if (!upsertAutomationPoint(pan ? bus->panAutomation : bus->gainAutomation, beat,
-                               trim ? initialAutomationValue : value))
+    const auto curve = target == mixerBusMuteAutomationTarget || target == mixerBusSoloAutomationTarget
+        ? AutomationPoint::Curve::Hold : AutomationPoint::Curve::Linear;
+    if (!upsertAutomationPoint(points, beat, trim ? initialAutomationValue : value, curve))
     {
         automationWriteSession = {};
         statusBar()->showMessage(tr("This automation lane has reached the 10,000 keyframe limit."), 4000);
@@ -9377,9 +9441,8 @@ void MainWindow::beginBusAutomationWrite(quint64 busId, bool pan, float value)
     audioEngine.setProject(project);
 }
 
-void MainWindow::recordBusAutomationValue(quint64 busId, bool pan, float value)
+void MainWindow::recordBusAutomationValue(quint64 busId, int target, float value)
 {
-    const int target = pan ? mixerBusPanAutomationTarget : mixerBusGainAutomationTarget;
     if (!automationWriteSession.active || !automationWriteSession.bus ||
         automationWriteSession.busId != busId || automationWriteSession.parameter != target)
         return;
@@ -9390,7 +9453,9 @@ void MainWindow::recordBusAutomationValue(quint64 busId, bool pan, float value)
         [busId](const MixerBus& candidate) { return candidate.id == busId; });
     if (bus == project.buses.end())
         return;
-    QVector<AutomationPoint>& points = pan ? bus->panAutomation : bus->gainAutomation;
+    QVector<AutomationPoint>& points = target == mixerBusGainAutomationTarget ? bus->gainAutomation :
+        target == mixerBusPanAutomationTarget ? bus->panAutomation :
+        target == mixerBusMuteAutomationTarget ? bus->muteAutomation : bus->soloAutomation;
     const bool trim = automationWriteModeControl->currentData().toInt() == 2;
     const float base = automationValueAt(automationWriteSession.before, beat,
                                          automationWriteSession.baseValue);
@@ -9409,7 +9474,9 @@ void MainWindow::recordBusAutomationValue(quint64 busId, bool pan, float value)
         beat - automationWriteSession.lastPointBeat < automationWritePointSpacingBeats;
     if (coalesce)
         writeBeat = automationWriteSession.lastPointBeat;
-    if (!upsertAutomationPoint(points, writeBeat, output))
+    const auto curve = target == mixerBusMuteAutomationTarget || target == mixerBusSoloAutomationTarget
+        ? AutomationPoint::Curve::Hold : AutomationPoint::Curve::Linear;
+    if (!upsertAutomationPoint(points, writeBeat, output, curve))
         statusBar()->showMessage(tr("This automation lane has reached the 10,000 keyframe limit."), 4000);
     else if (!coalesce)
         automationWriteSession.lastPointBeat = writeBeat;
@@ -9490,8 +9557,10 @@ void MainWindow::finishAutomationWrite()
             [&session](const MixerBus& candidate) { return candidate.id == session.busId; });
         if (bus == project.buses.end())
             return;
-        QVector<AutomationPoint>& current = session.parameter == mixerBusPanAutomationTarget
-            ? bus->panAutomation : bus->gainAutomation;
+        QVector<AutomationPoint>& current = session.parameter == mixerBusGainAutomationTarget
+            ? bus->gainAutomation : session.parameter == mixerBusPanAutomationTarget
+                ? bus->panAutomation : session.parameter == mixerBusMuteAutomationTarget
+                    ? bus->muteAutomation : bus->soloAutomation;
         if (!session.changed || sameAutomationPoints(session.before, current))
         {
             current = session.before;
@@ -9500,7 +9569,7 @@ void MainWindow::finishAutomationWrite()
         }
         const QVector<AutomationPoint> after = current;
         undoStack.push(new BusAutomationEditCommand(this, session.busId,
-            session.parameter == mixerBusPanAutomationTarget, session.before, after));
+            session.parameter, session.before, after));
         statusBar()->showMessage(tr("Recorded %1 automation for %2")
             .arg(session.parameterName, bus->name), 2500);
         return;
@@ -9559,17 +9628,20 @@ void MainWindow::applyAutomationHistory(quint64 trackId, int parameter, const QS
     refreshDirtyState();
 }
 
-void MainWindow::applyBusAutomationHistory(quint64 busId, bool pan,
+void MainWindow::applyBusAutomationHistory(quint64 busId, int parameter,
                                            const QVector<AutomationPoint>& points)
 {
     auto bus = std::find_if(project.buses.begin(), project.buses.end(),
         [busId](const MixerBus& candidate) { return candidate.id == busId; });
     if (bus == project.buses.end())
         return;
-    (pan ? bus->panAutomation : bus->gainAutomation) = points;
+    if (parameter == mixerBusGainAutomationTarget) bus->gainAutomation = points;
+    else if (parameter == mixerBusPanAutomationTarget) bus->panAutomation = points;
+    else if (parameter == mixerBusMuteAutomationTarget) bus->muteAutomation = points;
+    else if (parameter == mixerBusSoloAutomationTarget) bus->soloAutomation = points;
+    else return;
     audioEngine.setProject(project);
     arrangementEditor->setProject(project);
-    refreshMixer();
     settingsDirty = true;
     refreshDirtyState();
 }
