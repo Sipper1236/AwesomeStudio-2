@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 63;
+constexpr int currentProjectVersion = 64;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -134,6 +134,16 @@ QJsonArray saveTempoChanges(const QVector<TempoChange>& changes)
             {QStringLiteral("rampFromPrevious"), change.rampFromPrevious}
         });
     }
+    return result;
+}
+
+QJsonArray saveTimeSignatureChanges(const QVector<TimeSignatureChange>& changes)
+{
+    QJsonArray result;
+    for (const TimeSignatureChange& change : changes)
+        result.push_back(QJsonObject{{QStringLiteral("beat"), change.beat},
+                                     {QStringLiteral("beatsPerBar"), change.beatsPerBar},
+                                     {QStringLiteral("beatUnit"), change.beatUnit}});
     return result;
 }
 
@@ -1455,6 +1465,7 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         {QStringLiteral("masterEffects"), saveEffects(safeProject.masterEffects)},
         {QStringLiteral("markers"), markers},
         {QStringLiteral("tempoChanges"), saveTempoChanges(safeProject.tempoChanges)},
+        {QStringLiteral("timeSignatureChanges"), saveTimeSignatureChanges(safeProject.timeSignatureChanges)},
         {QStringLiteral("buses"), buses},
         {QStringLiteral("tracks"), tracks}
     };
@@ -1518,6 +1529,34 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
     loaded.tempoBpm = root.value(QStringLiteral("tempoBpm")).toDouble(120.0);
     loaded.beatsPerBar = root.value(QStringLiteral("beatsPerBar")).toInt(4);
     loaded.beatUnit = version >= 3 ? root.value(QStringLiteral("beatUnit")).toInt(4) : 4;
+    if (version >= 64)
+    {
+        const QJsonValue meterValue = root.value(QStringLiteral("timeSignatureChanges"));
+        if (!meterValue.isArray() || meterValue.toArray().size() > 1000)
+        {
+            setError(error, QStringLiteral("The project has invalid or excessive time-signature changes."));
+            return false;
+        }
+        for (const QJsonValue& changeValue : meterValue.toArray())
+        {
+            if (!changeValue.isObject())
+            {
+                setError(error, QStringLiteral("The project contains an invalid time-signature change."));
+                return false;
+            }
+            const QJsonObject object = changeValue.toObject();
+            const double beat = object.value(QStringLiteral("beat")).toDouble(-1.0);
+            const int numerator = object.value(QStringLiteral("beatsPerBar")).toInt(-1);
+            const int denominator = object.value(QStringLiteral("beatUnit")).toInt(-1);
+            if (!std::isfinite(beat) || beat <= 0.0 || beat > 16384.0 || numerator < 1 || numerator > 12 ||
+                (denominator != 1 && denominator != 2 && denominator != 4 && denominator != 8 && denominator != 16))
+            {
+                setError(error, QStringLiteral("The project contains an out-of-range time-signature change."));
+                return false;
+            }
+            loaded.timeSignatureChanges.push_back({beat, numerator, denominator});
+        }
+    }
     loaded.bars = root.value(QStringLiteral("bars")).toInt(4);
     loaded.loopEnabled = root.value(QStringLiteral("loopEnabled")).toBool(true);
     loaded.metronomeEnabled = version >= 5 ? root.value(QStringLiteral("metronomeEnabled")).toBool(false) : false;

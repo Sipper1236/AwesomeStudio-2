@@ -237,17 +237,34 @@ protected:
         for (int beat = 0; beat <= totalBeats; ++beat)
         {
             const int x = trackHeaderWidth + beat * pixelsPerBeat;
-            const double barOffset = std::fmod(beat, quarterNotesPerBar);
-            if (std::min(barOffset, quarterNotesPerBar - barOffset) > 0.02)
+            bool isBarLine = std::abs(static_cast<double>(beat)) < 0.02;
+            for (const TimeSignatureChange& change : project.timeSignatureChanges)
+            {
+                if (change.beat > beat)
+                    break;
+                const double width = project.quarterNotesPerBarAtBeat(change.beat);
+                isBarLine = isBarLine || std::abs(change.beat - beat) < 0.02;
+                if (change.beat < beat && width > 0.0)
+                {
+                    const double count = std::floor((beat - change.beat) / width);
+                    isBarLine = isBarLine || std::abs(change.beat + count * width - beat) < 0.02;
+                }
+            }
+            if (project.timeSignatureChanges.isEmpty())
+                isBarLine = std::abs(std::fmod(beat, quarterNotesPerBar)) < 0.02;
+            else if (project.timeSignatureChanges.first().beat > beat)
+            {
+                isBarLine = std::abs(std::fmod(beat, quarterNotesPerBar)) < 0.02;
+            }
+            if (!isBarLine)
             {
                 painter.setPen(QColor(QStringLiteral("#2b333d")));
                 painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * rowHeight);
             }
         }
-        const int totalBars = static_cast<int>(std::ceil(visibleBeats / quarterNotesPerBar));
-        for (int bar = 0; bar <= totalBars; ++bar)
+        int bar = 1;
+        for (double beat = 0.0; beat <= visibleBeats;)
         {
-            const double beat = bar * quarterNotesPerBar;
             const int x = trackHeaderWidth + static_cast<int>(std::round(beat * pixelsPerBeat));
             painter.setPen(QColor(QStringLiteral("#596572")));
             painter.drawLine(x, rulerHeight, x, rulerHeight + trackCount * rowHeight);
@@ -256,9 +273,20 @@ protected:
                 painter.setPen(QColor(QStringLiteral("#e2e8ee")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
                 painter.drawText(QRect(x + 5, 0,
-                                       static_cast<int>(std::round(pixelsPerBeat * quarterNotesPerBar)) - 10,
+                                       static_cast<int>(std::round(pixelsPerBeat * project.quarterNotesPerBarAtBeat(beat))) - 10,
                                        rulerHeight), Qt::AlignVCenter, QString::number(bar + 1));
             }
+            double next = beat + project.quarterNotesPerBarAtBeat(beat);
+            for (const TimeSignatureChange& change : project.timeSignatureChanges)
+                if (change.beat > beat + 1.0e-6 && change.beat < next)
+                {
+                    next = change.beat;
+                    break;
+                }
+            if (next <= beat + 1.0e-6)
+                break;
+            beat = next;
+            ++bar;
         }
 
         if (punchRangeEnabled)

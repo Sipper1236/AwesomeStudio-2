@@ -288,14 +288,43 @@ bool TempoChange::operator==(const TempoChange& other) const
            rampFromPrevious == other.rampFromPrevious;
 }
 
+bool TimeSignatureChange::operator==(const TimeSignatureChange& other) const
+{
+    return std::abs(beat - other.beat) < 1.0e-9 && beatsPerBar == other.beatsPerBar &&
+           beatUnit == other.beatUnit;
+}
+
 double ProjectData::patternLengthBeats() const
 {
-    return quarterNotesPerBar() * bars;
+    double length = 0.0;
+    double beat = 0.0;
+    for (int bar = 0; bar < bars; ++bar)
+    {
+        double next = beat + quarterNotesPerBarAtBeat(beat);
+        for (const TimeSignatureChange& change : timeSignatureChanges)
+            if (change.beat > beat + 1.0e-9 && change.beat < next)
+            {
+                next = change.beat;
+                break;
+            }
+        length += next - beat;
+        beat = next;
+    }
+    return length;
 }
 
 double ProjectData::quarterNotesPerBar() const
 {
     return static_cast<double>(beatsPerBar) * 4.0 / beatUnit;
+}
+
+double ProjectData::quarterNotesPerBarAtBeat(double beat) const
+{
+    const auto next = std::upper_bound(timeSignatureChanges.cbegin(), timeSignatureChanges.cend(), beat,
+        [](double value, const TimeSignatureChange& change) { return value < change.beat; });
+    const int numerator = next == timeSignatureChanges.cbegin() ? beatsPerBar : (next - 1)->beatsPerBar;
+    const int denominator = next == timeSignatureChanges.cbegin() ? beatUnit : (next - 1)->beatUnit;
+    return static_cast<double>(numerator) * 4.0 / denominator;
 }
 
 ProjectData::ProjectData()
@@ -504,6 +533,37 @@ void ProjectData::normalize()
     beatsPerBar = std::clamp(beatsPerBar, 1, 12);
     if (beatUnit != 1 && beatUnit != 2 && beatUnit != 4 && beatUnit != 8 && beatUnit != 16)
         beatUnit = 4;
+    if (timeSignatureChanges.size() > 1000)
+        timeSignatureChanges.resize(1000);
+    QVector<TimeSignatureChange> validTimeSignatures;
+    validTimeSignatures.reserve(timeSignatureChanges.size());
+    for (TimeSignatureChange change : timeSignatureChanges)
+    {
+        if (!std::isfinite(change.beat))
+            continue;
+        change.beat = std::clamp(change.beat, 0.0, 16384.0);
+        change.beatsPerBar = std::clamp(change.beatsPerBar, 1, 12);
+        if (change.beatUnit != 1 && change.beatUnit != 2 && change.beatUnit != 4 &&
+            change.beatUnit != 8 && change.beatUnit != 16)
+            change.beatUnit = 4;
+        validTimeSignatures.push_back(change);
+    }
+    std::stable_sort(validTimeSignatures.begin(), validTimeSignatures.end(),
+        [](const TimeSignatureChange& left, const TimeSignatureChange& right) { return left.beat < right.beat; });
+    timeSignatureChanges.clear();
+    for (const TimeSignatureChange& change : validTimeSignatures)
+    {
+        if (change.beat < 1.0e-9)
+        {
+            beatsPerBar = change.beatsPerBar;
+            beatUnit = change.beatUnit;
+        }
+        else if (!timeSignatureChanges.isEmpty() &&
+                 std::abs(timeSignatureChanges.back().beat - change.beat) < 1.0e-9)
+            timeSignatureChanges.back() = change;
+        else
+            timeSignatureChanges.push_back(change);
+    }
     bars = std::clamp(bars, 1, 64);
     countInBars = std::clamp(countInBars, 0, 4);
     if (tempoChanges.size() > 1000)

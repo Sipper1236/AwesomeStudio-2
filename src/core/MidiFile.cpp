@@ -138,6 +138,13 @@ struct RawTempoChange
     double bpm = 120.0;
 };
 
+struct RawTimeSignatureChange
+{
+    qint64 tick = 0;
+    int beatsPerBar = 4;
+    int beatUnit = 4;
+};
+
 struct NoteOn
 {
     qint64 tick = 0;
@@ -151,6 +158,7 @@ struct ParsedTrack
     QVector<RawNote> notes;
     QVector<RawPitchBend> pitchBends;
     QVector<RawTempoChange> tempoEvents;
+    QVector<RawTimeSignatureChange> timeSignatureEvents;
     double tempoBpm = 120.0;
     int beatsPerBar = 4;
     int beatUnit = 4;
@@ -158,8 +166,6 @@ struct ParsedTrack
     qint64 lastTick = 0;
     bool foundTempo = false;
     bool foundTimeSignature = false;
-    bool inconsistentTimeSignature = false;
-    bool hasTimeSignatureChanges = false;
     bool percussion = false;
 };
 
@@ -271,17 +277,12 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                 if (numerator >= 1 && numerator <= 12 && exponent <= 4)
                 {
                     const int denominator = 1 << exponent;
-                    if (absoluteTick > 0)
-                        track.hasTimeSignatureChanges = true;
+                    track.timeSignatureEvents.push_back({absoluteTick, numerator, denominator});
                     if (!foundTimeSignature)
                     {
                         beatsPerBar = numerator;
                         beatUnit = denominator;
                         foundTimeSignature = true;
-                    }
-                    else if (beatsPerBar != numerator || beatUnit != denominator)
-                    {
-                        track.inconsistentTimeSignature = true;
                     }
                 }
             }
@@ -443,6 +444,26 @@ QByteArray makeConductorTrack(const ProjectData& project, qint64 songEndTick)
     appendByte(track, static_cast<quint8>(denominatorExponent));
     appendByte(track, 24);
     appendByte(track, 8);
+
+    qint64 previousMeterTick = 0;
+    for (const TimeSignatureChange& change : project.timeSignatureChanges)
+    {
+        const qint64 meterTick = std::llround(change.beat * exportPpqn);
+        if (meterTick <= previousMeterTick || meterTick > songEndTick)
+            continue;
+        int exponent = 0;
+        for (int denominator = change.beatUnit; denominator > 1; denominator >>= 1)
+            ++exponent;
+        appendVariableLength(track, static_cast<quint32>(meterTick - previousMeterTick));
+        appendByte(track, 0xff);
+        appendByte(track, 0x58);
+        appendByte(track, 4);
+        appendByte(track, static_cast<quint8>(change.beatsPerBar));
+        appendByte(track, static_cast<quint8>(exponent));
+        appendByte(track, 24);
+        appendByte(track, 8);
+        previousMeterTick = meterTick;
+    }
 
     qint64 previousTempoTick = 0;
     int rampCountRemaining = static_cast<int>(std::count_if(
@@ -803,6 +824,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     bool foundTempo = false;
     bool foundTimeSignature = false;
     QVector<TempoChange> tempoChanges;
+    QVector<TimeSignatureChange> timeSignatureChanges;
     QVector<RawTempoChange> tempoEvents;
     tempoChanges.reserve(32);
     tempoEvents.reserve(32);
@@ -855,6 +877,28 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             for (const RawTempoChange& event : tempoEvents)
                 tempoChanges.push_back({static_cast<double>(event.tick) / ppqn, event.bpm});
         }
+        ProjectData meterTimingMap;
+        meterTimingMap.tempoBpm = tempo;
+        meterTimingMap.tempoChanges = tempoChanges;
+        meterTimingMap.normalize();
+        for (const ParsedTrack& track : parsedTracks)
+        {
+            for (const RawTimeSignatureChange& event : track.timeSignatureEvents)
+            {
+                if (event.tick <= 0)
+                    continue;
+                const double beat = smpteTiming
+                    ? meterTimingMap.beatAtSeconds(static_cast<double>(event.tick) / ticksPerSecond)
+                    : static_cast<double>(event.tick) / ppqn;
+                if (beat <= maximumSongBeats)
+                    timeSignatureChanges.push_back({beat, event.beatsPerBar, event.beatUnit});
+            }
+        }
+        if (timeSignatureChanges.size() > 1000)
+        {
+            setError(error, QStringLiteral("The MIDI time-signature map exceeds the project limits."));
+            return false;
+        }
     }
     else
     {
@@ -863,24 +907,6 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             ? parsedTracks.first().beatsPerBar : 4;
         beatUnit = parsedTracks.first().foundTimeSignature
             ? parsedTracks.first().beatUnit : 4;
-        for (const ParsedTrack& track : parsedTracks)
-        {
-            const int sequenceBeatsPerBar = track.foundTimeSignature ? track.beatsPerBar : 4;
-            const int sequenceBeatUnit = track.foundTimeSignature ? track.beatUnit : 4;
-            if (track.hasTimeSignatureChanges)
-            {
-                setError(error, QStringLiteral(
-                    "Format 2 sequences with time-signature changes cannot be combined in one arrangement."));
-                return false;
-            }
-            if (track.inconsistentTimeSignature || sequenceBeatsPerBar != beatsPerBar ||
-                sequenceBeatUnit != beatUnit)
-            {
-                setError(error, QStringLiteral(
-                    "Format 2 sequences with different time signatures cannot be combined in one arrangement."));
-                return false;
-            }
-        }
     }
 
     QVector<double> sequenceStartBeats(parsedTracks.size(), 0.0);
@@ -888,7 +914,10 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     double sequenceEndBeat = 0.0;
     if (format == 2)
     {
-        const double barLength = static_cast<double>(beatsPerBar) * 4.0 / beatUnit;
+        int activeSequenceBeatsPerBar = parsedTracks.first().foundTimeSignature
+            ? parsedTracks.first().beatsPerBar : 4;
+        int activeSequenceBeatUnit = parsedTracks.first().foundTimeSignature
+            ? parsedTracks.first().beatUnit : 4;
         for (qsizetype trackIndex = 0; trackIndex < parsedTracks.size(); ++trackIndex)
         {
             const ParsedTrack& track = parsedTracks[trackIndex];
@@ -897,7 +926,23 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
                 setError(error, QStringLiteral("The MIDI sequences exceed the 16,384 beat limit."));
                 return false;
             }
+            const int sequenceBeatsPerBar = track.foundTimeSignature ? track.beatsPerBar : 4;
+            const int sequenceBeatUnit = track.foundTimeSignature ? track.beatUnit : 4;
+            if (trackIndex == 0)
+            {
+                beatsPerBar = sequenceBeatsPerBar;
+                beatUnit = sequenceBeatUnit;
+                activeSequenceBeatsPerBar = sequenceBeatsPerBar;
+                activeSequenceBeatUnit = sequenceBeatUnit;
+            }
+            const double activeBarLength = static_cast<double>(activeSequenceBeatsPerBar) * 4.0 /
+                                           activeSequenceBeatUnit;
+            sequenceEndBeat = std::ceil(sequenceEndBeat / activeBarLength - 1.0e-9) * activeBarLength;
             sequenceStartBeats[trackIndex] = sequenceEndBeat;
+            if (trackIndex > 0 && track.foundTimeSignature &&
+                (sequenceBeatsPerBar != activeSequenceBeatsPerBar ||
+                 sequenceBeatUnit != activeSequenceBeatUnit))
+                timeSignatureChanges.push_back({sequenceEndBeat, sequenceBeatsPerBar, sequenceBeatUnit});
             if (trackIndex > 0)
                 tempoChanges.push_back({sequenceEndBeat, track.tempoBpm});
 
@@ -917,7 +962,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
                         setError(error, QStringLiteral("The MIDI tempo map exceeds the project limits."));
                         return false;
                     }
-                    sequenceTimingMap.tempoChanges.push_back({localBeat, change.bpm});
+                    sequenceTimingMap.tempoChanges.push_back({localBeat, change.bpm, false});
                     tempoChanges.push_back({sequenceEndBeat + localBeat, change.bpm});
                     previousSeconds = seconds;
                     activeTempo = std::clamp(change.bpm, 20.0, 300.0);
@@ -938,6 +983,17 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             }
             sequenceTimingMap.normalize();
 
+            for (const RawTimeSignatureChange& change : track.timeSignatureEvents)
+            {
+                if (change.tick <= 0)
+                    continue;
+                const double localBeat = smpteTiming
+                    ? sequenceTimingMap.beatAtSeconds(static_cast<double>(change.tick) / ticksPerSecond)
+                    : static_cast<double>(change.tick) / ppqn;
+                if (localBeat > 0.0 && localBeat <= maximumSongBeats)
+                    timeSignatureChanges.push_back({sequenceEndBeat + localBeat,
+                                                    change.beatsPerBar, change.beatUnit});
+            }
             const auto localTickToBeat = [smpteTiming, ppqn, ticksPerSecond,
                                           &sequenceTimingMap](qint64 tick)
             {
@@ -950,14 +1006,55 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
                 localEndBeat = std::max(localEndBeat, localTickToBeat(note.endTick));
             for (const RawPitchBend& bend : track.pitchBends)
                 localEndBeat = std::max(localEndBeat, localTickToBeat(bend.tick));
-            const double sequenceLength = std::max(barLength,
-                std::ceil(localEndBeat / barLength) * barLength);
+            double sequenceLength = 0.0;
+            double segmentStart = 0.0;
+            int segmentBeatsPerBar = sequenceBeatsPerBar;
+            int segmentBeatUnit = sequenceBeatUnit;
+            for (const RawTimeSignatureChange& change : track.timeSignatureEvents)
+            {
+                const double changeBeat = localTickToBeat(change.tick);
+                if (changeBeat <= segmentStart + 1.0e-9)
+                {
+                    segmentBeatsPerBar = change.beatsPerBar;
+                    segmentBeatUnit = change.beatUnit;
+                    continue;
+                }
+                const double barLength = static_cast<double>(segmentBeatsPerBar) * 4.0 / segmentBeatUnit;
+                sequenceLength += std::ceil((changeBeat - segmentStart) / barLength - 1.0e-9) * barLength;
+                segmentStart = changeBeat;
+                segmentBeatsPerBar = change.beatsPerBar;
+                segmentBeatUnit = change.beatUnit;
+            }
+            const double finalBarLength = static_cast<double>(segmentBeatsPerBar) * 4.0 / segmentBeatUnit;
+            sequenceLength += std::max(finalBarLength,
+                std::ceil((localEndBeat - segmentStart) / finalBarLength - 1.0e-9) * finalBarLength);
             if (!std::isfinite(sequenceLength) || sequenceEndBeat + sequenceLength > maximumSongBeats)
             {
                 setError(error, QStringLiteral("The MIDI sequences exceed the 16,384 beat limit."));
                 return false;
             }
             sequenceEndBeat += sequenceLength;
+            if (!track.timeSignatureEvents.isEmpty())
+            {
+                double lastMeterBeat = -1.0;
+                for (const RawTimeSignatureChange& change : track.timeSignatureEvents)
+                {
+                    const double localBeat = smpteTiming
+                        ? sequenceTimingMap.beatAtSeconds(static_cast<double>(change.tick) / ticksPerSecond)
+                        : static_cast<double>(change.tick) / ppqn;
+                    if (localBeat >= lastMeterBeat)
+                    {
+                        lastMeterBeat = localBeat;
+                        activeSequenceBeatsPerBar = change.beatsPerBar;
+                        activeSequenceBeatUnit = change.beatUnit;
+                    }
+                }
+            }
+            else
+            {
+                activeSequenceBeatsPerBar = sequenceBeatsPerBar;
+                activeSequenceBeatUnit = sequenceBeatUnit;
+            }
         }
         if (tempoChanges.size() > 1000)
         {
@@ -985,6 +1082,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
     loaded.title = QFileInfo(path).completeBaseName();
     loaded.tempoBpm = tempo;
     loaded.tempoChanges = tempoChanges;
+    loaded.timeSignatureChanges = timeSignatureChanges;
     loaded.beatsPerBar = beatsPerBar;
     loaded.beatUnit = beatUnit;
     loaded.loopEnabled = false;
@@ -1050,7 +1148,7 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             trackEndBeat = std::max(trackEndBeat, bendBeat);
             longestBeat = std::max(longestBeat, trackStartBeat + bendBeat);
         }
-        const double barLength = loaded.quarterNotesPerBar();
+        const double barLength = loaded.quarterNotesPerBarAtBeat(trackStartBeat + trackEndBeat);
         clip.lengthBeats = std::clamp(std::ceil(trackEndBeat / barLength) * barLength,
                                       std::max(0.25, barLength), maximumSongBeats);
         instrument.clips.push_back(std::move(clip));
@@ -1061,8 +1159,22 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
         setError(error, QStringLiteral("The MIDI file contains no playable note or pitch-bend events."));
         return false;
     }
-    const double barLength = loaded.quarterNotesPerBar();
-    loaded.bars = std::clamp(static_cast<int>(std::ceil(longestBeat / barLength)), 1, 64);
+    loaded.bars = 0;
+    for (double beat = 0.0; beat < longestBeat;)
+    {
+        double next = beat + loaded.quarterNotesPerBarAtBeat(beat);
+        for (const TimeSignatureChange& change : loaded.timeSignatureChanges)
+            if (change.beat > beat + 1.0e-9 && change.beat < next)
+            {
+                next = change.beat;
+                break;
+            }
+        beat = next;
+        ++loaded.bars;
+        if (loaded.bars >= 64)
+            break;
+    }
+    loaded.bars = std::clamp(loaded.bars, 1, 64);
     loaded.normalize();
     project = std::move(loaded);
     return true;

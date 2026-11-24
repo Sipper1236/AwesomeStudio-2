@@ -319,6 +319,15 @@ struct TempoChange
     bool operator==(const TempoChange& other) const;
 };
 
+struct TimeSignatureChange
+{
+    double beat = 0.0;
+    int beatsPerBar = 4;
+    int beatUnit = 4;
+
+    bool operator==(const TimeSignatureChange& other) const;
+};
+
 struct MixerSend
 {
     quint64 busId = 0;
@@ -484,11 +493,13 @@ struct ProjectData
     QVector<MixerEffect> masterEffects;
     QVector<TimelineMarker> markers;
     QVector<TempoChange> tempoChanges;
+    QVector<TimeSignatureChange> timeSignatureChanges;
     QVector<MixerBus> buses;
     QVector<InstrumentTrack> tracks;
 
     double patternLengthBeats() const;
     double quarterNotesPerBar() const;
+    double quarterNotesPerBarAtBeat(double beat) const;
     double songLengthBeats() const;
     double tempoAtBeat(double beat) const;
     double secondsAtBeat(double beat) const;
