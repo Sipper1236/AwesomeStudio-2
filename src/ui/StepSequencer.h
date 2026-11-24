@@ -21,7 +21,7 @@ public:
                     double quarterNotesPerBar, quint64 nextNoteId, bool available,
                     int stepsPerBar = 16,
                     const QVector<TimeSignatureChange>& meterChanges = {},
-                    double clipStartBeat = 0.0);
+                    double clipStartBeat = 0.0, bool drumTrack = true);
 
 signals:
     void notesEdited(QVector<MidiNote> before, QVector<MidiNote> after);

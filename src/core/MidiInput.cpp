@@ -421,7 +421,8 @@ bool MidiInput::connectTo(const QString& portId, QString* error)
     snd_seq_set_client_name(impl->sequencer, "Awesome Studio");
     impl->localPort = snd_seq_create_simple_port(
         impl->sequencer, "MIDI Input",
-        SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
+        SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE |
+            SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ,
         SND_SEQ_PORT_TYPE_APPLICATION);
     if (impl->localPort < 0)
     {
@@ -430,6 +431,18 @@ bool MidiInput::connectTo(const QString& portId, QString* error)
         if (error != nullptr)
             *error = impl->error;
         return false;
+    }
+    snd_seq_port_info_t* localPortInfo = nullptr;
+    if (snd_seq_port_info_malloc(&localPortInfo) >= 0)
+    {
+        if (snd_seq_get_port_info(impl->sequencer, impl->localPort, localPortInfo) >= 0)
+        {
+            snd_seq_port_info_set_timestamping(localPortInfo, 1);
+            snd_seq_port_info_set_timestamp_real(localPortInfo, 1);
+            snd_seq_port_info_set_timestamp_queue(localPortInfo, SND_SEQ_QUEUE_DIRECT);
+            snd_seq_set_port_info(impl->sequencer, impl->localPort, localPortInfo);
+        }
+        snd_seq_port_info_free(localPortInfo);
     }
 
     result = snd_seq_connect_from(impl->sequencer, impl->localPort, client, port);
@@ -686,7 +699,28 @@ QVector<MidiInputEvent> MidiInput::readAvailable()
         if (snd_seq_event_input(impl->sequencer, &event) < 0 || event == nullptr)
             break;
 
-        if (event->type == SND_SEQ_EVENT_NOTEON || event->type == SND_SEQ_EVENT_NOTEOFF)
+        if (event->type == SND_SEQ_EVENT_CLOCK || event->type == SND_SEQ_EVENT_TICK)
+        {
+            MidiInputEvent clock;
+            clock.clockTick = true;
+            if (event->flags & SND_SEQ_TIME_STAMP_REAL)
+                clock.timestampMicroseconds = static_cast<qint64>(event->time.time.tv_sec) * 1000000LL +
+                                              event->time.time.tv_nsec / 1000;
+            events.push_back(clock);
+        }
+        else if (event->type == SND_SEQ_EVENT_START || event->type == SND_SEQ_EVENT_CONTINUE ||
+                 event->type == SND_SEQ_EVENT_STOP)
+        {
+            MidiInputEvent transport;
+            transport.transportStart = event->type == SND_SEQ_EVENT_START;
+            transport.transportContinue = event->type == SND_SEQ_EVENT_CONTINUE;
+            transport.transportStop = event->type == SND_SEQ_EVENT_STOP;
+            if (event->flags & SND_SEQ_TIME_STAMP_REAL)
+                transport.timestampMicroseconds = static_cast<qint64>(event->time.time.tv_sec) * 1000000LL +
+                                                  event->time.time.tv_nsec / 1000;
+            events.push_back(transport);
+        }
+        else if (event->type == SND_SEQ_EVENT_NOTEON || event->type == SND_SEQ_EVENT_NOTEOFF)
         {
             const bool noteOn = event->type == SND_SEQ_EVENT_NOTEON && event->data.note.velocity > 0;
             events.push_back({event->data.note.channel,

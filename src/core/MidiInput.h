@@ -25,6 +25,11 @@ struct MidiInputEvent
     bool registeredParameter = false;
     int parameterNumber = 0;
     int parameterValue = 0;
+    bool clockTick = false;
+    bool transportStart = false;
+    bool transportContinue = false;
+    bool transportStop = false;
+    qint64 timestampMicroseconds = -1;
 };
 
 class MidiInput

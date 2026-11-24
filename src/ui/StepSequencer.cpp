@@ -228,7 +228,7 @@ void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
                                double barLength, quint64 noteId, bool available,
                                int requestedStepsPerBar,
                                const QVector<TimeSignatureChange>& meterChanges,
-                               double clipStartBeat)
+                               double clipStartBeat, bool drumTrack)
 {
     notes = newNotes;
     clipLengthBeats = std::max(0.25, length);
@@ -254,7 +254,7 @@ void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
             nextMeter->beatsPerBar, nextMeter->beatUnit});
     nextNoteId = std::max<quint64>(1, noteId);
     patternAvailable = available;
-    liveChainButton->setEnabled(available);
+    liveChainButton->setEnabled(available && drumTrack);
     configureDivision(requestedStepsPerBar);
     emptyHint->setVisible(!patternAvailable);
     barControl->setEnabled(patternAvailable);

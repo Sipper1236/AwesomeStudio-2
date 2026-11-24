@@ -31,6 +31,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Playlist with multi-track MIDI clips and basic mixer controls
 - [x] 16-step sequencer and synthesized drum rack
 - [x] Ordered drum pattern-chain builder that appends selected pattern copies to the next free Playlist bar in one undoable action
+- [x] Play an ordered drum pattern chain once outside the Playlist, following tempo changes and applying note probability and ratchets
 - [x] Editable clip length and common time signatures
 - [x] Standard MIDI File import (formats 0–2 with PPQN or SMPTE) and format 0/1 export; format 2 sequences are arranged consecutively with tempo maps
 - [x] Count-in and metronome
@@ -94,7 +95,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Dynamic CLAP latency restart handling and Mixer compensation recalculation
 - [x] LV2 latency output port tracking and dynamic Mixer compensation recalculation
 - [x] Map the transport playhead to QAudioSink-processed output frames through output buffering, seeks, loops, and song end
-- [ ] External MIDI clock synchronization and hardware-referenced output timestamps
+- [x] Linux ALSA external MIDI clock following with Start/Continue/Stop and 24 PPQN transport/tempo updates
+- [ ] Physical validation of MIDI clock synchronization and hardware-referenced output timestamps
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
 - [x] Autosave, rotating backups, project recovery, and versioned migrations
 - [x] Optional multi-format export, stems, cancellable batch rendering, and progress reporting

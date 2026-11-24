@@ -273,6 +273,7 @@ private:
     void pollMidiInput();
     void setMidiMonitorEnabled(bool enabled);
     void setMidiControllerListening(bool enabled);
+    void setMidiClockSyncEnabled(bool enabled);
     void beginMidiControllerLearn(int target);
     void clearMidiControllerMapping(int target);
     void loadMidiControllerMappings();
@@ -495,6 +496,16 @@ private:
     QHash<int, MidiControllerMapping> midiControllerMappings;
     int pendingMidiControllerTarget = -1;
     bool midiControllerListenerEnabled = false;
+    bool midiClockSyncEnabled = false;
+    bool midiClockTransportStarted = false;
+    int midiClockTicks = 0;
+    int midiClockPulseIntervalTicks = 6;
+    double midiClockPulseStartBeat = 0.0;
+    QElapsedTimer midiClockPulseTimer;
+    qint64 midiClockLastTimestampMicroseconds = -1;
+    double midiClockBpmEstimate = 120.0;
+    bool midiClockTempoOverrideActive = false;
+    ProjectData midiClockPlaybackProject;
     QString pendingRecordingPath;
     QByteArray pendingRecordingDeviceId;
     QString pendingRecordingDeviceName;

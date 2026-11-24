@@ -2799,7 +2799,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         midiEditor->setNotes(after);
         stepSequencer->setPattern(after, clip->lengthBeats, project.quarterNotesPerBar(),
                                   project.nextNoteId(), true, clip->stepsPerBar,
-                                  project.timeSignatureChanges, clip->startBeat);
+                                  project.timeSignatureChanges, clip->startBeat,
+                                  selectedTrack() != nullptr && selectedTrack()->instrumentType == InstrumentType::DrumRack);
         undoStack.push(new NoteEditCommand(this, selectedTrackId, selectedClipId, before, after));
         refreshDirtyState();
         statusBar()->showMessage(tr("MIDI clip updated"), 1600);
@@ -3421,6 +3422,12 @@ void MainWindow::createActions()
                 finishAudioRecording(true);
             if (midiRecordingActive || midiRecordingPending)
                 finishMidiRecording(true);
+            if (midiClockTempoOverrideActive)
+            {
+                audioEngine.setProject(project);
+                midiClockTempoOverrideActive = false;
+            }
+            midiClockTransportStarted = false;
             audioEngine.stopPlayback();
             midiEditor->setPlayheadBeat(0.0);
             arrangementEditor->setPlayheadBeat(0.0);
@@ -3433,6 +3440,12 @@ void MainWindow::createActions()
     connect(stopAction, &QAction::triggered, this, [this]
     {
         stopDrumPatternChain();
+        midiClockTransportStarted = false;
+        if (midiClockTempoOverrideActive)
+        {
+            audioEngine.setProject(project);
+            midiClockTempoOverrideActive = false;
+        }
         finishAutomationWrite();
         if (audioRecorder || recordingPending)
             finishAudioRecording(true);
@@ -3442,6 +3455,11 @@ void MainWindow::createActions()
         playAction->setChecked(false);
         midiEditor->setPlayheadBeat(0.0);
         arrangementEditor->setPlayheadBeat(0.0);
+    });
+    connect(playAction, &QAction::toggled, this, [this](bool playing)
+    {
+        if (playing && drumChainTimer != nullptr && drumChainTimer->isActive())
+            stopDrumPatternChain();
     });
 
     recordAction = new QAction(tr("Record audio…"), this);
@@ -3581,7 +3599,8 @@ void MainWindow::createToolBars()
                                   updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats,
                                   project.quarterNotesPerBar(), project.nextNoteId(), updatedClip != nullptr,
                                   updatedClip == nullptr ? 16 : updatedClip->stepsPerBar,
-                                  project.timeSignatureChanges, updatedClip == nullptr ? 0.0 : updatedClip->startBeat);
+                                  project.timeSignatureChanges, updatedClip == nullptr ? 0.0 : updatedClip->startBeat,
+                                  selectedTrack() != nullptr && selectedTrack()->instrumentType == InstrumentType::DrumRack);
         arrangementEditor->setProject(project);
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
         audioEngine.setProject(project);
@@ -3743,7 +3762,8 @@ void MainWindow::createToolBars()
                                   clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
                                   project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr,
                                   clip == nullptr ? 16 : clip->stepsPerBar,
-                                  project.timeSignatureChanges, clip == nullptr ? 0.0 : clip->startBeat);
+                                  project.timeSignatureChanges, clip == nullptr ? 0.0 : clip->startBeat,
+                                  selectedTrack() != nullptr && selectedTrack()->instrumentType == InstrumentType::DrumRack);
         arrangementEditor->setProject(project);
         audioEngine.setProject(project);
         settingsDirty = true;
@@ -4987,6 +5007,17 @@ void MainWindow::createMenus()
     midiMenu->addAction(midiControllerListenAction);
     connect(midiControllerListenAction, &QAction::toggled,
             this, &MainWindow::setMidiControllerListening);
+    auto* midiClockSyncAction = new QAction(tr("Sync transport to MIDI clock"), this);
+    midiClockSyncAction->setObjectName(QStringLiteral("midiClockSyncAction"));
+    midiClockSyncAction->setCheckable(true);
+    midiClockSyncAction->setEnabled(false);
+#ifdef AWESOME_STUDIO_HAS_ALSA
+    midiClockSyncAction->setEnabled(true);
+#endif
+    midiClockSyncAction->setToolTip(tr("Follow MIDI Start, Continue, Stop, and 24 PPQN clock from the selected input"));
+    midiMenu->addAction(midiClockSyncAction);
+    connect(midiClockSyncAction, &QAction::toggled,
+            this, &MainWindow::setMidiClockSyncEnabled);
 
     QVector<QString> controllerTargets = {
         tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo"),
@@ -5520,7 +5551,8 @@ void MainWindow::refreshProjectUi()
                               clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
                               project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr,
                               clip == nullptr ? 16 : clip->stepsPerBar,
-                              project.timeSignatureChanges, clip == nullptr ? 0.0 : clip->startBeat);
+                              project.timeSignatureChanges, clip == nullptr ? 0.0 : clip->startBeat,
+                              drumTrack);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     refreshPunchRangeUi();
@@ -7979,7 +8011,7 @@ void MainWindow::startDrumPatternChain(quint64 trackId, const QVector<MidiClip>&
     QVector<DrumChainEvent> events;
     events.reserve(eventCount);
     double chainOffset = 0.0;
-    const double anchorBeat = audioEngine.isPlaying() ? audioEngine.positionBeats() : 0.0;
+    const double anchorBeat = audioEngine.positionBeats();
     for (const MidiClip& pattern : patterns)
     {
         for (const MidiNote& note : pattern.notes)
@@ -10285,6 +10317,8 @@ bool MainWindow::maybeSave()
 void MainWindow::setProject(const ProjectData& incoming, const QString& path)
 {
     stopDrumPatternChain();
+    midiClockTransportStarted = false;
+    midiClockTempoOverrideActive = false;
     finishAutomationWrite();
     audioEngine.stopPlayback();
     project = incoming;
@@ -10646,7 +10680,8 @@ void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector
                               currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
                               project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr,
                               currentClip == nullptr ? 16 : currentClip->stepsPerBar,
-                              project.timeSignatureChanges, currentClip == nullptr ? 0.0 : currentClip->startBeat);
+                              project.timeSignatureChanges, currentClip == nullptr ? 0.0 : currentClip->startBeat,
+                              selectedTrack() != nullptr && selectedTrack()->instrumentType == InstrumentType::DrumRack);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     audioEngine.setProject(project);
@@ -10665,7 +10700,8 @@ void MainWindow::applyStepDivisionHistory(quint64 trackId, quint64 clipId, int r
                               currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
                               project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr,
                               currentClip == nullptr ? 16 : currentClip->stepsPerBar,
-                              project.timeSignatureChanges, currentClip == nullptr ? 0.0 : currentClip->startBeat);
+                              project.timeSignatureChanges, currentClip == nullptr ? 0.0 : currentClip->startBeat,
+                              selectedTrack() != nullptr && selectedTrack()->instrumentType == InstrumentType::DrumRack);
     audioEngine.setProject(project);
     refreshDirtyState();
 }
@@ -12127,6 +12163,83 @@ void MainWindow::setMidiControllerListening(bool enabled)
     statusBar()->showMessage(tr("Listening for mapped MIDI controllers"), 2000);
 }
 
+void MainWindow::setMidiClockSyncEnabled(bool enabled)
+{
+    midiClockSyncEnabled = enabled;
+    if (!enabled)
+    {
+        midiClockTransportStarted = false;
+        midiClockTicks = 0;
+        if (midiClockTempoOverrideActive)
+        {
+            audioEngine.setProject(project);
+            midiClockTempoOverrideActive = false;
+        }
+        if (!midiMonitorAction->isChecked() && !midiRecordingActive && !midiRecordingPending &&
+            !midiControllerListenerEnabled && midiInputPollTimer != nullptr)
+        {
+            midiInputPollTimer->stop();
+            if (midiInput != nullptr)
+                midiInput->disconnect();
+            activeMidiInputPortId.clear();
+        }
+        refreshMidiInputs();
+        statusBar()->showMessage(tr("MIDI clock sync disabled"), 1800);
+        return;
+    }
+    if (audioRecorder || recordingPending)
+    {
+        midiClockSyncEnabled = false;
+        const QSignalBlocker blocker(menuBar()->findChild<QAction*>(QStringLiteral("midiClockSyncAction")));
+        statusBar()->showMessage(tr("Stop audio recording before enabling MIDI clock sync."), 4000);
+        return;
+    }
+    const QString portId = midiInputControl->currentData().toString();
+    if (portId.isEmpty())
+    {
+        midiClockSyncEnabled = false;
+        if (QAction* action = menuBar()->findChild<QAction*>(QStringLiteral("midiClockSyncAction")))
+        {
+            const QSignalBlocker blocker(action);
+            action->setChecked(false);
+        }
+        statusBar()->showMessage(tr("Select a MIDI input before enabling MIDI clock sync."), 3500);
+        return;
+    }
+    if (midiInput == nullptr)
+        midiInput = std::make_unique<MidiInput>();
+    if (midiInput->isConnected() && activeMidiInputPortId != portId)
+    {
+        midiClockSyncEnabled = false;
+        if (QAction* action = menuBar()->findChild<QAction*>(QStringLiteral("midiClockSyncAction")))
+        {
+            const QSignalBlocker blocker(action);
+            action->setChecked(false);
+        }
+        statusBar()->showMessage(tr("The selected port differs from the active monitor/recording port."), 4000);
+        return;
+    }
+    if (!midiInput->isConnected())
+    {
+        QString error;
+        if (!midiInput->connectTo(portId, &error))
+        {
+            midiClockSyncEnabled = false;
+            if (QAction* action = menuBar()->findChild<QAction*>(QStringLiteral("midiClockSyncAction")))
+            {
+                const QSignalBlocker blocker(action);
+                action->setChecked(false);
+            }
+            statusBar()->showMessage(tr("Could not open MIDI input: %1").arg(error), 5000);
+            return;
+        }
+    }
+    activeMidiInputPortId = portId;
+    midiInputPollTimer->start();
+    refreshMidiInputs();
+    statusBar()->showMessage(tr("Waiting for external MIDI clock"), 2500);
+}
+
 void MainWindow::beginMidiControllerLearn(int target)
 {
     const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) + 1;
@@ -13144,6 +13257,96 @@ void MainWindow::pollMidiInput()
 
     for (const MidiInputEvent& event : events)
     {
+        if (midiClockSyncEnabled && (event.clockTick || event.transportStart ||
+                                     event.transportContinue || event.transportStop))
+        {
+            if (event.transportStart)
+            {
+                midiClockTicks = 0;
+                midiClockBpmEstimate = project.tempoBpm;
+                midiClockLastTimestampMicroseconds = event.timestampMicroseconds;
+                midiClockTransportStarted = true;
+                midiClockPulseStartBeat = 0.0;
+                midiClockPulseTimer.restart();
+                audioEngine.seekToBeat(0.0);
+                if (!audioEngine.isPlaying())
+                    audioEngine.startPlayback();
+                playAction->setChecked(true);
+                statusBar()->showMessage(tr("Following external MIDI clock from the beginning"), 2000);
+            }
+            else if (event.transportContinue)
+            {
+                midiClockTicks = 0;
+                midiClockLastTimestampMicroseconds = event.timestampMicroseconds;
+                midiClockTransportStarted = true;
+                midiClockPulseStartBeat = audioEngine.positionBeats();
+                midiClockPulseTimer.restart();
+                if (!audioEngine.isPlaying())
+                    audioEngine.startPlayback();
+                playAction->setChecked(true);
+                statusBar()->showMessage(tr("Following external MIDI clock"), 1800);
+            }
+            else if (event.transportStop)
+            {
+                midiClockTransportStarted = false;
+                audioEngine.stopPlayback();
+                if (midiClockTempoOverrideActive)
+                {
+                    audioEngine.setProject(project);
+                    midiClockTempoOverrideActive = false;
+                }
+                playAction->setChecked(false);
+                midiEditor->setPlayheadBeat(audioEngine.positionBeats());
+                arrangementEditor->setPlayheadBeat(audioEngine.positionBeats());
+                statusBar()->showMessage(tr("External MIDI clock stopped transport"), 2000);
+            }
+            else if (event.clockTick && midiClockTransportStarted)
+            {
+                ++midiClockTicks;
+                if (event.timestampMicroseconds >= 0 && midiClockLastTimestampMicroseconds >= 0)
+                {
+                    const qint64 delta = event.timestampMicroseconds - midiClockLastTimestampMicroseconds;
+                    if (delta > 0 && delta < 1000000)
+                    {
+                        const double instantaneousBpm = std::clamp(
+                            60000000.0 / (static_cast<double>(delta) * 24.0), 20.0, 300.0);
+                        midiClockBpmEstimate = midiClockBpmEstimate * 0.8 + instantaneousBpm * 0.2;
+                    }
+                }
+                if (event.timestampMicroseconds >= 0)
+                    midiClockLastTimestampMicroseconds = event.timestampMicroseconds;
+                if (midiClockTicks % midiClockPulseIntervalTicks == 0)
+                {
+                    const double clockBeat = midiClockPulseStartBeat +
+                        static_cast<double>(midiClockTicks) / 24.0;
+                    const double localBeat = audioEngine.positionBeats();
+                    if (std::abs(clockBeat - localBeat) > 0.08)
+                    {
+                        audioEngine.seekToBeat(clockBeat);
+                        midiClockPulseStartBeat = clockBeat;
+                        midiClockTicks = 0;
+                        midiClockPulseTimer.restart();
+                    }
+                    const double currentPlaybackTempo = midiClockTempoOverrideActive
+                        ? midiClockPlaybackProject.tempoAtBeat(clockBeat)
+                        : project.tempoAtBeat(clockBeat);
+                    if (event.timestampMicroseconds >= 0 &&
+                        std::abs(currentPlaybackTempo - midiClockBpmEstimate) > 0.5)
+                    {
+                        if (!midiClockTempoOverrideActive)
+                        {
+                            midiClockPlaybackProject = project;
+                            midiClockTempoOverrideActive = true;
+                        }
+                        midiClockPlaybackProject.tempoBpm = midiClockBpmEstimate;
+                        midiClockPlaybackProject.tempoChanges.clear();
+                        audioEngine.setProject(midiClockPlaybackProject);
+                    }
+                }
+            }
+            continue;
+        }
+
         if (event.registeredParameter)
         {
             handleMidiControlChange(event.channel, event.parameterNumber,
