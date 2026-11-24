@@ -3596,7 +3596,13 @@ void MainWindow::createToolBars()
     playlistSnapControl->addItem(tr("1/16 bar"), 16);
     playlistSnapControl->addItem(tr("1/32 bar"), 32);
     playlistSnapControl->addItem(tr("1/64 bar"), 64);
-    playlistSnapControl->setCurrentIndex(4);
+    QSettings playlistSettings;
+    const int savedPlaylistSnap = playlistSettings.value(
+        QStringLiteral("playlist/snapDivisions"), 16).toInt();
+    int snapIndex = playlistSnapControl->findData(savedPlaylistSnap);
+    if (snapIndex < 0)
+        snapIndex = playlistSnapControl->findData(16);
+    playlistSnapControl->setCurrentIndex(snapIndex);
     playlistSnapControl->setToolTip(tr("Meter-relative grid for Playlist clips, audio trim edges, automation points, and ruler edits"));
     arrangementBar->addWidget(playlistSnapControl);
     arrangementEditor->setSnapDivisions(16);
@@ -3604,7 +3610,12 @@ void MainWindow::createToolBars()
             this, [this, playlistSnapControl](int index)
     {
         if (index >= 0)
-            arrangementEditor->setSnapDivisions(playlistSnapControl->itemData(index).toInt());
+        {
+            const int divisions = playlistSnapControl->itemData(index).toInt();
+            arrangementEditor->setSnapDivisions(divisions);
+            QSettings settings;
+            settings.setValue(QStringLiteral("playlist/snapDivisions"), divisions);
+        }
     });
     connect(clipLengthControl, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double length)
     {
