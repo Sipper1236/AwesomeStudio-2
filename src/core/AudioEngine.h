@@ -4,6 +4,7 @@
 #include "SynthRenderer.h"
 
 #include <QString>
+#include <QByteArray>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -22,7 +23,9 @@ public:
     bool initialize();
     bool isAudioAvailable() const;
     QString deviceName() const;
+    QByteArray audioOutputDeviceId() const;
     QString errorMessage() const;
+    bool setAudioOutputDevice(const QByteArray& deviceId);
 
     void setProject(const ProjectData& project);
     void startPlayback();
@@ -233,6 +236,8 @@ private:
     std::unique_ptr<QAudioFormat> outputFormat;
 
     QString outputDeviceName;
+    QByteArray selectedOutputDeviceId;
+    QByteArray activeOutputDeviceId;
     QString initializationError;
     double outputSampleRate = 48000.0;
     int outputChannels = 2;

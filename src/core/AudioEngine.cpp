@@ -168,10 +168,25 @@ bool AudioEngine::initialize()
     if (sink)
         return true;
 
-    const QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    QAudioDevice device;
+    if (selectedOutputDeviceId.isEmpty())
+    {
+        device = QMediaDevices::defaultAudioOutput();
+    }
+    else
+    {
+        for (const QAudioDevice& candidate : QMediaDevices::audioOutputs())
+            if (candidate.id() == selectedOutputDeviceId)
+            {
+                device = candidate;
+                break;
+            }
+    }
     if (device.isNull())
     {
-        initializationError = QStringLiteral("No audio output device is available.");
+        initializationError = selectedOutputDeviceId.isEmpty()
+            ? QStringLiteral("No audio output device is available.")
+            : QStringLiteral("The selected audio output device is not available.");
         return false;
     }
 
@@ -183,6 +198,8 @@ bool AudioEngine::initialize()
     }
 
     outputDeviceName = device.description();
+    activeOutputDeviceId = device.id();
+    selectedOutputDeviceId = activeOutputDeviceId;
     outputSampleRate = format.sampleRate();
     outputChannels = format.channelCount();
     bytesPerFrame = format.bytesPerFrame();
@@ -219,6 +236,64 @@ bool AudioEngine::isAudioAvailable() const
 QString AudioEngine::deviceName() const
 {
     return outputDeviceName;
+}
+
+QByteArray AudioEngine::audioOutputDeviceId() const
+{
+    return activeOutputDeviceId.isEmpty() ? selectedOutputDeviceId : activeOutputDeviceId;
+}
+
+bool AudioEngine::setAudioOutputDevice(const QByteArray& deviceId)
+{
+    if (playing.load(std::memory_order_acquire))
+    {
+        initializationError = QStringLiteral("Stop playback before changing the audio output device.");
+        return false;
+    }
+    QAudioDevice requestedDevice;
+    for (const QAudioDevice& candidate : QMediaDevices::audioOutputs())
+        if (candidate.id() == deviceId)
+        {
+            requestedDevice = candidate;
+            break;
+        }
+    if (requestedDevice.isNull())
+    {
+        initializationError = QStringLiteral("The selected audio output device is not available.");
+        return false;
+    }
+    if (deviceId == selectedOutputDeviceId &&
+        (sink == nullptr || deviceId == activeOutputDeviceId))
+        return true;
+
+    const QByteArray previousDeviceId = selectedOutputDeviceId;
+    if (sink != nullptr)
+    {
+        pluginStateCaptureInProgress.store(true, std::memory_order_release);
+        sink->stop();
+        while (activeRenderCallbacks.load(std::memory_order_acquire) != 0)
+            std::this_thread::yield();
+        sink.reset();
+        stream.reset();
+        outputFormat.reset();
+        activeOutputDeviceId.clear();
+        bytesPerFrame = 0;
+        pluginStateCaptureInProgress.store(false, std::memory_order_release);
+    }
+
+    selectedOutputDeviceId = deviceId;
+    if (initialize())
+    {
+        initializationError.clear();
+        return true;
+    }
+
+    const QString requestedDeviceError = initializationError;
+    selectedOutputDeviceId = previousDeviceId;
+    if (!previousDeviceId.isEmpty())
+        initialize();
+    initializationError = requestedDeviceError;
+    return false;
 }
 
 QString AudioEngine::errorMessage() const

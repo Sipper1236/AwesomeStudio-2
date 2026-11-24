@@ -3729,6 +3729,11 @@ void MainWindow::createToolBars()
     audioInputControl->setMinimumWidth(190);
     audioInputControl->setToolTip(tr("Audio device used for new recordings"));
     recordingBar->addWidget(audioInputControl);
+    recordingBar->addWidget(new QLabel(tr("OUTPUT"), recordingBar));
+    audioOutputControl = new QComboBox(recordingBar);
+    audioOutputControl->setMinimumWidth(190);
+    audioOutputControl->setToolTip(tr("Audio output device for playback, monitoring, and loopback calibration"));
+    recordingBar->addWidget(audioOutputControl);
     recordingBar->addWidget(new QLabel(tr("COMP"), recordingBar));
     audioInputCompensationControl = new QDoubleSpinBox(recordingBar);
     audioInputCompensationControl->setRange(-500.0, 500.0);
@@ -3745,17 +3750,46 @@ void MainWindow::createToolBars()
             this, &MainWindow::calibrateAudioInputLatency);
     connect(audioInputControl, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int) { refreshAudioInputCompensation(); });
+    connect(audioOutputControl, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index)
+    {
+        if (index < 0 || audioOutputControl == nullptr)
+            return;
+        const QByteArray outputId = audioOutputControl->currentData().toByteArray();
+        if (outputId.isEmpty())
+            return;
+        if (audioRecorder || audioMonitor || recordingPending || midiRecordingActive ||
+            midiRecordingPending || audioEngine.isPlaying() ||
+            (midiMonitorAction != nullptr && midiMonitorAction->isChecked()))
+        {
+            refreshAudioOutputs();
+            statusBar()->showMessage(tr("Stop playback, monitoring, and recording before changing audio output."), 4000);
+            return;
+        }
+        if (!audioEngine.setAudioOutputDevice(outputId))
+        {
+            refreshAudioOutputs();
+            statusBar()->showMessage(tr("Could not change audio output: %1").arg(audioEngine.errorMessage()), 5000);
+            return;
+        }
+        QSettings settings;
+        settings.setValue(QStringLiteral("audio/outputDeviceId"), outputId);
+        audioDeviceLabel->setText(tr("Audio · %1").arg(audioEngine.deviceName()));
+        refreshAudioInputs();
+        statusBar()->showMessage(tr("Audio output changed to %1").arg(audioEngine.deviceName()), 2500);
+    });
     connect(audioInputCompensationControl, qOverload<double>(&QDoubleSpinBox::valueChanged),
             this, [this](double value)
     {
         if (audioInputControl == nullptr)
             return;
-        const QByteArray deviceId = audioInputControl->currentData().toByteArray();
-        if (deviceId.isEmpty())
+        const QByteArray inputId = audioInputControl->currentData().toByteArray();
+        const QByteArray outputId = audioOutputControl == nullptr
+            ? QByteArray{} : audioOutputControl->currentData().toByteArray();
+        if (inputId.isEmpty() || outputId.isEmpty())
             return;
         QSettings settings;
-        const QString key = QStringLiteral("recording/inputCompensationMs/%1")
-                                .arg(QString::fromLatin1(deviceId.toHex()));
+        const QString key = QStringLiteral("recording/inputCompensationMs/%1/%2")
+            .arg(QString::fromLatin1(inputId.toHex()), QString::fromLatin1(outputId.toHex()));
         settings.setValue(key, value);
     });
     recordingBar->addSeparator();
@@ -3797,6 +3831,9 @@ void MainWindow::createToolBars()
     mediaDevices = new QMediaDevices(this);
     connect(mediaDevices, &QMediaDevices::audioInputsChanged,
             this, &MainWindow::refreshAudioInputs);
+    connect(mediaDevices, &QMediaDevices::audioOutputsChanged,
+            this, &MainWindow::refreshAudioOutputs);
+    refreshAudioOutputs();
     refreshAudioInputs();
     midiInput = std::make_unique<MidiInput>();
     refreshMidiInputs();
@@ -11604,8 +11641,15 @@ void MainWindow::refreshAudioInputs()
     }
     audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !audioMonitor && !recordingPending &&
                                   !midiRecordingActive && !midiRecordingPending);
+    const bool outputBusy = audioRecorder || audioMonitor || recordingPending || midiRecordingActive ||
+        midiRecordingPending || audioEngine.isPlaying() ||
+        (audioLatencyCalibration && audioLatencyCalibration->isActive()) ||
+        (midiMonitorAction != nullptr && midiMonitorAction->isChecked());
+    if (audioOutputControl != nullptr)
+        audioOutputControl->setEnabled(!QMediaDevices::audioOutputs().isEmpty() && !outputBusy);
     if (audioInputCalibrationAction != nullptr)
-        audioInputCalibrationAction->setEnabled(!devices.isEmpty() && !audioRecorder && !audioMonitor &&
+        audioInputCalibrationAction->setEnabled(!devices.isEmpty() && audioOutputControl != nullptr &&
+            !audioOutputControl->currentData().toByteArray().isEmpty() && !audioRecorder && !audioMonitor &&
             !recordingPending && !midiRecordingActive && !midiRecordingPending &&
             (!audioLatencyCalibration || !audioLatencyCalibration->isActive()));
     refreshAudioInputCompensation();
@@ -11616,6 +11660,68 @@ void MainWindow::refreshAudioInputs()
     refreshPunchRangeUi();
 }
 
+void MainWindow::refreshAudioOutputs()
+{
+    if (audioOutputControl == nullptr)
+        return;
+
+    const QList<QAudioDevice> devices = QMediaDevices::audioOutputs();
+    QByteArray preferredId = audioEngine.audioOutputDeviceId();
+    if (preferredId.isEmpty())
+    {
+        QSettings settings;
+        preferredId = settings.value(QStringLiteral("audio/outputDeviceId")).toByteArray();
+    }
+    int selectedIndex = -1;
+    int defaultIndex = -1;
+    for (int index = 0; index < devices.size(); ++index)
+    {
+        if (devices[index].id() == preferredId)
+            selectedIndex = index;
+        if (devices[index].isDefault())
+            defaultIndex = index;
+    }
+    if (selectedIndex < 0)
+        selectedIndex = defaultIndex >= 0 ? defaultIndex : (devices.isEmpty() ? -1 : 0);
+
+    {
+        const QSignalBlocker blocker(audioOutputControl);
+        audioOutputControl->clear();
+        for (const QAudioDevice& device : devices)
+            audioOutputControl->addItem(device.description(), device.id());
+        if (devices.isEmpty())
+        {
+            audioOutputControl->addItem(tr("No output devices"), QByteArray{});
+            audioOutputControl->setCurrentIndex(0);
+        }
+        else
+        {
+            audioOutputControl->setCurrentIndex(selectedIndex);
+        }
+    }
+
+    const bool busy = audioRecorder || audioMonitor || recordingPending || midiRecordingActive ||
+                      midiRecordingPending || audioEngine.isPlaying() ||
+                      (audioLatencyCalibration && audioLatencyCalibration->isActive()) ||
+                      (midiMonitorAction != nullptr && midiMonitorAction->isChecked());
+    audioOutputControl->setEnabled(!devices.isEmpty() && !busy);
+    if (!devices.isEmpty())
+    {
+        const QByteArray selectedId = audioOutputControl->currentData().toByteArray();
+        if (!selectedId.isEmpty() && selectedId != audioEngine.audioOutputDeviceId() && !busy)
+        {
+            if (audioEngine.setAudioOutputDevice(selectedId))
+            {
+                QSettings settings;
+                settings.setValue(QStringLiteral("audio/outputDeviceId"), selectedId);
+            }
+        }
+    }
+    if (audioEngine.isAudioAvailable() && audioDeviceLabel != nullptr)
+        audioDeviceLabel->setText(tr("Audio · %1").arg(audioEngine.deviceName()));
+    refreshAudioInputCompensation();
+}
+
 void MainWindow::refreshAudioInputCompensation()
 {
     if (audioInputControl == nullptr || audioInputCompensationControl == nullptr)
@@ -11623,12 +11729,19 @@ void MainWindow::refreshAudioInputCompensation()
 
     const QByteArray deviceId = audioInputControl->currentData().toByteArray();
     double compensationMs = 0.0;
-    if (!deviceId.isEmpty())
+    const QByteArray outputId = audioOutputControl == nullptr
+        ? QByteArray{} : audioOutputControl->currentData().toByteArray();
+    if (!deviceId.isEmpty() && !outputId.isEmpty())
     {
         QSettings settings;
-        const QString key = QStringLiteral("recording/inputCompensationMs/%1")
-                                .arg(QString::fromLatin1(deviceId.toHex()));
-        compensationMs = settings.value(key, 0.0).toDouble();
+        const QString pairKey = QStringLiteral("recording/inputCompensationMs/%1/%2")
+            .arg(QString::fromLatin1(deviceId.toHex()), QString::fromLatin1(outputId.toHex()));
+        const QString legacyKey = QStringLiteral("recording/inputCompensationMs/%1")
+            .arg(QString::fromLatin1(deviceId.toHex()));
+        const QByteArray defaultOutputId = QMediaDevices::defaultAudioOutput().id();
+        const double legacyDefault = outputId == defaultOutputId
+            ? settings.value(legacyKey, 0.0).toDouble() : 0.0;
+        compensationMs = settings.value(pairKey, legacyDefault).toDouble();
         if (!std::isfinite(compensationMs))
             compensationMs = 0.0;
     }
@@ -11663,7 +11776,15 @@ void MainWindow::calibrateAudioInputLatency()
             inputDevice = device;
             break;
         }
-    const QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
+    QAudioDevice outputDevice;
+    const QByteArray outputId = audioOutputControl == nullptr
+        ? QByteArray{} : audioOutputControl->currentData().toByteArray();
+    for (const QAudioDevice& device : QMediaDevices::audioOutputs())
+        if (device.id() == outputId)
+        {
+            outputDevice = device;
+            break;
+        }
     if (inputDevice.isNull() || outputDevice.isNull())
     {
         QMessageBox::warning(this, tr("Audio latency calibration"),
@@ -11675,8 +11796,8 @@ void MainWindow::calibrateAudioInputLatency()
         tr("Connect the selected output to the selected input with a line-level cable. "
            "Keep the input gain low and disconnect speakers or headphones. A quiet test "
            "signal will play for less than a second. The measured input/output delay will "
-           "replace this device's COMP value; the recorder's input-buffer estimate remains "
-           "applied separately."), QMessageBox::Ok | QMessageBox::Cancel, this);
+           "replace this input/output pair's COMP value; the recorder's input-buffer estimate "
+           "remains applied separately."), QMessageBox::Ok | QMessageBox::Cancel, this);
     prompt.setDefaultButton(QMessageBox::Cancel);
     if (prompt.exec() != QMessageBox::Ok)
         return;
@@ -11686,6 +11807,8 @@ void MainWindow::calibrateAudioInputLatency()
     audioInputCalibrationAction->setEnabled(false);
     audioInputControl->setEnabled(false);
     audioInputCompensationControl->setEnabled(false);
+    if (audioOutputControl != nullptr)
+        audioOutputControl->setEnabled(false);
     statusBar()->showMessage(tr("Measuring audio loopback latency…"));
     QString error;
     const bool started = audioLatencyCalibration->start(inputDevice, outputDevice,

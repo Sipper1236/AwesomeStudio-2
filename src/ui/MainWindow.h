@@ -261,6 +261,7 @@ private:
     void finishAudioRecording(bool keepTake = true);
     void refreshPunchRangeUi();
     void refreshAudioInputs();
+    void refreshAudioOutputs();
     void refreshAudioInputCompensation();
     void calibrateAudioInputLatency();
     void startMidiRecording();
@@ -447,6 +448,7 @@ private:
     QTimer* automationWriteIdleTimer = nullptr;
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;
+    QComboBox* audioOutputControl = nullptr;
     QDoubleSpinBox* audioInputCompensationControl = nullptr;
     QAction* audioInputCalibrationAction = nullptr;
     QAction* recordAction = nullptr;
