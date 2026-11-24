@@ -3320,7 +3320,7 @@ void MainWindow::createToolBars()
     audioInputCompensationControl->setSingleStep(1.0);
     audioInputCompensationControl->setSuffix(tr(" ms"));
     audioInputCompensationControl->setToolTip(
-        tr("Per-input recording compensation. Positive values move recorded audio earlier; negative values move it later."));
+        tr("Additional per-input recording adjustment. Positive values move takes earlier; negative values move them later. An input-stream buffer estimate is also applied when available."));
     recordingBar->addWidget(audioInputCompensationControl);
     connect(audioInputControl, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int) { refreshAudioInputCompensation(); });
@@ -10933,10 +10933,14 @@ void MainWindow::finishAudioRecording(bool keepTake)
     const QString path = audioRecorder ? audioRecorder->path() : pendingRecordingPath;
     const bool reachedLimit = audioRecorder && audioRecorder->maximumReached();
     const QString captureIssue = audioRecorder ? audioRecorder->errorMessage() : QString{};
+    std::optional<double> inputLatencyEstimateMs;
     bool finished = false;
     QString error;
     if (audioRecorder && keepTake)
+    {
         finished = audioRecorder->finish(&error);
+        inputLatencyEstimateMs = audioRecorder->estimatedInputLatencyMs();
+    }
     audioRecorder.reset();
     recordingPending = false;
     recordingTransportActive = false;
@@ -11009,7 +11013,8 @@ void MainWindow::finishAudioRecording(bool keepTake)
     clip.id = nextClipId();
     clip.name = takeName;
     const double durationSeconds = static_cast<double>(asset->frameCount()) / asset->sampleRate;
-    const double compensationSeconds = recordingInputCompensationMs / 1000.0;
+    const double totalCompensationMs = recordingInputCompensationMs + inputLatencyEstimateMs.value_or(0.0);
+    const double compensationSeconds = totalCompensationMs / 1000.0;
     if (wasPunchRecording)
     {
         const double captureStartSeconds = project.secondsAtBeat(recordingStartBeat) - compensationSeconds;
@@ -11072,16 +11077,21 @@ void MainWindow::finishAudioRecording(bool keepTake)
 
     const QString takeDestination = recordingIntoExistingTrack
         ? tr(" to %1").arg(destinationTrackName) : tr(" to a new audio track");
+    const QString alignmentDetails = inputLatencyEstimateMs.has_value()
+        ? tr(" (input-buffer estimate %1 ms; COMP %2 ms)")
+              .arg(*inputLatencyEstimateMs, 0, 'f', 1).arg(recordingInputCompensationMs, 0, 'f', 1)
+        : tr(" (COMP %1 ms; no input-buffer estimate)")
+              .arg(recordingInputCompensationMs, 0, 'f', 1);
     if (reachedLimit)
-        statusBar()->showMessage(tr("Recording stopped at the project audio memory or WAV size limit; the take was added%1.")
-                                     .arg(takeDestination), 6000);
+        statusBar()->showMessage(tr("Recording stopped at the project audio memory or WAV size limit; the take was added%1%2.")
+                                     .arg(takeDestination, alignmentDetails), 6000);
     else if (!captureIssue.isEmpty())
-        statusBar()->showMessage(tr("A partial take was added%1 after an input error: %2")
-                                     .arg(takeDestination, captureIssue), 6000);
+        statusBar()->showMessage(tr("A partial take was added%1%2 after an input error: %3")
+                                     .arg(takeDestination, alignmentDetails, captureIssue), 6000);
     else
-        statusBar()->showMessage(recordingIntoExistingTrack
+        statusBar()->showMessage((recordingIntoExistingTrack
             ? tr("Recorded %1 to %2").arg(QFileInfo(path).fileName(), destinationTrackName)
-            : tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName()), 3500);
+            : tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName())) + alignmentDetails, 5000);
 }
 
 void MainWindow::startMidiRecording()

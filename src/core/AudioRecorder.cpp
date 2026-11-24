@@ -129,6 +129,7 @@ bool AudioRecorder::start(const QAudioDevice& device, const QString& path,
     QObject::connect(input, &QIODevice::readyRead, source.get(), [this] { consumeAvailable(); });
     failure.clear();
     framesWritten = 0;
+    minimumInputLatencyUs = -1;
     reachedLimit = false;
     pendingBytes.clear();
     monitorOnly = false;
@@ -179,6 +180,7 @@ bool AudioRecorder::startMonitoring(const QAudioDevice& device, MonitorCallback 
     failure.clear();
     outputPath.clear();
     framesWritten = 0;
+    minimumInputLatencyUs = -1;
     reachedLimit = false;
     pendingBytes.clear();
     monitorCallback = std::move(callback);
@@ -193,6 +195,7 @@ bool AudioRecorder::finish(QString* error)
     {
         QString inputIssue = errorMessage();
         consumeAvailable();
+        sampleInputLatency();
         if (inputIssue.isEmpty())
             inputIssue = errorMessage();
         if (source)
@@ -222,6 +225,7 @@ bool AudioRecorder::finish(QString* error)
     }
 
     consumeAvailable();
+    sampleInputLatency();
     if (source)
     {
         source->stop();
@@ -296,6 +300,13 @@ int AudioRecorder::channelCount() const
     return outputChannels;
 }
 
+std::optional<double> AudioRecorder::estimatedInputLatencyMs() const
+{
+    if (minimumInputLatencyUs < 0)
+        return std::nullopt;
+    return static_cast<double>(minimumInputLatencyUs) / 1000.0;
+}
+
 bool AudioRecorder::chooseFormat(const QAudioDevice& device)
 {
     const QAudioFormat preferred = device.preferredFormat();
@@ -342,6 +353,7 @@ void AudioRecorder::consumeAvailable()
         (reachedLimit && !monitorOnly))
         return;
 
+    sampleInputLatency();
     pendingBytes.append(input->readAll());
     const int inputBytesPerFrame = inputFormat.bytesPerFrame();
     if (inputBytesPerFrame <= 0)
@@ -416,6 +428,28 @@ void AudioRecorder::consumeAvailable()
                 inputFormat.sampleRate());
     if (!monitorOnly && framesWritten >= maximumFrames)
         reachedLimit = true;
+}
+
+void AudioRecorder::sampleInputLatency()
+{
+    if (!source || input == nullptr || source->state() != QAudio::ActiveState)
+        return;
+
+    const qint64 processedUs = source->processedUSecs();
+    if (processedUs < 50000)
+        return;
+
+    const qint64 elapsedUs = source->elapsedUSecs();
+    if (elapsedUs < processedUs)
+        return;
+
+    // Keep the smallest active-stream clock residual seen after warm-up. This
+    // avoids treating pauses or delayed GUI reads as steady input buffering.
+    const qint64 residualUs = elapsedUs - processedUs;
+    if (residualUs > 250000)
+        return;
+    if (minimumInputLatencyUs < 0 || residualUs < minimumInputLatencyUs)
+        minimumInputLatencyUs = residualUs;
 }
 
 void AudioRecorder::setMonitorCallback(MonitorCallback callback)

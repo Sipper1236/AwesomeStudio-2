@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 
 class QAudioSource;
 class QIODevice;
@@ -31,10 +32,12 @@ public:
     quint64 frameCount() const;
     int sampleRate() const;
     int channelCount() const;
+    std::optional<double> estimatedInputLatencyMs() const;
     void setMonitorCallback(MonitorCallback callback);
 
 private:
     bool chooseFormat(const QAudioDevice& device);
+    void sampleInputLatency();
     void consumeAvailable();
     bool writeHeader(quint32 dataBytes);
     void setError(const QString& error);
@@ -48,6 +51,7 @@ private:
     QByteArray pendingBytes;
     quint64 maximumFrames = 0;
     quint64 framesWritten = 0;
+    qint64 minimumInputLatencyUs = -1;
     int outputChannels = 0;
     bool reachedLimit = false;
     bool active = false;
