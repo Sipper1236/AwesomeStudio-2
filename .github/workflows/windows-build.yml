@@ -18,7 +18,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Qt
         id: qt
@@ -55,7 +55,7 @@ jobs:
           Compress-Archive -Path dist\* -DestinationPath AwesomeStudio-Windows-x64.zip -CompressionLevel Optimal
 
       - name: Upload Windows executable and portable app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: AwesomeStudio-Windows-x64
           path: |
