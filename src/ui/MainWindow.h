@@ -514,6 +514,7 @@ private:
     int midiClockPulseIntervalTicks = 6;
     double midiClockPulseStartBeat = 0.0;
     QElapsedTimer midiClockPulseTimer;
+    QElapsedTimer midiClockLastTickTimer;
     qint64 midiClockLastTimestampMicroseconds = -1;
     double midiClockBpmEstimate = 120.0;
     bool midiClockTempoOverrideActive = false;

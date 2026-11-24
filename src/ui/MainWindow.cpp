@@ -85,6 +85,7 @@
 namespace
 {
 constexpr double automationWritePointSpacingBeats = 0.04;
+constexpr int midiClockLossTimeoutMilliseconds = 750;
 constexpr int customSynthPresetRole = Qt::UserRole + 1;
 
 QString importableAudioFileDialogFilter()
@@ -3213,6 +3214,23 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     {
         audioEngine.servicePluginCallbacks();
         const double beat = audioEngine.positionBeats();
+        if (midiClockSyncEnabled && midiClockTransportStarted &&
+            midiClockLastTickTimer.isValid() &&
+            midiClockLastTickTimer.elapsed() > midiClockLossTimeoutMilliseconds)
+        {
+            midiClockTransportStarted = false;
+            midiClockTicks = 0;
+            midiClockLastTickTimer.invalidate();
+            audioEngine.stopPlayback();
+            if (midiClockTempoOverrideActive)
+            {
+                audioEngine.setProject(project);
+                midiClockTempoOverrideActive = false;
+            }
+            playAction->setChecked(false);
+            statusBar()->showMessage(
+                tr("External MIDI clock was lost; transport stopped and project tempo restored."), 5000);
+        }
         if (automationWriteSession.active)
         {
             if (!audioEngine.isPlaying())
@@ -3406,6 +3424,7 @@ void MainWindow::createActions()
                 midiClockTempoOverrideActive = false;
             }
             midiClockTransportStarted = false;
+            midiClockLastTickTimer.invalidate();
             audioEngine.stopPlayback();
             midiEditor->setPlayheadBeat(0.0);
             arrangementEditor->setPlayheadBeat(0.0);
@@ -3419,6 +3438,7 @@ void MainWindow::createActions()
     {
         stopDrumPatternChain();
         midiClockTransportStarted = false;
+        midiClockLastTickTimer.invalidate();
         if (midiClockTempoOverrideActive)
         {
             audioEngine.setProject(project);
@@ -3441,6 +3461,7 @@ void MainWindow::createActions()
         if (!playing && midiClockTransportStarted)
         {
             midiClockTransportStarted = false;
+            midiClockLastTickTimer.invalidate();
             if (midiClockTempoOverrideActive)
             {
                 audioEngine.setProject(project);
@@ -10426,6 +10447,7 @@ void MainWindow::setProject(const ProjectData& incoming, const QString& path)
 {
     stopDrumPatternChain();
     midiClockTransportStarted = false;
+    midiClockLastTickTimer.invalidate();
     midiClockTempoOverrideActive = false;
     finishAutomationWrite();
     audioEngine.stopPlayback();
@@ -12373,10 +12395,13 @@ void MainWindow::setMidiControllerListening(bool enabled)
 void MainWindow::setMidiClockSyncEnabled(bool enabled)
 {
     midiClockSyncEnabled = enabled;
+    if (enabled)
+        midiClockLastTickTimer.invalidate();
     if (!enabled)
     {
         midiClockTransportStarted = false;
         midiClockTicks = 0;
+        midiClockLastTickTimer.invalidate();
         if (midiClockTempoOverrideActive)
         {
             audioEngine.setProject(project);
@@ -13475,6 +13500,7 @@ void MainWindow::pollMidiInput()
                 midiClockTransportStarted = true;
                 midiClockPulseStartBeat = 0.0;
                 midiClockPulseTimer.restart();
+                midiClockLastTickTimer.restart();
                 audioEngine.seekToBeat(0.0);
                 if (!audioEngine.isPlaying())
                     audioEngine.startPlayback();
@@ -13488,6 +13514,7 @@ void MainWindow::pollMidiInput()
                 midiClockTransportStarted = true;
                 midiClockPulseStartBeat = audioEngine.positionBeats();
                 midiClockPulseTimer.restart();
+                midiClockLastTickTimer.restart();
                 if (!audioEngine.isPlaying())
                     audioEngine.startPlayback();
                 playAction->setChecked(true);
@@ -13496,6 +13523,7 @@ void MainWindow::pollMidiInput()
             else if (event.transportStop)
             {
                 midiClockTransportStarted = false;
+                midiClockLastTickTimer.invalidate();
                 audioEngine.stopPlayback();
                 if (midiClockTempoOverrideActive)
                 {
@@ -13509,6 +13537,7 @@ void MainWindow::pollMidiInput()
             }
             else if (event.clockTick && midiClockTransportStarted)
             {
+                midiClockLastTickTimer.restart();
                 ++midiClockTicks;
                 if (event.timestampMicroseconds >= 0 && midiClockLastTimestampMicroseconds >= 0)
                 {
