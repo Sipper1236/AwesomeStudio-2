@@ -82,7 +82,7 @@ cmake --build build --parallel
 ./build/AwesomeStudio
 ```
 
-To download a Linux x86_64 build, open the repository's Actions tab and download the `AwesomeStudio-Linux-x86_64` artifact. It contains the dynamically linked executable and a tar.gz archive with the executable, licenses, and runtime notes. The build uses Ubuntu 24.04 and requires Qt 6 Widgets/Multimedia and the listed Linux audio runtime libraries.
+To download a Linux x86_64 build, open the repository's Actions tab and download the `AwesomeStudio-Linux-x86_64` artifact. It contains an Ubuntu 24.04 `.deb`, the dynamically linked executable, and a tar.gz archive with licenses and runtime notes. On Debian or Ubuntu, install the package with `sudo apt install ./awesome-studio_0.2.0_amd64.deb`; the package declares its shared-library dependencies. The standalone archive requires Qt 6 Widgets/Multimedia and Linux audio runtime libraries to be installed separately.
 
 On Windows, launch `build/AwesomeStudio.exe`. Qt's Multimedia backend uses the active platform audio service. To download the packaged Windows build, open the repository's Actions tab and download the `AwesomeStudio-Windows-x64` artifact, which contains the portable ZIP and executable.
 
