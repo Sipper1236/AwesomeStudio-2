@@ -237,6 +237,7 @@ void AudioEngine::setProject(const ProjectData& project)
     nextState->project = std::make_shared<const ProjectData>(std::move(safeProject));
     nextState->renderer = std::make_shared<SynthRenderer>();
     nextState->renderer->setProject(nextState->project, outputSampleRate);
+    nextState->generation = nextProjectGeneration.fetch_add(1, std::memory_order_relaxed);
     std::shared_ptr<const PreparedRenderState> immutableState = std::move(nextState);
     auto previousState = std::atomic_exchange_explicit(&preparedRenderState,
         std::move(immutableState), std::memory_order_acq_rel);
@@ -293,7 +294,92 @@ double AudioEngine::positionBeats() const
     if (!project)
         return 0.0;
 
-    return project->beatAtFrame(publishedPositionFrames.load(std::memory_order_acquire), outputSampleRate);
+    qint64 outputFrame = -1;
+    if (sink != nullptr && sink->state() != QAudio::StoppedState && outputSampleRate > 0.0)
+    {
+        const qint64 processedMicroseconds = sink->processedUSecs();
+        if (processedMicroseconds >= 0)
+        {
+            const long double processedFrames = static_cast<long double>(processedMicroseconds) *
+                static_cast<long double>(outputSampleRate) / 1000000.0L;
+            if (processedFrames <= static_cast<long double>(std::numeric_limits<qint64>::max()))
+                outputFrame = static_cast<qint64>(std::floor(processedFrames));
+        }
+    }
+
+    if (outputFrame >= 0 && state != nullptr)
+    {
+        const quint64 latestSegment = transportOutputHistorySize.load(std::memory_order_acquire);
+        const quint64 oldestSegment = latestSegment > transportOutputHistoryCapacity
+            ? latestSegment - transportOutputHistoryCapacity + 1 : 1;
+        for (quint64 serial = latestSegment; serial >= oldestSegment && serial != 0; --serial)
+        {
+            const TransportOutputSegment& segment =
+                transportOutputHistory[(serial - 1) % transportOutputHistoryCapacity];
+            if (segment.serial.load(std::memory_order_acquire) != serial)
+                continue;
+
+            const quint64 generation = segment.projectGeneration.load(std::memory_order_relaxed);
+            const qint64 startFrame = segment.outputStartFrame.load(std::memory_order_relaxed);
+            const qint64 endFrame = segment.outputEndFrame.load(std::memory_order_relaxed);
+            const qint64 projectStartFrame = segment.projectStartFrame.load(std::memory_order_relaxed);
+            const qint64 advancingFrames = segment.advancingFrames.load(std::memory_order_relaxed);
+            const qint64 patternFrameCount = segment.patternFrames.load(std::memory_order_relaxed);
+            const bool loopEnabled = segment.loopEnabled.load(std::memory_order_relaxed);
+            const bool advancesProjectFrame =
+                segment.advancesProjectFrame.load(std::memory_order_relaxed);
+            if (segment.serial.load(std::memory_order_acquire) != serial ||
+                generation != state->generation || outputFrame < startFrame || outputFrame >= endFrame)
+                continue;
+
+            qint64 projectFrame = projectStartFrame;
+            const qint64 offset = outputFrame - startFrame;
+            if (advancesProjectFrame)
+            {
+                if (offset >= advancingFrames)
+                    projectFrame = 0;
+                else
+                    projectFrame += offset;
+                if (loopEnabled && projectFrame >= 0 && patternFrameCount > 0)
+                    projectFrame %= patternFrameCount;
+                else if (!loopEnabled)
+                    projectFrame = std::min(projectFrame, patternFrameCount);
+            }
+            return project->beatAtFrame(projectFrame, outputSampleRate);
+        }
+    }
+
+    return project->beatAtFrame(
+        publishedPositionFrames.load(std::memory_order_acquire), outputSampleRate);
+}
+
+void AudioEngine::publishTransportOutputSegment(quint64 projectGeneration,
+                                                qint64 outputStartFrame,
+                                                qint64 projectStartFrame,
+                                                qint64 frameCount,
+                                                qint64 advancingFrames,
+                                                qint64 patternFrames,
+                                                bool loopEnabled,
+                                                bool advancesProjectFrame)
+{
+    if (frameCount <= 0)
+        return;
+
+    const quint64 serial = transportOutputHistorySize.load(std::memory_order_relaxed) + 1;
+    TransportOutputSegment& segment =
+        transportOutputHistory[(serial - 1) % transportOutputHistoryCapacity];
+    segment.serial.store(0, std::memory_order_release);
+    segment.projectGeneration.store(projectGeneration, std::memory_order_relaxed);
+    segment.outputStartFrame.store(outputStartFrame, std::memory_order_relaxed);
+    segment.outputEndFrame.store(outputStartFrame + frameCount, std::memory_order_relaxed);
+    segment.projectStartFrame.store(projectStartFrame, std::memory_order_relaxed);
+    segment.advancingFrames.store(std::clamp<qint64>(advancingFrames, 0, frameCount),
+                                  std::memory_order_relaxed);
+    segment.patternFrames.store(std::max<qint64>(1, patternFrames), std::memory_order_relaxed);
+    segment.loopEnabled.store(loopEnabled, std::memory_order_relaxed);
+    segment.advancesProjectFrame.store(advancesProjectFrame, std::memory_order_relaxed);
+    segment.serial.store(serial, std::memory_order_release);
+    transportOutputHistorySize.store(serial, std::memory_order_release);
 }
 
 float AudioEngine::trackPeakLevel(quint64 trackId) const
@@ -1383,6 +1469,22 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
                 std::memset(destination, 0x80, static_cast<size_t>(maxBytes));
             else
                 std::memset(destination, 0, static_cast<size_t>(maxBytes));
+
+            if (bytesPerFrame > 0)
+            {
+                const qint64 frames = maxBytes / bytesPerFrame;
+                const auto renderState = std::atomic_load_explicit(
+                    &preparedRenderState, std::memory_order_acquire);
+                if (frames > 0 && renderState != nullptr && renderState->project != nullptr)
+                {
+                    const qint64 clockStart = audioClockFrames.load(std::memory_order_relaxed);
+                    publishTransportOutputSegment(
+                        renderState->generation, clockStart,
+                        publishedPositionFrames.load(std::memory_order_acquire),
+                        frames, 0, 1, false, false);
+                    audioClockFrames.store(clockStart + frames, std::memory_order_release);
+                }
+            }
         }
         return destination == nullptr ? 0 : maxBytes;
     }
@@ -1501,6 +1603,16 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         project->frameAtBeat(project->songLengthBeats(), outputSampleRate));
     const qint64 releaseTailFrames = static_cast<qint64>(outputSampleRate * 0.08);
     const qint64 clockStart = audioClockFrames.load(std::memory_order_relaxed);
+    const qint64 blockProjectStartFrame = playbackFrame;
+    const bool blockStartedPlaying = playingState;
+    qint64 blockAdvancingFrames = 0;
+    if (blockStartedPlaying)
+    {
+        blockAdvancingFrames = project->loopEnabled
+            ? frames
+            : std::clamp<qint64>(patternFrames + releaseTailFrames - playbackFrame,
+                                 0, frames);
+    }
     const auto sampleFormat = outputFormat->sampleFormat();
     qint64 initialProjectFrame = playbackFrame;
     if (project->loopEnabled && initialProjectFrame >= 0)
@@ -1879,6 +1991,10 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     masterPeakValue.store(std::max(blockMasterPeak, decayedMasterPeak), std::memory_order_release);
 
     audioClockFrames.store(clockStart + frames, std::memory_order_release);
+    publishTransportOutputSegment(
+        renderState->generation, clockStart,
+        blockStartedPlaying ? blockProjectStartFrame : 0,
+        frames, blockAdvancingFrames, patternFrames, project->loopEnabled, true);
     const qint64 publishedPosition = playingState
         ? (project->loopEnabled ? playbackFrame % patternFrames : std::min(playbackFrame, patternFrames))
         : 0;

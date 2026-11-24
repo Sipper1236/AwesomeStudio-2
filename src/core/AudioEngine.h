@@ -204,9 +204,30 @@ private:
     {
         std::shared_ptr<const ProjectData> project;
         std::shared_ptr<SynthRenderer> renderer;
+        quint64 generation = 0;
     };
     std::shared_ptr<const PreparedRenderState> preparedRenderState;
     std::vector<std::shared_ptr<const PreparedRenderState>> retiredRenderStates;
+    static constexpr size_t transportOutputHistoryCapacity = 4096;
+    struct TransportOutputSegment
+    {
+        std::atomic<quint64> serial{0};
+        std::atomic<quint64> projectGeneration{0};
+        std::atomic<qint64> outputStartFrame{0};
+        std::atomic<qint64> outputEndFrame{0};
+        std::atomic<qint64> projectStartFrame{0};
+        std::atomic<qint64> advancingFrames{0};
+        std::atomic<qint64> patternFrames{1};
+        std::atomic<bool> loopEnabled{false};
+        std::atomic<bool> advancesProjectFrame{false};
+    };
+    void publishTransportOutputSegment(quint64 projectGeneration, qint64 outputStartFrame,
+                                       qint64 projectStartFrame, qint64 frameCount,
+                                       qint64 advancingFrames, qint64 patternFrames,
+                                       bool loopEnabled, bool advancesProjectFrame);
+    std::array<TransportOutputSegment, transportOutputHistoryCapacity> transportOutputHistory;
+    std::atomic<quint64> transportOutputHistorySize{0};
+    std::atomic<quint64> nextProjectGeneration{1};
     std::unique_ptr<AudioStream> stream;
     std::unique_ptr<QAudioSink> sink;
     std::unique_ptr<QAudioFormat> outputFormat;
