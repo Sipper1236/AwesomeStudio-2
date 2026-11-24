@@ -49,6 +49,7 @@
 #include <QPointer>
 #include <QProgressBar>
 #include <QProgressDialog>
+#include <QRandomGenerator>
 #include <QPushButton>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -2751,6 +2752,41 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     createMenus();
     loadMidiControllerMappings();
 
+    drumChainTimer = new QTimer(this);
+    drumChainTimer->setInterval(2);
+    connect(drumChainTimer, &QTimer::timeout, this, [this]
+    {
+        if (!drumChainClock.isValid())
+            return;
+        const qint64 now = drumChainClock.nsecsElapsed() / 1000;
+        while (drumChainEventIndex < drumChainEvents.size() &&
+               drumChainEvents[drumChainEventIndex].dueMicroseconds <= now)
+        {
+            const DrumChainEvent event = drumChainEvents[drumChainEventIndex++];
+            if (event.noteOn)
+            {
+                audioEngine.triggerLiveMidiNoteOn(0, event.pitch, event.velocity, drumChainTrack);
+                ++activeDrumChainNotes[event.pitch];
+            }
+            else
+            {
+                audioEngine.triggerLiveMidiNoteOff(0, event.pitch);
+                auto active = activeDrumChainNotes.find(event.pitch);
+                if (active != activeDrumChainNotes.end() && --active.value() <= 0)
+                    activeDrumChainNotes.erase(active);
+            }
+        }
+        if (drumChainEventIndex >= drumChainEvents.size())
+        {
+            drumChainTimer->stop();
+            drumChainEvents.clear();
+            drumChainEventIndex = 0;
+            drumChainTrack = InstrumentTrack{};
+            stepSequencer->setLiveChainPlaying(false);
+            statusBar()->showMessage(tr("Drum pattern chain finished"), 2500);
+        }
+    });
+
     const auto applyEditedNotes = [this](const QVector<MidiNote>& before, const QVector<MidiNote>& after)
     {
         MidiClip* clip = selectedClip();
@@ -2951,6 +2987,18 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
                                        ? track->releaseSeconds
                                        : padSample == nullptr ? 0.06f : padSample->releaseSeconds);
     });
+    connect(stepSequencer, &StepSequencer::liveChainRequested, this, [this]
+    {
+        if (drumChainTimer != nullptr && drumChainTimer->isActive())
+            stopDrumPatternChain();
+        const InstrumentTrack* track = project.findTrack(selectedTrackId);
+        const MidiClip* clip = project.findClip(selectedTrackId, selectedClipId);
+        if (track == nullptr || clip == nullptr)
+            return;
+        buildDrumPatternChain(track->id, clip->id, true);
+    });
+    connect(stepSequencer, &StepSequencer::liveChainStopRequested,
+            this, &MainWindow::stopDrumPatternChain);
     connect(arrangementEditor, &ArrangementEditor::clipActivated, this,
             [this](quint64 trackId, quint64 clipId) { selectClip(trackId, clipId, true); });
     connect(arrangementEditor, &ArrangementEditor::clipSelected, this,
@@ -3384,6 +3432,7 @@ void MainWindow::createActions()
     stopAction->setShortcut(Qt::Key_Escape);
     connect(stopAction, &QAction::triggered, this, [this]
     {
+        stopDrumPatternChain();
         finishAutomationWrite();
         if (audioRecorder || recordingPending)
             finishAudioRecording(true);
@@ -7713,7 +7762,7 @@ void MainWindow::duplicateClip(quint64 trackId, quint64 clipId)
                              2200);
 }
 
-void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
+void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId, bool playLive)
 {
     const InstrumentTrack* track = project.findTrack(trackId);
     const MidiClip* selected = project.findClip(trackId, clipId);
@@ -7726,7 +7775,9 @@ void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
     dialog.resize(760, 430);
     auto* layout = new QVBoxLayout(&dialog);
     auto* description = new QLabel(
-        tr("Choose patterns and arrange them in order. The chain is appended at the next free bar and can be undone in one step."),
+        playLive
+            ? tr("Choose patterns and arrange them in order. The chain will play once using the current project tempo.")
+            : tr("Choose patterns and arrange them in order. The chain is appended at the next free bar and can be undone in one step."),
         &dialog);
     description->setWordWrap(true);
     layout->addWidget(description);
@@ -7826,7 +7877,7 @@ void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
     moveDownButton->setEnabled(chainList->count() > 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    buttons->button(QDialogButtonBox::Ok)->setText(tr("Create chain"));
+    buttons->button(QDialogButtonBox::Ok)->setText(playLive ? tr("Play chain") : tr("Create chain"));
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
@@ -7856,6 +7907,12 @@ void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
             return;
         }
         chain.push_back(*pattern);
+    }
+
+    if (playLive)
+    {
+        startDrumPatternChain(trackId, chain);
+        return;
     }
 
     double endBeat = 0.0;
@@ -7899,6 +7956,97 @@ void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
         tr("Added %1 patterns to the Playlist chain at beat %2")
             .arg(chain.size()).arg(firstBeat, 0, 'f', 2),
         4000);
+}
+
+void MainWindow::startDrumPatternChain(quint64 trackId, const QVector<MidiClip>& patterns)
+{
+    const InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack || patterns.isEmpty())
+        return;
+    stopDrumPatternChain();
+
+    constexpr qsizetype maximumScheduledEvents = 200000;
+    qsizetype eventCount = 0;
+    for (const MidiClip& pattern : patterns)
+        for (const MidiNote& note : pattern.notes)
+            eventCount += 2 * std::clamp(note.ratchetCount, 1, 8);
+    if (eventCount <= 0 || eventCount > maximumScheduledEvents)
+    {
+        statusBar()->showMessage(tr("This drum pattern chain has no playable notes or is too large"), 3500);
+        return;
+    }
+
+    QVector<DrumChainEvent> events;
+    events.reserve(eventCount);
+    double chainOffset = 0.0;
+    const double anchorBeat = audioEngine.isPlaying() ? audioEngine.positionBeats() : 0.0;
+    for (const MidiClip& pattern : patterns)
+    {
+        for (const MidiNote& note : pattern.notes)
+        {
+            if (!std::isfinite(note.startBeat) || !std::isfinite(note.lengthBeats) ||
+                note.lengthBeats <= 0.0 || note.startBeat < 0.0 ||
+                note.startBeat >= pattern.lengthBeats)
+                continue;
+            const int probability = std::clamp(note.probabilityPercent, 0, 100);
+            if (probability == 0 || (probability < 100 && QRandomGenerator::global()->bounded(100) >= probability))
+                continue;
+            const int ratchets = std::clamp(note.ratchetCount, 1, 8);
+            const double hitLength = note.lengthBeats / ratchets;
+            for (int hit = 0; hit < ratchets; ++hit)
+            {
+                const double relativeBeat = chainOffset + note.startBeat + hit * hitLength;
+                const double offBeat = relativeBeat + std::max(0.001, hitLength * 0.8);
+                const double onSeconds = project.secondsAtBeat(anchorBeat + relativeBeat) -
+                                         project.secondsAtBeat(anchorBeat);
+                const double offSeconds = project.secondsAtBeat(anchorBeat + offBeat) -
+                                          project.secondsAtBeat(anchorBeat);
+                if (!std::isfinite(onSeconds) || !std::isfinite(offSeconds) || onSeconds < 0.0)
+                    continue;
+                events.push_back({static_cast<qint64>(std::llround(onSeconds * 1000000.0)),
+                                  note.pitch, note.velocity, true});
+                events.push_back({static_cast<qint64>(std::llround(offSeconds * 1000000.0)),
+                                  note.pitch, note.velocity, false});
+            }
+        }
+        chainOffset += pattern.lengthBeats;
+    }
+    if (events.isEmpty())
+    {
+        statusBar()->showMessage(tr("No notes in this chain passed their trigger probabilities"), 3000);
+        return;
+    }
+    std::stable_sort(events.begin(), events.end(), [](const DrumChainEvent& left,
+                                                       const DrumChainEvent& right)
+    {
+        if (left.dueMicroseconds != right.dueMicroseconds)
+            return left.dueMicroseconds < right.dueMicroseconds;
+        return !left.noteOn && right.noteOn;
+    });
+    audioEngine.setProject(project);
+    drumChainTrack = *track;
+    drumChainEvents = std::move(events);
+    drumChainEventIndex = 0;
+    activeDrumChainNotes.clear();
+    drumChainClock.start();
+    drumChainTimer->start();
+    stepSequencer->setLiveChainPlaying(true);
+    statusBar()->showMessage(tr("Playing %1 drum patterns once").arg(patterns.size()), 3000);
+}
+
+void MainWindow::stopDrumPatternChain()
+{
+    if (drumChainTimer != nullptr)
+        drumChainTimer->stop();
+    for (auto it = activeDrumChainNotes.cbegin(); it != activeDrumChainNotes.cend(); ++it)
+        for (int count = 0; count < it.value(); ++count)
+            audioEngine.triggerLiveMidiNoteOff(0, it.key());
+    activeDrumChainNotes.clear();
+    drumChainEvents.clear();
+    drumChainEventIndex = 0;
+    drumChainTrack = InstrumentTrack{};
+    if (stepSequencer != nullptr)
+        stepSequencer->setLiveChainPlaying(false);
 }
 
 quint64 MainWindow::applyClipListHistory(quint64 trackId, const MidiClip& clip,
@@ -10136,6 +10284,7 @@ bool MainWindow::maybeSave()
 
 void MainWindow::setProject(const ProjectData& incoming, const QString& path)
 {
+    stopDrumPatternChain();
     finishAutomationWrite();
     audioEngine.stopPlayback();
     project = incoming;

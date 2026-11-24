@@ -8,6 +8,7 @@ class QSpinBox;
 class QComboBox;
 class QTableWidget;
 class QLabel;
+class QPushButton;
 
 class StepSequencer final : public QWidget
 {
@@ -26,6 +27,11 @@ signals:
     void notesEdited(QVector<MidiNote> before, QVector<MidiNote> after);
     void stepsPerBarChanged(int before, int after);
     void previewRequested(int midiPitch);
+    void liveChainRequested();
+    void liveChainStopRequested();
+
+public:
+    void setLiveChainPlaying(bool playing);
 
 private:
     void configureDivision(int steps);
@@ -42,6 +48,7 @@ private:
     QComboBox* divisionControl = nullptr;
     QTableWidget* grid = nullptr;
     QLabel* emptyHint = nullptr;
+    QPushButton* liveChainButton = nullptr;
     QVector<MidiNote> notes;
     double clipLengthBeats = 16.0;
     double quarterNotesPerBar = 4.0;

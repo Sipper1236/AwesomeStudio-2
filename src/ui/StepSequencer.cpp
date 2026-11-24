@@ -71,6 +71,11 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
     for (const int division : supportedStepCounts)
         divisionControl->addItem(QString::number(division), division);
     controls->addWidget(divisionControl);
+    liveChainButton = new QPushButton(tr("Play chain…"), this);
+    liveChainButton->setObjectName(QStringLiteral("liveDrumChainButton"));
+    liveChainButton->setCheckable(true);
+    liveChainButton->setEnabled(false);
+    controls->addWidget(liveChainButton);
     auto* hint = new QLabel(tr("Right-click a step to set velocity, probability, or ratchets · scroll for finer divisions"), this);
     hint->setStyleSheet(QStringLiteral("color: #a8b5c1;"));
     controls->addWidget(hint, 1);
@@ -203,6 +208,20 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
         refreshPads();
         emit stepsPerBarChanged(before, stepsPerBar);
     });
+    connect(liveChainButton, &QPushButton::clicked, this, [this](bool playing)
+    {
+        if (playing)
+            emit liveChainRequested();
+        else
+            emit liveChainStopRequested();
+    });
+}
+
+void StepSequencer::setLiveChainPlaying(bool playing)
+{
+    const QSignalBlocker blocker(liveChainButton);
+    liveChainButton->setChecked(playing);
+    liveChainButton->setText(playing ? tr("Stop chain") : tr("Play chain…"));
 }
 
 void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
@@ -235,6 +254,7 @@ void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
             nextMeter->beatsPerBar, nextMeter->beatUnit});
     nextNoteId = std::max<quint64>(1, noteId);
     patternAvailable = available;
+    liveChainButton->setEnabled(available);
     configureDivision(requestedStepsPerBar);
     emptyHint->setVisible(!patternAvailable);
     barControl->setEnabled(patternAvailable);

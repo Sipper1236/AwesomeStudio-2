@@ -143,7 +143,9 @@ private:
     void addNewPattern();
     void duplicateSelectedClip();
     void duplicateClip(quint64 trackId, quint64 clipId);
-    void buildDrumPatternChain(quint64 trackId, quint64 clipId);
+    void buildDrumPatternChain(quint64 trackId, quint64 clipId, bool playLive = false);
+    void startDrumPatternChain(quint64 trackId, const QVector<MidiClip>& patterns);
+    void stopDrumPatternChain();
     quint64 applyClipListHistory(quint64 trackId, const MidiClip& clip, qsizetype insertIndex,
                                  bool present, quint64 selectionTrackId,
                                  quint64 selectionClipId);
@@ -475,6 +477,19 @@ private:
     std::unique_ptr<MidiInput> midiInput;
     QComboBox* midiInputControl = nullptr;
     QTimer* midiInputPollTimer = nullptr;
+    QTimer* drumChainTimer = nullptr;
+    struct DrumChainEvent
+    {
+        qint64 dueMicroseconds = 0;
+        int pitch = 0;
+        int velocity = 100;
+        bool noteOn = false;
+    };
+    QVector<DrumChainEvent> drumChainEvents;
+    qsizetype drumChainEventIndex = 0;
+    InstrumentTrack drumChainTrack;
+    QHash<int, int> activeDrumChainNotes;
+    QElapsedTimer drumChainClock;
     QString activeMidiInputPortId;
     QAction* midiControllerListenAction = nullptr;
     QHash<int, MidiControllerMapping> midiControllerMappings;
