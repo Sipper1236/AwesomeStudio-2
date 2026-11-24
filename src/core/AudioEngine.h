@@ -26,6 +26,7 @@ public:
     QByteArray audioOutputDeviceId() const;
     QString errorMessage() const;
     bool setAudioOutputDevice(const QByteArray& deviceId);
+    void handleAudioOutputsChanged();
 
     void setProject(const ProjectData& project);
     void startPlayback();

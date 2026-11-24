@@ -3977,7 +3977,25 @@ void MainWindow::createToolBars()
     connect(mediaDevices, &QMediaDevices::audioInputsChanged,
             this, &MainWindow::refreshAudioInputs);
     connect(mediaDevices, &QMediaDevices::audioOutputsChanged,
-            this, &MainWindow::refreshAudioOutputs);
+            this, [this]
+    {
+        audioEngine.handleAudioOutputsChanged();
+        if (audioEngine.isAudioAvailable())
+        {
+            audioDeviceLabel->setText(tr("Audio · %1").arg(audioEngine.deviceName()));
+            QSettings settings;
+            settings.setValue(QStringLiteral("audio/outputDeviceId"), audioEngine.audioOutputDeviceId());
+            if (!audioEngine.isPlaying() && !audioEngine.errorMessage().isEmpty())
+                statusBar()->showMessage(audioEngine.errorMessage(), 6000);
+        }
+        else
+        {
+            audioDeviceLabel->setText(tr("Audio unavailable"));
+            statusBar()->showMessage(audioEngine.errorMessage() +
+                tr(" The editor remains available; connect an output device to audition."), 6000);
+        }
+        refreshAudioOutputs();
+    });
     refreshAudioOutputs();
     refreshAudioInputs();
     midiInput = std::make_unique<MidiInput>();

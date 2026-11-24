@@ -296,6 +296,54 @@ bool AudioEngine::setAudioOutputDevice(const QByteArray& deviceId)
     return false;
 }
 
+void AudioEngine::handleAudioOutputsChanged()
+{
+    if (playing.load(std::memory_order_acquire))
+    {
+        stopPlayback();
+        initializationError = QStringLiteral(
+            "The audio output device changed while playing. Playback was stopped; select an available output and restart.");
+    }
+
+    if (activeOutputDeviceId.isEmpty())
+    {
+        if (sink == nullptr)
+            initialize();
+        return;
+    }
+
+    const QList<QAudioDevice> devices = QMediaDevices::audioOutputs();
+    const bool activeDeviceAvailable = std::any_of(devices.cbegin(), devices.cend(),
+        [this](const QAudioDevice& device) { return device.id() == activeOutputDeviceId; });
+    if (activeDeviceAvailable)
+        return;
+
+    if (sink != nullptr)
+    {
+        pluginStateCaptureInProgress.store(true, std::memory_order_release);
+        sink->stop();
+        while (activeRenderCallbacks.load(std::memory_order_acquire) != 0)
+            std::this_thread::yield();
+        sink.reset();
+        stream.reset();
+        outputFormat.reset();
+        activeOutputDeviceId.clear();
+        bytesPerFrame = 0;
+        pluginStateCaptureInProgress.store(false, std::memory_order_release);
+    }
+
+    selectedOutputDeviceId.clear();
+    if (initialize())
+    {
+        initializationError.clear();
+        return;
+    }
+
+    initializationError = devices.isEmpty()
+        ? QStringLiteral("The audio output device was disconnected. Connect an output device to resume audio.")
+        : initializationError;
+}
+
 QString AudioEngine::errorMessage() const
 {
     return initializationError;
