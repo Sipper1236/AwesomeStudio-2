@@ -128,9 +128,10 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
             {
                 if (!patternAvailable)
                     return;
-                const double stepLength = quarterNotesPerBar / stepsPerBar;
-                const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
-                const double barEnd = barStart + quarterNotesPerBar;
+                const double barStart = barStartBeat(barControl->value() - 1);
+                const double barLength = meterLengthAt(barStart);
+                const double stepLength = barLength / stepsPerBar;
+                const double barEnd = barStart + barLength;
                 const int pitch = drumPitches[static_cast<size_t>(row)];
                 int currentVelocity = 100;
                 int currentProbability = 100;
@@ -206,11 +207,32 @@ StepSequencer::StepSequencer(QWidget* parent) : QWidget(parent)
 
 void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
                                double barLength, quint64 noteId, bool available,
-                               int requestedStepsPerBar)
+                               int requestedStepsPerBar,
+                               const QVector<TimeSignatureChange>& meterChanges,
+                               double clipStartBeat)
 {
     notes = newNotes;
     clipLengthBeats = std::max(0.25, length);
     quarterNotesPerBar = std::max(0.25, barLength);
+    localTimeSignatureChanges.clear();
+    TimeSignatureChange active{0.0, 4, 4};
+    constexpr int denominators[] = {1, 2, 4, 8, 16};
+    for (int denominator : denominators)
+        for (int numerator = 1; numerator <= 12; ++numerator)
+            if (std::abs(static_cast<double>(numerator) * 4.0 / denominator - quarterNotesPerBar) < 1.0e-8)
+            {
+                active.beatsPerBar = numerator;
+                active.beatUnit = denominator;
+            }
+    auto nextMeter = std::upper_bound(meterChanges.cbegin(), meterChanges.cend(), clipStartBeat,
+        [](double beat, const TimeSignatureChange& change) { return beat < change.beat; });
+    if (nextMeter != meterChanges.cbegin())
+        active = *(nextMeter - 1);
+    active.beat = 0.0;
+    localTimeSignatureChanges.push_back(active);
+    for (; nextMeter != meterChanges.cend(); ++nextMeter)
+        localTimeSignatureChanges.push_back({nextMeter->beat - clipStartBeat,
+            nextMeter->beatsPerBar, nextMeter->beatUnit});
     nextNoteId = std::max<quint64>(1, noteId);
     patternAvailable = available;
     configureDivision(requestedStepsPerBar);
@@ -218,12 +240,60 @@ void StepSequencer::setPattern(const QVector<MidiNote>& newNotes, double length,
     barControl->setEnabled(patternAvailable);
     divisionControl->setEnabled(patternAvailable);
     grid->setEnabled(patternAvailable);
-    const int bars = std::clamp(static_cast<int>(std::ceil(clipLengthBeats / quarterNotesPerBar)), 1, 4096);
+    const int bars = totalBars();
     const QSignalBlocker blocker(barControl);
     const int currentBar = std::clamp(barControl->value(), 1, bars);
     barControl->setRange(1, bars);
     barControl->setValue(currentBar);
     refreshPads();
+}
+
+double StepSequencer::meterLengthAt(double beat) const
+{
+    const auto next = std::upper_bound(localTimeSignatureChanges.cbegin(),
+        localTimeSignatureChanges.cend(), beat,
+        [](double value, const TimeSignatureChange& change) { return value < change.beat; });
+    const TimeSignatureChange& meter = next == localTimeSignatureChanges.cbegin()
+        ? localTimeSignatureChanges.first() : *(next - 1);
+    return static_cast<double>(meter.beatsPerBar) * 4.0 / meter.beatUnit;
+}
+
+double StepSequencer::barStartBeat(int barIndex) const
+{
+    double beat = 0.0;
+    for (int bar = 0; bar < barIndex; ++bar)
+    {
+        double next = beat + meterLengthAt(beat);
+        for (const TimeSignatureChange& change : localTimeSignatureChanges)
+            if (change.beat > beat + 1.0e-9 && change.beat < next)
+            {
+                next = change.beat;
+                break;
+            }
+        beat = next;
+    }
+    return beat;
+}
+
+int StepSequencer::totalBars() const
+{
+    int bars = 0;
+    double beat = 0.0;
+    while (beat < clipLengthBeats && bars < 4096)
+    {
+        double next = beat + meterLengthAt(beat);
+        for (const TimeSignatureChange& change : localTimeSignatureChanges)
+            if (change.beat > beat + 1.0e-9 && change.beat < next)
+            {
+                next = change.beat;
+                break;
+            }
+        if (next <= beat + 1.0e-9)
+            break;
+        beat = next;
+        ++bars;
+    }
+    return std::max(1, bars);
 }
 
 void StepSequencer::configureDivision(int requestedSteps)
@@ -237,9 +307,10 @@ void StepSequencer::configureDivision(int requestedSteps)
 
 void StepSequencer::refreshPads()
 {
-    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
-    const double barEnd = barStart + quarterNotesPerBar;
-    const double stepLength = quarterNotesPerBar / stepsPerBar;
+    const double barStart = barStartBeat(barControl->value() - 1);
+    const double barLength = meterLengthAt(barStart);
+    const double barEnd = barStart + barLength;
+    const double stepLength = barLength / stepsPerBar;
     for (int row = 0; row < static_cast<int>(drumPitches.size()); ++row)
     {
         for (int column = 0; column < stepsPerBar; ++column)
@@ -291,9 +362,10 @@ void StepSequencer::toggleStep(int row, int column, bool enabled)
 {
     if (row < 0 || row >= static_cast<int>(drumPitches.size()) || column < 0 || column >= stepsPerBar)
         return;
-    const double stepLength = quarterNotesPerBar / stepsPerBar;
-    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
-    const double barEnd = barStart + quarterNotesPerBar;
+    const double barStart = barStartBeat(barControl->value() - 1);
+    const double barLength = meterLengthAt(barStart);
+    const double barEnd = barStart + barLength;
+    const double stepLength = barLength / stepsPerBar;
     const double stepStart = barStart + column * stepLength;
     if (stepStart >= clipLengthBeats)
         return;
@@ -333,9 +405,10 @@ void StepSequencer::setStepProbability(int row, int column, int probabilityPerce
     if (!patternAvailable || row < 0 || row >= static_cast<int>(drumPitches.size()) ||
         column < 0 || column >= stepsPerBar)
         return;
-    const double stepLength = quarterNotesPerBar / stepsPerBar;
-    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
-    const double barEnd = barStart + quarterNotesPerBar;
+    const double barStart = barStartBeat(barControl->value() - 1);
+    const double barLength = meterLengthAt(barStart);
+    const double barEnd = barStart + barLength;
+    const double stepLength = barLength / stepsPerBar;
     const double stepStart = barStart + column * stepLength;
     if (stepStart >= clipLengthBeats)
         return;
@@ -372,9 +445,10 @@ void StepSequencer::setStepVelocity(int row, int column, int velocity)
     if (!patternAvailable || row < 0 || row >= static_cast<int>(drumPitches.size()) ||
         column < 0 || column >= stepsPerBar)
         return;
-    const double stepLength = quarterNotesPerBar / stepsPerBar;
-    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
-    const double barEnd = barStart + quarterNotesPerBar;
+    const double barStart = barStartBeat(barControl->value() - 1);
+    const double barLength = meterLengthAt(barStart);
+    const double barEnd = barStart + barLength;
+    const double stepLength = barLength / stepsPerBar;
     const double stepStart = barStart + column * stepLength;
     if (stepStart >= clipLengthBeats)
         return;
@@ -410,9 +484,10 @@ void StepSequencer::setStepRatchetCount(int row, int column, int ratchetCount)
     if (!patternAvailable || row < 0 || row >= static_cast<int>(drumPitches.size()) ||
         column < 0 || column >= stepsPerBar)
         return;
-    const double stepLength = quarterNotesPerBar / stepsPerBar;
-    const double barStart = (barControl->value() - 1) * quarterNotesPerBar;
-    const double barEnd = barStart + quarterNotesPerBar;
+    const double barStart = barStartBeat(barControl->value() - 1);
+    const double barLength = meterLengthAt(barStart);
+    const double barEnd = barStart + barLength;
+    const double stepLength = barLength / stepsPerBar;
     const double stepStart = barStart + column * stepLength;
     if (stepStart >= clipLengthBeats)
         return;

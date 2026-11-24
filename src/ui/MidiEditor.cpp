@@ -137,6 +137,31 @@ public:
         update();
     }
 
+    void setTimeSignatureMap(const QVector<TimeSignatureChange>& changes, double clipStartBeat)
+    {
+        localTimeSignatureChanges.clear();
+        TimeSignatureChange active{0.0, 4, 4};
+        constexpr int denominators[] = {1, 2, 4, 8, 16};
+        for (int denominator : denominators)
+            for (int numerator = 1; numerator <= 12; ++numerator)
+                if (std::abs(static_cast<double>(numerator) * 4.0 / denominator - quarterNotesPerBar) < 1.0e-8)
+                {
+                    active.beatsPerBar = numerator;
+                    active.beatUnit = denominator;
+                }
+        auto next = std::upper_bound(changes.cbegin(), changes.cend(), clipStartBeat,
+            [](double beat, const TimeSignatureChange& change) { return beat < change.beat; });
+        if (next != changes.cbegin())
+            active = *(next - 1);
+        active.beat = 0.0;
+        localTimeSignatureChanges.push_back(active);
+        for (; next != changes.cend(); ++next)
+            localTimeSignatureChanges.push_back({next->beat - clipStartBeat,
+                                                 next->beatsPerBar, next->beatUnit});
+        quarterNotesPerBar = static_cast<double>(active.beatsPerBar) * 4.0 / active.beatUnit;
+        update();
+    }
+
     void setSnap(double beatStep)
     {
         snap = std::clamp(beatStep, 1.0 / 64.0, 4.0);
@@ -505,17 +530,15 @@ protected:
         for (int beat = 0; beat <= totalBeats; ++beat)
         {
             const int x = sidebarWidth + beat * pixelsPerBeat;
-            const double barOffset = std::fmod(beat, quarterNotesPerBar);
-            if (std::min(barOffset, quarterNotesPerBar - barOffset) > 0.02)
+            if (!isBarLineAtBeat(beat))
             {
                 painter.setPen(QColor(QStringLiteral("#303944")));
                 painter.drawLine(x, rulerHeight, x, contentBottom);
             }
         }
-        const int totalBars = static_cast<int>(std::ceil(patternLength / quarterNotesPerBar));
-        for (int bar = 0; bar <= totalBars; ++bar)
+        int bar = 1;
+        for (double beat = 0.0; beat <= patternLength;)
         {
-            const double beat = bar * quarterNotesPerBar;
             const int x = sidebarWidth + static_cast<int>(std::round(beat * pixelsPerBeat));
             painter.setPen(QColor(QStringLiteral("#56616e")));
             painter.drawLine(x, rulerHeight, x, contentBottom);
@@ -524,9 +547,20 @@ protected:
                 painter.setPen(QColor(QStringLiteral("#e3e9ef")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
                 painter.drawText(QRect(x + 6, 0,
-                                       static_cast<int>(std::round(pixelsPerBeat * quarterNotesPerBar)) - 12,
+                                       static_cast<int>(std::round(pixelsPerBeat * meterLengthAt(beat))) - 12,
                                        rulerHeight), Qt::AlignVCenter, QString::number(bar + 1));
             }
+            double nextBeat = beat + meterLengthAt(beat);
+            for (const TimeSignatureChange& change : localTimeSignatureChanges)
+                if (change.beat > beat + 1.0e-9 && change.beat < nextBeat)
+                {
+                    nextBeat = change.beat;
+                    break;
+                }
+            if (nextBeat <= beat + 1.0e-9)
+                break;
+            beat = nextBeat;
+            ++bar;
         }
 
         if (ghostNotesEnabled && !ghostNotes.isEmpty())
@@ -1328,12 +1362,42 @@ private:
     bool pitchBendLaneEnabled = false;
     double patternLength = 16.0;
     double quarterNotesPerBar = 4.0;
+    QVector<TimeSignatureChange> localTimeSignatureChanges{{0.0, 4, 4}};
     double snap = 0.25;
     double playheadBeat = -1.0;
     int pixelsPerBeat = 84;
     int rootPitchClass = 0;
     bool snapNewNotesToScale = false;
     bool ghostNotesEnabled = true;
+
+    double meterLengthAt(double beat) const
+    {
+        const auto next = std::upper_bound(localTimeSignatureChanges.cbegin(),
+            localTimeSignatureChanges.cend(), beat,
+            [](double value, const TimeSignatureChange& change) { return value < change.beat; });
+        const TimeSignatureChange& meter = next == localTimeSignatureChanges.cbegin()
+            ? localTimeSignatureChanges.first() : *(next - 1);
+        return static_cast<double>(meter.beatsPerBar) * 4.0 / meter.beatUnit;
+    }
+
+    bool isBarLineAtBeat(double beat) const
+    {
+        if (std::abs(beat) < 0.02)
+            return true;
+        double segmentStart = 0.0;
+        double segmentLength = meterLengthAt(0.0);
+        for (const TimeSignatureChange& change : localTimeSignatureChanges)
+        {
+            if (change.beat <= 1.0e-9)
+                continue;
+            if (change.beat > beat + 1.0e-9)
+                break;
+            segmentStart = change.beat;
+            segmentLength = static_cast<double>(change.beatsPerBar) * 4.0 / change.beatUnit;
+        }
+        const double offset = std::fmod(std::max(0.0, beat - segmentStart), segmentLength);
+        return std::min(offset, segmentLength - offset) < 0.02;
+    }
 };
 
 MidiEditor::MidiEditor(QWidget* parent) : QScrollArea(parent)
@@ -1381,6 +1445,11 @@ void MidiEditor::setPatternLengthBeats(double beats)
 void MidiEditor::setTimeSignature(int beatsPerBar, int beatUnit)
 {
     canvas->setTimeSignature(beatsPerBar, beatUnit);
+}
+
+void MidiEditor::setTimeSignatureMap(const QVector<TimeSignatureChange>& changes, double clipStartBeat)
+{
+    canvas->setTimeSignatureMap(changes, clipStartBeat);
 }
 
 void MidiEditor::setSnap(double beatStep)

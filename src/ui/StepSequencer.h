@@ -18,7 +18,9 @@ public:
 
     void setPattern(const QVector<MidiNote>& notes, double clipLengthBeats,
                     double quarterNotesPerBar, quint64 nextNoteId, bool available,
-                    int stepsPerBar = 16);
+                    int stepsPerBar = 16,
+                    const QVector<TimeSignatureChange>& meterChanges = {},
+                    double clipStartBeat = 0.0);
 
 signals:
     void notesEdited(QVector<MidiNote> before, QVector<MidiNote> after);
@@ -32,6 +34,9 @@ private:
     void setStepVelocity(int row, int column, int velocity);
     void setStepProbability(int row, int column, int probabilityPercent);
     void setStepRatchetCount(int row, int column, int ratchetCount);
+    double barStartBeat(int barIndex) const;
+    double meterLengthAt(double beat) const;
+    int totalBars() const;
 
     QSpinBox* barControl = nullptr;
     QComboBox* divisionControl = nullptr;
@@ -40,6 +45,7 @@ private:
     QVector<MidiNote> notes;
     double clipLengthBeats = 16.0;
     double quarterNotesPerBar = 4.0;
+    QVector<TimeSignatureChange> localTimeSignatureChanges;
     quint64 nextNoteId = 1;
     int stepsPerBar = 16;
     bool patternAvailable = false;

@@ -500,6 +500,7 @@ struct ProjectData
     double patternLengthBeats() const;
     double quarterNotesPerBar() const;
     double quarterNotesPerBarAtBeat(double beat) const;
+    TimeSignatureChange timeSignatureAtBeat(double beat) const;
     double songLengthBeats() const;
     double tempoAtBeat(double beat) const;
     double secondsAtBeat(double beat) const;

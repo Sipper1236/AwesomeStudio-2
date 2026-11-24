@@ -18,6 +18,7 @@ public:
     void setPitchBendRange(double semitones);
     void setPatternLengthBeats(double beats);
     void setTimeSignature(int beatsPerBar, int beatUnit);
+    void setTimeSignatureMap(const QVector<TimeSignatureChange>& changes, double clipStartBeat);
     void setSnap(double beatStep);
     void setScale(int rootPitchClass, const QVector<int>& intervals, bool snapNewNotes);
     void setGhostNotes(const QVector<MidiNote>& notes);

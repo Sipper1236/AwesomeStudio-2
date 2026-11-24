@@ -320,11 +320,17 @@ double ProjectData::quarterNotesPerBar() const
 
 double ProjectData::quarterNotesPerBarAtBeat(double beat) const
 {
+    const TimeSignatureChange meter = timeSignatureAtBeat(beat);
+    return static_cast<double>(meter.beatsPerBar) * 4.0 / meter.beatUnit;
+}
+
+TimeSignatureChange ProjectData::timeSignatureAtBeat(double beat) const
+{
     const auto next = std::upper_bound(timeSignatureChanges.cbegin(), timeSignatureChanges.cend(), beat,
         [](double value, const TimeSignatureChange& change) { return value < change.beat; });
-    const int numerator = next == timeSignatureChanges.cbegin() ? beatsPerBar : (next - 1)->beatsPerBar;
-    const int denominator = next == timeSignatureChanges.cbegin() ? beatUnit : (next - 1)->beatUnit;
-    return static_cast<double>(numerator) * 4.0 / denominator;
+    if (next == timeSignatureChanges.cbegin())
+        return {0.0, beatsPerBar, beatUnit};
+    return *(next - 1);
 }
 
 ProjectData::ProjectData()

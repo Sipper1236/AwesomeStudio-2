@@ -54,7 +54,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Named arrangement markers with ruler seeking and undoable editing
 - [x] Custom power and freehand drawn fades, portable media packaging, and WAV relinking
 - [x] Selectable audio output plus coded hardware loopback calibration with per-input/output compensation and input-buffer estimate subtraction
-- [ ] Broader meter-aware editing and snapping; physical validation across audio drivers
+- [x] Format-2 meter maps with meter-aware Playlist/piano-roll rulers, Playlist snapping, and step-sequencer bars
+- [ ] Physical validation across audio drivers; meter-aligned piano-roll snap divisions
 - [x] Mixer submix buses with track assignment, level/pan, mute/solo, parent routing, and metering
 - [x] Multiple post-track auxiliary sends per track to mixer buses
 - [x] Multiple post-fader auxiliary sends from buses to other mixer buses, with cycle prevention

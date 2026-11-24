@@ -2762,7 +2762,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
         midiEditor->setNotes(after);
         stepSequencer->setPattern(after, clip->lengthBeats, project.quarterNotesPerBar(),
-                                  project.nextNoteId(), true, clip->stepsPerBar);
+                                  project.nextNoteId(), true, clip->stepsPerBar,
+                                  project.timeSignatureChanges, clip->startBeat);
         undoStack.push(new NoteEditCommand(this, selectedTrackId, selectedClipId, before, after));
         refreshDirtyState();
         statusBar()->showMessage(tr("MIDI clip updated"), 1600);
@@ -3529,7 +3530,8 @@ void MainWindow::createToolBars()
         stepSequencer->setPattern(updatedClip == nullptr ? QVector<MidiNote>{} : updatedClip->notes,
                                   updatedClip == nullptr ? project.patternLengthBeats() : updatedClip->lengthBeats,
                                   project.quarterNotesPerBar(), project.nextNoteId(), updatedClip != nullptr,
-                                  updatedClip == nullptr ? 16 : updatedClip->stepsPerBar);
+                                  updatedClip == nullptr ? 16 : updatedClip->stepsPerBar,
+                                  project.timeSignatureChanges, updatedClip == nullptr ? 0.0 : updatedClip->startBeat);
         arrangementEditor->setProject(project);
         arrangementEditor->setSelection(selectedTrackId, selectedClipId);
         audioEngine.setProject(project);
@@ -3684,11 +3686,14 @@ void MainWindow::createToolBars()
         project.normalize();
         const MidiClip* clip = selectedClip();
         midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
+        midiEditor->setTimeSignatureMap(project.timeSignatureChanges,
+                                        clip == nullptr ? 0.0 : clip->startBeat);
         midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
         stepSequencer->setPattern(clip == nullptr ? QVector<MidiNote>{} : clip->notes,
                                   clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
                                   project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr,
-                                  clip == nullptr ? 16 : clip->stepsPerBar);
+                                  clip == nullptr ? 16 : clip->stepsPerBar,
+                                  project.timeSignatureChanges, clip == nullptr ? 0.0 : clip->startBeat);
         arrangementEditor->setProject(project);
         audioEngine.setProject(project);
         settingsDirty = true;
@@ -5441,6 +5446,8 @@ void MainWindow::refreshProjectUi()
         veryHighVelocityThresholdControls[pad]->setEnabled(sampleAssigned);
     }
     midiEditor->setTimeSignature(project.beatsPerBar, project.beatUnit);
+    midiEditor->setTimeSignatureMap(project.timeSignatureChanges,
+                                    clip == nullptr ? 0.0 : clip->startBeat);
     midiEditor->setPatternLengthBeats(clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats);
     midiEditor->setNotes(clip == nullptr ? QVector<MidiNote>{} : clip->notes);
     midiEditor->setPitchBends(clip == nullptr ? QVector<MidiPitchBend>{} : clip->pitchBends);
@@ -5454,7 +5461,8 @@ void MainWindow::refreshProjectUi()
     stepSequencer->setPattern(clip == nullptr ? QVector<MidiNote>{} : clip->notes,
                               clip == nullptr ? project.patternLengthBeats() : clip->lengthBeats,
                               project.quarterNotesPerBar(), project.nextNoteId(), clip != nullptr,
-                              clip == nullptr ? 16 : clip->stepsPerBar);
+                              clip == nullptr ? 16 : clip->stepsPerBar,
+                              project.timeSignatureChanges, clip == nullptr ? 0.0 : clip->startBeat);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     refreshPunchRangeUi();
@@ -10484,7 +10492,8 @@ void MainWindow::applyNoteHistory(quint64 trackId, quint64 clipId, const QVector
     stepSequencer->setPattern(currentClip == nullptr ? QVector<MidiNote>{} : currentClip->notes,
                               currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
                               project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr,
-                              currentClip == nullptr ? 16 : currentClip->stepsPerBar);
+                              currentClip == nullptr ? 16 : currentClip->stepsPerBar,
+                              project.timeSignatureChanges, currentClip == nullptr ? 0.0 : currentClip->startBeat);
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     audioEngine.setProject(project);
@@ -10502,7 +10511,8 @@ void MainWindow::applyStepDivisionHistory(quint64 trackId, quint64 clipId, int r
     stepSequencer->setPattern(currentClip == nullptr ? QVector<MidiNote>{} : currentClip->notes,
                               currentClip == nullptr ? project.patternLengthBeats() : currentClip->lengthBeats,
                               project.quarterNotesPerBar(), project.nextNoteId(), currentClip != nullptr,
-                              currentClip == nullptr ? 16 : currentClip->stepsPerBar);
+                              currentClip == nullptr ? 16 : currentClip->stepsPerBar,
+                              project.timeSignatureChanges, currentClip == nullptr ? 0.0 : currentClip->startBeat);
     audioEngine.setProject(project);
     refreshDirtyState();
 }
