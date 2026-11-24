@@ -35,6 +35,7 @@ jobs:
             libflac-dev \
             libsndfile1-dev \
             libmp3lame-dev \
+            librsvg2-bin \
             rpm
 
       - name: Configure Release build
@@ -50,6 +51,38 @@ jobs:
 
       - name: Build RPM package
         run: cpack --config build/CPackConfig.cmake -G RPM --verbose
+
+      - name: Build AppImage
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+            --output linuxdeploy-x86_64.AppImage
+          curl --fail --location --retry 3 \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage \
+            --output linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+
+          appdir="AppDir"
+          mkdir -p "$appdir/usr/bin" \
+            "$appdir/usr/share/applications" \
+            "$appdir/usr/share/icons/hicolor/scalable/apps"
+          install -Dm755 build/AwesomeStudio "$appdir/usr/bin/AwesomeStudio"
+          cp packaging/linux/awesome-studio.desktop "$appdir/usr/share/applications/"
+          cp packaging/linux/awesome-studio.svg "$appdir/usr/share/icons/hicolor/scalable/apps/"
+          rsvg-convert --width 256 --height 256 packaging/linux/awesome-studio.svg \
+            --output "$appdir/awesome-studio.png"
+
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+          QMAKE=/usr/bin/qmake6 \
+          LINUXDEPLOY_OUTPUT_APP_NAME=AwesomeStudio \
+          LINUXDEPLOY_OUTPUT_VERSION=0.2.0 \
+          LDAI_OUTPUT=AwesomeStudio-x86_64.AppImage \
+            ./linuxdeploy-x86_64.AppImage \
+              --appdir "$appdir" \
+              --desktop-file "$appdir/usr/share/applications/awesome-studio.desktop" \
+              --icon-file "$appdir/awesome-studio.png" \
+              --plugin qt \
+              --output appimage
 
       - name: Package Linux build archive
         run: |
@@ -78,5 +111,6 @@ jobs:
             AwesomeStudio-Linux-x86_64.tar.gz
             awesome-studio_0.2.0_amd64.deb
             awesome-studio-0.2.0-1.x86_64.rpm
+            AwesomeStudio-x86_64.AppImage
           if-no-files-found: error
           retention-days: 30

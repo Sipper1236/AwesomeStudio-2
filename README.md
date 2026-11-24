@@ -82,7 +82,7 @@ cmake --build build --parallel
 ./build/AwesomeStudio
 ```
 
-To download a Linux x86_64 build, open the repository's Actions tab and download the `AwesomeStudio-Linux-x86_64` artifact. It contains Ubuntu 24.04 `.deb` and `.rpm` packages, the dynamically linked executable, and a tar.gz archive with licenses and runtime notes. On Debian or Ubuntu, install the package with `sudo apt install ./awesome-studio_0.2.0_amd64.deb`; on Fedora-compatible systems, install the RPM with `sudo dnf install ./awesome-studio-0.2.0-1.x86_64.rpm`. The standalone archive requires Qt 6 Widgets/Multimedia and Linux audio runtime libraries to be installed separately.
+To download a Linux x86_64 build, open the repository's Actions tab and download the `AwesomeStudio-Linux-x86_64` artifact. It contains an AppImage, Ubuntu 24.04 `.deb` and `.rpm` packages, the dynamically linked executable, and a tar.gz archive with licenses and runtime notes. Make the AppImage executable and launch it directly. On Debian or Ubuntu, install the package with `sudo apt install ./awesome-studio_0.2.0_amd64.deb`; on Fedora-compatible systems, install the RPM with `sudo dnf install ./awesome-studio-0.2.0-1.x86_64.rpm`. The standalone archive requires Qt 6 Widgets/Multimedia and Linux audio runtime libraries to be installed separately.
 
 This development branch currently builds and packages Linux x86_64 only. Windows and macOS workflows and build artifacts are paused while Linux development continues.
 
