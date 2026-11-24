@@ -1051,6 +1051,11 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
         return &track.eqLowCrossoverAutomation;
     if (target == trackEqHighCrossoverAutomationTarget)
         return &track.eqHighCrossoverAutomation;
+    const int parametricEncoded = target - trackEqParametricAutomationTargetBase;
+    if (parametricEncoded >= 0 &&
+        parametricEncoded < parametricEqBandCount * 3)
+        return &track.eqParametricAutomation[static_cast<size_t>(parametricEncoded / 3)]
+                                                   [static_cast<size_t>(parametricEncoded % 3)];
     if (target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget)
     {
@@ -1111,6 +1116,11 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         return &track.eqLowCrossoverAutomation;
     if (target == trackEqHighCrossoverAutomationTarget)
         return &track.eqHighCrossoverAutomation;
+    const int parametricEncoded = target - trackEqParametricAutomationTargetBase;
+    if (parametricEncoded >= 0 &&
+        parametricEncoded < parametricEqBandCount * 3)
+        return &track.eqParametricAutomation[static_cast<size_t>(parametricEncoded / 3)]
+                                                   [static_cast<size_t>(parametricEncoded % 3)];
     if (target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget)
     {
@@ -1187,6 +1197,26 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
         addTarget(QObject::tr("Mid/high EQ crossover"),
                   trackEqHighCrossoverAutomationTarget, 500.0f, 20000.0f,
                   track->eqHighCrossoverHz, QString());
+        const std::array<QString, 3> parametricLabels = {
+            QObject::tr("frequency"), QObject::tr("gain"), QObject::tr("Q")
+        };
+        const std::array<float, 3> parametricMinimum = {20.0f, -18.0f, 0.1f};
+        const std::array<float, 3> parametricMaximum = {20000.0f, 18.0f, 10.0f};
+        for (int bandIndex = 0; bandIndex < parametricEqBandCount; ++bandIndex)
+        {
+            const ParametricEqBand& band = track->eqParametricBands[
+                static_cast<size_t>(bandIndex)];
+            const std::array<float, 3> values = {
+                band.frequencyHz, band.gainDb, band.q
+            };
+            for (int parameterIndex = 0; parameterIndex < 3; ++parameterIndex)
+                addTarget(QObject::tr("Bell %1 %2").arg(bandIndex + 1)
+                              .arg(parametricLabels[static_cast<size_t>(parameterIndex)]),
+                          trackEqParametricAutomationTarget(bandIndex, parameterIndex),
+                          parametricMinimum[static_cast<size_t>(parameterIndex)],
+                          parametricMaximum[static_cast<size_t>(parameterIndex)],
+                          values[static_cast<size_t>(parameterIndex)], QString());
+        }
         if (track->instrumentType == InstrumentType::Synth)
         {
             addTarget(QObject::tr("Synth filter cutoff"), synthFilterCutoffAutomationTarget,

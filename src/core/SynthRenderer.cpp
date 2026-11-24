@@ -198,6 +198,24 @@ const SynthRenderer::TrackMixValue& SynthRenderer::trackMixAt(size_t trackIndex,
             1.0 - std::exp(-twoPi * lowCrossoverHz / sampleRate));
         rendered.highBandCoefficient = static_cast<float>(
             1.0 - std::exp(-twoPi * highCrossoverHz / sampleRate));
+        for (size_t bandIndex = 0; bandIndex < automation.baseParametricEqBands.size();
+             ++bandIndex)
+        {
+            ParametricEqBand band = automation.baseParametricEqBands[bandIndex];
+            if (automation.parametricEqAutomationActive[bandIndex])
+            {
+                band.frequencyHz = automationValue(
+                    automation.parametricEqAutomation[bandIndex][0], beat, band.frequencyHz);
+                band.gainDb = automationValue(
+                    automation.parametricEqAutomation[bandIndex][1], beat, band.gainDb);
+                band.q = automationValue(
+                    automation.parametricEqAutomation[bandIndex][2], beat, band.q);
+            }
+            band.frequencyHz = std::clamp(band.frequencyHz, 20.0f, 20000.0f);
+            band.gainDb = std::clamp(band.gainDb, -18.0f, 18.0f);
+            band.q = std::clamp(band.q, 0.1f, 10.0f);
+            rendered.parametricEqBands[bandIndex] = band;
+        }
         const float effectiveVolume = live.volume >= 0.0f ? std::clamp(live.volume, 0.0f, 1.0f) : volume;
         const float effectivePan = live.pan >= -1.0f && live.pan <= 1.0f
             ? std::clamp(live.pan, -1.0f, 1.0f) : pan;
@@ -329,6 +347,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         mixAutomation.baseEqualizerDb = {track.eqLowDb, track.eqMidDb, track.eqHighDb};
         mixAutomation.baseEqualizerCrossoverHz = {track.eqLowCrossoverHz,
                                                   track.eqHighCrossoverHz};
+        mixAutomation.baseParametricEqBands = track.eqParametricBands;
         mixAutomation.volume = track.volumeAutomation;
         mixAutomation.pan = track.panAutomation;
         mixAutomation.equalizerGain = {track.eqLowGainAutomation,
@@ -336,6 +355,13 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                                        track.eqHighGainAutomation};
         mixAutomation.equalizerCrossover = {track.eqLowCrossoverAutomation,
                                             track.eqHighCrossoverAutomation};
+        mixAutomation.parametricEqAutomation = track.eqParametricAutomation;
+        for (size_t bandIndex = 0; bandIndex < mixAutomation.parametricEqAutomation.size();
+             ++bandIndex)
+            mixAutomation.parametricEqAutomationActive[bandIndex] = std::any_of(
+                mixAutomation.parametricEqAutomation[bandIndex].cbegin(),
+                mixAutomation.parametricEqAutomation[bandIndex].cend(),
+                [](const QVector<AutomationPoint>& points) { return !points.isEmpty(); });
         trackMixAutomations.push_back(std::move(mixAutomation));
         TrackEqualizerState& equalizerState = trackEqualizerStates[trackIndex];
         const double maximumCutoff = std::max(20.0, sampleRate * 0.49);
@@ -348,8 +374,11 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         equalizerState.highBandCoefficient = static_cast<float>(
             1.0 - std::exp(-twoPi * highCutoff / sampleRate));
         for (size_t bandIndex = 0; bandIndex < equalizerState.parametricCoefficients.size(); ++bandIndex)
+        {
             equalizerState.parametricCoefficients[bandIndex] = makeParametricEqCoefficients(
                 track.eqParametricBands[bandIndex], sampleRate);
+            equalizerState.parametricBandSettings[bandIndex] = track.eqParametricBands[bandIndex];
+        }
         if (track.instrumentType == InstrumentType::Synth && track.synthFilterEnabled)
         {
             MixerEffect instrumentFilter = defaultMixerEffect(MixerEffectType::LowPass);
@@ -1393,6 +1422,25 @@ StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample 
     TrackEqualizerState& state = trackEqualizerStates[trackIndex];
     state.lowBandCoefficient = mix.lowBandCoefficient;
     state.highBandCoefficient = mix.highBandCoefficient;
+    const TrackMixAutomation& automation = trackMixAutomations[trackIndex];
+    if ((mixerFrameNumber & 0x0fU) == 0U)
+    {
+        for (size_t bandIndex = 0; bandIndex < automation.parametricEqAutomationActive.size();
+             ++bandIndex)
+        {
+            if (!automation.parametricEqAutomationActive[bandIndex])
+                continue;
+            const ParametricEqBand& requested = mix.parametricEqBands[bandIndex];
+            ParametricEqBand& previous = state.parametricBandSettings[bandIndex];
+            if (std::abs(requested.frequencyHz - previous.frequencyHz) < 0.01f &&
+                std::abs(requested.gainDb - previous.gainDb) < 0.001f &&
+                std::abs(requested.q - previous.q) < 0.001f)
+                continue;
+            state.parametricCoefficients[bandIndex] = makeParametricEqCoefficients(
+                requested, sampleRate);
+            previous = requested;
+        }
+    }
     const bool legacyActive = std::abs(gains[0] - 1.0f) >= 1.0e-6f ||
                               std::abs(gains[1] - 1.0f) >= 1.0e-6f ||
                               std::abs(gains[2] - 1.0f) >= 1.0e-6f;
@@ -1403,15 +1451,21 @@ StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample 
         trackMixAutomations[trackIndex].equalizerGain.cbegin(),
         trackMixAutomations[trackIndex].equalizerGain.cend(),
         [](const QVector<AutomationPoint>& points) { return !points.isEmpty(); });
-    if (!legacyActive && !parametricActive && !automated)
+    const bool parametricAutomated = std::any_of(
+        trackMixAutomations[trackIndex].parametricEqAutomationActive.cbegin(),
+        trackMixAutomations[trackIndex].parametricEqAutomationActive.cend(),
+        [](bool active) { return active; });
+    if (!legacyActive && !parametricActive && !automated && !parametricAutomated)
     {
         const float lowCoefficient = state.lowBandCoefficient;
         const float highCoefficient = state.highBandCoefficient;
         const auto parametricCoefficients = state.parametricCoefficients;
+        const auto parametricBandSettings = state.parametricBandSettings;
         state = {};
         state.lowBandCoefficient = lowCoefficient;
         state.highBandCoefficient = highCoefficient;
         state.parametricCoefficients = parametricCoefficients;
+        state.parametricBandSettings = parametricBandSettings;
         return input;
     }
 
@@ -1458,10 +1512,12 @@ void SynthRenderer::resetTrackEqualizers()
         const float lowCoefficient = state.lowBandCoefficient;
         const float highCoefficient = state.highBandCoefficient;
         const auto parametricCoefficients = state.parametricCoefficients;
+        const auto parametricBandSettings = state.parametricBandSettings;
         state = {};
         state.lowBandCoefficient = lowCoefficient;
         state.highBandCoefficient = highCoefficient;
         state.parametricCoefficients = parametricCoefficients;
+        state.parametricBandSettings = parametricBandSettings;
     }
     activeEqualizerTailTracks.clear();
 }

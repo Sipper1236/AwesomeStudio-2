@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 59;
+constexpr int currentProjectVersion = 60;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -652,6 +652,18 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                  });
              return bands;
          }()},
+        {QStringLiteral("eqParametricAutomation"), [&track]
+         {
+             QJsonArray bands;
+             for (const auto& bandAutomation : track.eqParametricAutomation)
+             {
+                 QJsonArray parameters;
+                 for (const QVector<AutomationPoint>& points : bandAutomation)
+                     parameters.push_back(saveAutomation(points));
+                 bands.push_back(parameters);
+             }
+             return bands;
+         }()},
         {QStringLiteral("outputBusId"), static_cast<qint64>(track.outputBusId)},
         {QStringLiteral("effects"), saveEffects(track.effects)},
         {QStringLiteral("sends"), [&track]
@@ -1035,6 +1047,34 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                     bandObject.value(QStringLiteral("gainDb")).toDouble(band.gainDb));
                 band.q = static_cast<float>(
                     bandObject.value(QStringLiteral("q")).toDouble(band.q));
+            }
+        }
+    }
+    if (version >= 60)
+    {
+        const QJsonValue automationValue = object.value(QStringLiteral("eqParametricAutomation"));
+        if (!automationValue.isArray() ||
+            automationValue.toArray().size() != parametricEqBandCount)
+        {
+            setError(error, QStringLiteral("The track has invalid parametric EQ automation."));
+            return false;
+        }
+        const QJsonArray bands = automationValue.toArray();
+        for (qsizetype bandIndex = 0; bandIndex < bands.size(); ++bandIndex)
+        {
+            if (!bands[bandIndex].isArray() || bands[bandIndex].toArray().size() != 3)
+            {
+                setError(error, QStringLiteral("The track has invalid parametric EQ automation."));
+                return false;
+            }
+            const QJsonArray parameters = bands[bandIndex].toArray();
+            for (qsizetype parameterIndex = 0; parameterIndex < parameters.size(); ++parameterIndex)
+            {
+                if (!loadAutomation(parameters[parameterIndex],
+                                    track.eqParametricAutomation[static_cast<size_t>(bandIndex)]
+                                        [static_cast<size_t>(parameterIndex)],
+                                    QStringLiteral("parametric EQ"), version, error))
+                    return false;
             }
         }
     }

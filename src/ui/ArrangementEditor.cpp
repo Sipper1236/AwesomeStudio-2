@@ -1094,6 +1094,12 @@ private:
             return track.eqLowCrossoverAutomation;
         if (automationParameter == trackEqHighCrossoverAutomationTarget)
             return track.eqHighCrossoverAutomation;
+        const int parametricEncoded = automationParameter -
+            trackEqParametricAutomationTargetBase;
+        if (parametricEncoded >= 0 &&
+            parametricEncoded < parametricEqBandCount * 3)
+            return track.eqParametricAutomation[static_cast<size_t>(parametricEncoded / 3)]
+                                                   [static_cast<size_t>(parametricEncoded % 3)];
         static const QVector<AutomationPoint> empty;
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)
@@ -1151,6 +1157,20 @@ private:
             return track.eqLowCrossoverHz;
         if (automationParameter == trackEqHighCrossoverAutomationTarget)
             return track.eqHighCrossoverHz;
+        const int parametricEncoded = automationParameter -
+            trackEqParametricAutomationTargetBase;
+        if (parametricEncoded >= 0 &&
+            parametricEncoded < parametricEqBandCount * 3)
+        {
+            const ParametricEqBand& band = track.eqParametricBands[
+                static_cast<size_t>(parametricEncoded / 3)];
+            switch (parametricEncoded % 3)
+            {
+                case 0: return band.frequencyHz;
+                case 1: return band.gainDb;
+                default: return band.q;
+            }
+        }
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)
         {
@@ -1207,6 +1227,12 @@ private:
             return track.eqLowCrossoverAutomation;
         if (automationParameter == trackEqHighCrossoverAutomationTarget)
             return track.eqHighCrossoverAutomation;
+        const int parametricEncoded = automationParameter -
+            trackEqParametricAutomationTargetBase;
+        if (parametricEncoded >= 0 &&
+            parametricEncoded < parametricEqBandCount * 3)
+            return track.eqParametricAutomation[static_cast<size_t>(parametricEncoded / 3)]
+                                                   [static_cast<size_t>(parametricEncoded % 3)];
         static QVector<AutomationPoint> invalid;
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)
@@ -1259,7 +1285,10 @@ private:
             automationParameter == trackEqMidGainAutomationTarget ||
             automationParameter == trackEqHighGainAutomationTarget ||
             automationParameter == trackEqLowCrossoverAutomationTarget ||
-            automationParameter == trackEqHighCrossoverAutomationTarget)
+            automationParameter == trackEqHighCrossoverAutomationTarget ||
+            (automationParameter >= trackEqParametricAutomationTargetBase &&
+             automationParameter < trackEqParametricAutomationTargetBase +
+                 parametricEqBandCount * 3))
             return true;
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)

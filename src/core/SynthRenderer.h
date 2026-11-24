@@ -149,10 +149,14 @@ private:
         float basePan = 0.0f;
         std::array<float, 3> baseEqualizerDb{};
         std::array<float, 2> baseEqualizerCrossoverHz{};
+        std::array<ParametricEqBand, parametricEqBandCount> baseParametricEqBands{};
         QVector<AutomationPoint> volume;
         QVector<AutomationPoint> pan;
         std::array<QVector<AutomationPoint>, 3> equalizerGain;
         std::array<QVector<AutomationPoint>, 2> equalizerCrossover;
+        std::array<std::array<QVector<AutomationPoint>, 3>, parametricEqBandCount>
+            parametricEqAutomation;
+        std::array<bool, parametricEqBandCount> parametricEqAutomationActive{};
     };
 
     struct TrackMixValue
@@ -163,6 +167,7 @@ private:
         std::array<float, 3> equalizerGains{1.0f, 1.0f, 1.0f};
         float lowBandCoefficient = 0.0f;
         float highBandCoefficient = 0.0f;
+        std::array<ParametricEqBand, parametricEqBandCount> parametricEqBands{};
     };
 
     struct LiveTrackMixOverride
@@ -198,6 +203,7 @@ private:
         float lowBandCoefficient = 0.0f;
         float highBandCoefficient = 0.0f;
         std::array<ParametricEqCoefficients, parametricEqBandCount> parametricCoefficients{};
+        std::array<ParametricEqBand, parametricEqBandCount> parametricBandSettings{};
         std::array<std::array<ParametricEqDelay, 2>, 3> parametricDelays{};
         bool tailActive = false;
     };

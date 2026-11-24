@@ -381,6 +381,11 @@ struct ParametricEqBand
 };
 
 constexpr int parametricEqBandCount = 7;
+inline constexpr int trackEqParametricAutomationTargetBase = 10100;
+inline constexpr int trackEqParametricAutomationTarget(int band, int parameter)
+{
+    return trackEqParametricAutomationTargetBase + band * 3 + parameter;
+}
 
 struct InstrumentTrack
 {
@@ -428,6 +433,8 @@ struct InstrumentTrack
         {40.0f, 0.0f, 0.707f}, {350.0f, 0.0f, 0.707f},
         {3000.0f, 0.0f, 0.707f}, {16000.0f, 0.0f, 0.707f}
     }};
+    std::array<std::array<QVector<AutomationPoint>, 3>, parametricEqBandCount>
+        eqParametricAutomation{};
     quint64 outputBusId = 0;
     QVector<MixerSend> sends;
     QVector<MixerEffect> effects;

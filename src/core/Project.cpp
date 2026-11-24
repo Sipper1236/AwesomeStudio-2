@@ -737,14 +737,19 @@ void ProjectData::normalize()
         track.eqLowCrossoverHz = std::clamp(track.eqLowCrossoverHz, 20.0f, 2000.0f);
         track.eqHighCrossoverHz = std::clamp(track.eqHighCrossoverHz,
             std::max(500.0f, track.eqLowCrossoverHz + 1.0f), 20000.0f);
-        for (ParametricEqBand& band : track.eqParametricBands)
+        for (size_t bandIndex = 0; bandIndex < track.eqParametricBands.size(); ++bandIndex)
         {
+            ParametricEqBand& band = track.eqParametricBands[bandIndex];
             if (!std::isfinite(band.frequencyHz)) band.frequencyHz = 1000.0f;
             if (!std::isfinite(band.gainDb)) band.gainDb = 0.0f;
             if (!std::isfinite(band.q)) band.q = 0.707f;
             band.frequencyHz = std::clamp(band.frequencyHz, 20.0f, 20000.0f);
             band.gainDb = std::clamp(band.gainDb, -18.0f, 18.0f);
             band.q = std::clamp(band.q, 0.1f, 10.0f);
+            auto& automation = track.eqParametricAutomation[bandIndex];
+            normalizeAutomation(automation[0], 20.0f, 20000.0f);
+            normalizeAutomation(automation[1], -18.0f, 18.0f);
+            normalizeAutomation(automation[2], 0.1f, 10.0f);
         }
         normalizeAutomation(track.volumeAutomation, 0.0f, 1.0f);
         normalizeAutomation(track.panAutomation, -1.0f, 1.0f);
