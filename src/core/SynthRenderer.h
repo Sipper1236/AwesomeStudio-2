@@ -4,6 +4,7 @@
 #include "Lv2AudioEffect.h"
 #include "Project.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -189,10 +190,49 @@ private:
         float rightGain = 1.0f;
     };
 
+    struct LatencyDelayLine
+    {
+        std::vector<StereoSample> samples;
+        size_t readIndex = 0;
+        size_t pendingFrames = 0;
+
+        void configure(qint64 frames)
+        {
+            const size_t delayFrames = frames > 0 ? static_cast<size_t>(frames) : 0;
+            samples.assign(delayFrames, StereoSample{});
+            readIndex = 0;
+            pendingFrames = 0;
+        }
+
+        void reset()
+        {
+            std::fill(samples.begin(), samples.end(), StereoSample{});
+            readIndex = 0;
+            pendingFrames = 0;
+        }
+
+        StereoSample process(StereoSample input)
+        {
+            if (samples.empty())
+                return input;
+            const StereoSample output = samples[readIndex];
+            samples[readIndex] = input;
+            readIndex = (readIndex + 1) % samples.size();
+            if (input.left != 0.0f || input.right != 0.0f)
+                pendingFrames = samples.size();
+            else if (pendingFrames > 0)
+                --pendingFrames;
+            return output;
+        }
+
+        bool hasPending() const { return pendingFrames > 0; }
+    };
+
     struct TrackSendMix
     {
         int busIndex = -1;
         float gain = 0.0f;
+        LatencyDelayLine latencyDelay;
     };
 
     struct EffectState
@@ -221,10 +261,12 @@ private:
     };
 
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
-    void addTrackSample(size_t trackIndex, float left, float right);
+    void addTrackSample(size_t trackIndex, float left, float right,
+                        bool clapInstrumentOutput = false);
     void addBusFrameSample(size_t busIndex, StereoSample input);
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
     void resetTrackEqualizers();
+    void resetLatencyCompensation();
     static ParametricEqCoefficients makeParametricEqCoefficients(
         const ParametricEqBand& band, double sampleRate);
     void prepareEffectChain(const QVector<MixerEffect>& settings, std::vector<EffectState>& states);
@@ -255,6 +297,8 @@ private:
     std::vector<unsigned char> trackEffectHasTail;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;
+    std::vector<LatencyDelayLine> trackMainLatencyDelays;
+    std::vector<LatencyDelayLine> trackInstrumentSourceLatencyDelays;
     std::vector<std::vector<TrackSendMix>> trackSends;
     std::vector<unsigned char> trackAudible;
     std::vector<BusMixState> busMixStates;
@@ -262,6 +306,7 @@ private:
     std::vector<unsigned char> busEffectHasTail;
     std::vector<std::vector<TrackSendMix>> busSends;
     std::vector<int> busOutputIndices;
+    std::vector<LatencyDelayLine> busMainLatencyDelays;
     std::vector<unsigned char> busInputAudible;
     std::vector<unsigned char> busOutputAudible;
     std::vector<unsigned char> busSoloDownstreamAudible;
@@ -272,6 +317,7 @@ private:
     std::vector<size_t> touchedBusIndices;
     std::vector<float> busPeakLevels;
     std::vector<StereoSample> trackFrameSamples;
+    std::vector<StereoSample> trackFrameClapInstrumentSamples;
     std::vector<unsigned char> trackFrameTouched;
     std::vector<size_t> touchedTrackIndices;
     std::vector<float> trackPeakLevels;

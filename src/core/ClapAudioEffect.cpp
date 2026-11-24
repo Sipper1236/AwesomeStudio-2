@@ -777,6 +777,15 @@ bool ClapAudioPluginInstance::isValid() const
 #endif
 }
 
+int ClapAudioPluginInstance::hostBufferingLatencyFrames() const
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    return isValid() ? static_cast<int>(clapBlockFrames) : 0;
+#else
+    return 0;
+#endif
+}
+
 qsizetype ClapAudioPluginInstance::parameterCount() const
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)

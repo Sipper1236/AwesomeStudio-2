@@ -204,6 +204,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackEffectHasTail.clear();
     activeEqualizerTailTracks.clear();
     trackBusIndices.clear();
+    trackMainLatencyDelays.clear();
+    trackInstrumentSourceLatencyDelays.clear();
     trackSends.clear();
     trackAudible.clear();
     busMixStates.clear();
@@ -211,6 +213,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     busEffectHasTail.clear();
     busSends.clear();
     busOutputIndices.clear();
+    busMainLatencyDelays.clear();
     busInputAudible.clear();
     busOutputAudible.clear();
     busSoloDownstreamAudible.clear();
@@ -221,6 +224,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     touchedBusIndices.clear();
     busPeakLevels.clear();
     trackFrameSamples.clear();
+    trackFrameClapInstrumentSamples.clear();
     trackFrameTouched.clear();
     touchedTrackIndices.clear();
     trackPeakLevels.clear();
@@ -253,6 +257,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     clapInstrumentLiveParameterOverrides.resize(static_cast<size_t>(project->tracks.size()));
     trackEffectHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
     trackBusIndices.resize(static_cast<size_t>(project->tracks.size()), -1);
+    trackMainLatencyDelays.resize(static_cast<size_t>(project->tracks.size()));
+    trackInstrumentSourceLatencyDelays.resize(static_cast<size_t>(project->tracks.size()));
     trackSends.resize(static_cast<size_t>(project->tracks.size()));
     trackAudible.assign(static_cast<size_t>(project->tracks.size()), 0);
     busMixStates.reserve(static_cast<size_t>(project->buses.size()));
@@ -260,6 +266,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     busEffectHasTail.assign(static_cast<size_t>(project->buses.size()), 0);
     busSends.resize(static_cast<size_t>(project->buses.size()));
     busOutputIndices.assign(static_cast<size_t>(project->buses.size()), -1);
+    busMainLatencyDelays.resize(static_cast<size_t>(project->buses.size()));
     busInputAudible.assign(static_cast<size_t>(project->buses.size()), 0);
     busOutputAudible.assign(static_cast<size_t>(project->buses.size()), 0);
     busSoloDownstreamAudible.assign(static_cast<size_t>(project->buses.size()), 0);
@@ -270,6 +277,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     touchedBusIndices.reserve(static_cast<size_t>(project->buses.size()));
     busPeakLevels.assign(static_cast<size_t>(project->buses.size()), 0.0f);
     trackFrameSamples.resize(static_cast<size_t>(project->tracks.size()));
+    trackFrameClapInstrumentSamples.resize(static_cast<size_t>(project->tracks.size()));
     trackFrameTouched.assign(static_cast<size_t>(project->tracks.size()), 0);
     touchedTrackIndices.reserve(static_cast<size_t>(project->tracks.size()));
     trackPeakLevels.assign(static_cast<size_t>(project->tracks.size()), 0.0f);
@@ -340,7 +348,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         {
             const auto sendBus = busIndexById.find(send.busId);
             if (sendBus != busIndexById.end())
-                busSends[busIndex].push_back({sendBus->second, send.gain});
+                busSends[busIndex].push_back({sendBus->second, send.gain, {}});
         }
     }
 
@@ -477,7 +485,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         {
             const auto sendBusPosition = busIndexById.find(send.busId);
             if (sendBusPosition != busIndexById.end())
-                trackSends[trackIndex].push_back({sendBusPosition->second, send.gain});
+                trackSends[trackIndex].push_back({sendBusPosition->second, send.gain, {}});
         }
         const bool audible = !track.muted && (!hasTrackSolo || track.solo);
         trackAudible[trackIndex] = audible ? 1 : 0;
@@ -717,6 +725,95 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
             }
         }
     }
+
+    const auto effectChainBufferingLatency = [](const std::vector<EffectState>& effects)
+    {
+        qint64 frames = 0;
+        for (const EffectState& effect : effects)
+            if (effect.clapEffect != nullptr)
+                frames += effect.clapEffect->hostBufferingLatencyFrames();
+        return frames;
+    };
+    std::vector<qint64> trackSignalLatencies(trackEffectStates.size(), 0);
+    std::vector<qint64> busInputLatencies(busEffectStates.size(), 0);
+    std::vector<qint64> busSignalLatencies(busEffectStates.size(), 0);
+    for (size_t trackIndex = 0; trackIndex < trackSignalLatencies.size(); ++trackIndex)
+    {
+        if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
+        {
+            const qint64 instrumentLatency =
+                clapInstruments[trackIndex]->hostBufferingLatencyFrames();
+            trackInstrumentSourceLatencyDelays[trackIndex].configure(instrumentLatency);
+            trackSignalLatencies[trackIndex] += instrumentLatency;
+        }
+        trackSignalLatencies[trackIndex] +=
+            effectChainBufferingLatency(trackEffectStates[trackIndex]);
+    }
+
+    qint64 masterInputLatency = 0;
+    for (size_t trackIndex = 0; trackIndex < trackSignalLatencies.size(); ++trackIndex)
+    {
+        const int outputBus = trackBusIndices[trackIndex];
+        if (outputBus >= 0 && static_cast<size_t>(outputBus) < busInputLatencies.size())
+            busInputLatencies[static_cast<size_t>(outputBus)] = std::max(
+                busInputLatencies[static_cast<size_t>(outputBus)],
+                trackSignalLatencies[trackIndex]);
+        else
+            masterInputLatency = std::max(masterInputLatency, trackSignalLatencies[trackIndex]);
+
+        for (TrackSendMix& send : trackSends[trackIndex])
+            if (send.busIndex >= 0 && static_cast<size_t>(send.busIndex) < busInputLatencies.size())
+                busInputLatencies[static_cast<size_t>(send.busIndex)] = std::max(
+                    busInputLatencies[static_cast<size_t>(send.busIndex)],
+                    trackSignalLatencies[trackIndex]);
+    }
+    for (const size_t busIndex : busRouteOrder)
+    {
+        busSignalLatencies[busIndex] = busInputLatencies[busIndex] +
+            effectChainBufferingLatency(busEffectStates[busIndex]);
+        const int parentBus = busOutputIndices[busIndex];
+        if (parentBus >= 0 && static_cast<size_t>(parentBus) < busInputLatencies.size())
+            busInputLatencies[static_cast<size_t>(parentBus)] = std::max(
+                busInputLatencies[static_cast<size_t>(parentBus)], busSignalLatencies[busIndex]);
+        else
+            masterInputLatency = std::max(masterInputLatency, busSignalLatencies[busIndex]);
+
+        for (TrackSendMix& send : busSends[busIndex])
+            if (send.busIndex >= 0 && static_cast<size_t>(send.busIndex) < busInputLatencies.size())
+                busInputLatencies[static_cast<size_t>(send.busIndex)] = std::max(
+                    busInputLatencies[static_cast<size_t>(send.busIndex)],
+                    busSignalLatencies[busIndex]);
+    }
+
+    for (size_t trackIndex = 0; trackIndex < trackSignalLatencies.size(); ++trackIndex)
+    {
+        const int outputBus = trackBusIndices[trackIndex];
+        const qint64 destinationLatency = outputBus >= 0 &&
+                static_cast<size_t>(outputBus) < busInputLatencies.size()
+            ? busInputLatencies[static_cast<size_t>(outputBus)] : masterInputLatency;
+        trackMainLatencyDelays[trackIndex].configure(
+            std::max<qint64>(0, destinationLatency - trackSignalLatencies[trackIndex]));
+        for (TrackSendMix& send : trackSends[trackIndex])
+            if (send.busIndex >= 0 && static_cast<size_t>(send.busIndex) < busInputLatencies.size())
+                send.latencyDelay.configure(std::max<qint64>(0,
+                    busInputLatencies[static_cast<size_t>(send.busIndex)] -
+                    trackSignalLatencies[trackIndex]));
+    }
+    for (size_t busIndex = 0; busIndex < busSignalLatencies.size(); ++busIndex)
+    {
+        const int parentBus = busOutputIndices[busIndex];
+        const qint64 destinationLatency = parentBus >= 0 &&
+                static_cast<size_t>(parentBus) < busInputLatencies.size()
+            ? busInputLatencies[static_cast<size_t>(parentBus)] : masterInputLatency;
+        busMainLatencyDelays[busIndex].configure(
+            std::max<qint64>(0, destinationLatency - busSignalLatencies[busIndex]));
+        for (TrackSendMix& send : busSends[busIndex])
+            if (send.busIndex >= 0 && static_cast<size_t>(send.busIndex) < busInputLatencies.size())
+                send.latencyDelay.configure(std::max<qint64>(0,
+                    busInputLatencies[static_cast<size_t>(send.busIndex)] -
+                    busSignalLatencies[busIndex]));
+    }
+
     std::sort(notes.begin(), notes.end(), [](const VoiceNote& left, const VoiceNote& right)
     {
         return left.startFrame < right.startFrame;
@@ -755,6 +852,7 @@ void SynthRenderer::resetTransport()
     activeNotes.clear();
     activeAudioRegions.clear();
     resetTrackEqualizers();
+    resetLatencyCompensation();
     for (std::vector<EffectState>& effects : trackEffectStates)
         resetEffectChain(effects);
     for (size_t trackIndex = 0; trackIndex < trackInstrumentFilterStates.size(); ++trackIndex)
@@ -781,6 +879,8 @@ void SynthRenderer::resetTransport()
               synthFilterEnvelopeAppliedOffsets.end(), 0.0f);
     std::fill(busEffectHasTail.begin(), busEffectHasTail.end(), 0);
     std::fill(trackFrameSamples.begin(), trackFrameSamples.end(), StereoSample{});
+    std::fill(trackFrameClapInstrumentSamples.begin(),
+              trackFrameClapInstrumentSamples.end(), StereoSample{});
     std::fill(trackFrameTouched.begin(), trackFrameTouched.end(), 0);
     touchedTrackIndices.clear();
     std::fill(busFrameSamples.begin(), busFrameSamples.end(), StereoSample{});
@@ -904,13 +1004,22 @@ StereoSample SynthRenderer::finishMixerFrame()
         float left = 0.0f;
         float right = 0.0f;
         if (instrument->process(left, right))
-            addTrackSample(trackIndex, left, right);
+            addTrackSample(trackIndex, left, right, true);
     }
 
     for (size_t trackIndex = 0; trackIndex < trackEffectHasTail.size(); ++trackIndex)
     {
-        if ((trackEffectHasTail[trackIndex] != 0 || trackInstrumentFilterHasTail[trackIndex] != 0) &&
-            trackIndex < trackFrameTouched.size() && trackFrameTouched[trackIndex] == 0)
+        bool hasLatencyTail = trackIndex < trackMainLatencyDelays.size() &&
+            trackMainLatencyDelays[trackIndex].hasPending();
+        if (trackIndex < trackInstrumentSourceLatencyDelays.size())
+            hasLatencyTail = hasLatencyTail ||
+                trackInstrumentSourceLatencyDelays[trackIndex].hasPending();
+        if (trackIndex < trackSends.size())
+            for (const TrackSendMix& send : trackSends[trackIndex])
+                hasLatencyTail = hasLatencyTail || send.latencyDelay.hasPending();
+        if ((trackEffectHasTail[trackIndex] != 0 || trackInstrumentFilterHasTail[trackIndex] != 0 ||
+             hasLatencyTail) && trackIndex < trackFrameTouched.size() &&
+            trackFrameTouched[trackIndex] == 0)
             addTrackSample(trackIndex, 0.0f, 0.0f);
     }
     for (const size_t trackIndex : activeEqualizerTailTracks)
@@ -922,6 +1031,10 @@ StereoSample SynthRenderer::finishMixerFrame()
     for (const size_t trackIndex : touchedTrackIndices)
     {
         StereoSample trackSample = trackFrameSamples[trackIndex];
+        if (trackIndex < trackInstrumentSourceLatencyDelays.size())
+            trackSample = trackInstrumentSourceLatencyDelays[trackIndex].process(trackSample);
+        trackSample.left += trackFrameClapInstrumentSamples[trackIndex].left;
+        trackSample.right += trackFrameClapInstrumentSamples[trackIndex].right;
         if (!trackInstrumentFilterStates[trackIndex].empty())
         {
             const bool filterControlTick = (mixerFrameNumber & 0x0fU) == 0U;
@@ -981,28 +1094,33 @@ StereoSample SynthRenderer::finishMixerFrame()
         trackPeakLevels[trackIndex] = std::max(trackPeakLevels[trackIndex],
             std::max(std::abs(trackSample.left), std::abs(trackSample.right)));
 
+        const StereoSample mainRouteSample =
+            trackMainLatencyDelays[trackIndex].process(trackSample);
         const int busIndex = trackBusIndices[trackIndex];
         if (busIndex >= 0 && static_cast<size_t>(busIndex) < busFrameSamples.size())
         {
             if (busInputAudible[static_cast<size_t>(busIndex)] != 0)
-                addBusFrameSample(static_cast<size_t>(busIndex), trackSample);
+                addBusFrameSample(static_cast<size_t>(busIndex), mainRouteSample);
         }
         else if (!hasBusSolo)
         {
-            masterSample.left += trackSample.left;
-            masterSample.right += trackSample.right;
+            masterSample.left += mainRouteSample.left;
+            masterSample.right += mainRouteSample.right;
         }
-        for (const TrackSendMix& send : trackSends[trackIndex])
+        for (TrackSendMix& send : trackSends[trackIndex])
         {
             if (send.gain > 0.0f && send.busIndex >= 0 &&
                 static_cast<size_t>(send.busIndex) < busFrameSamples.size() &&
                 busInputAudible[static_cast<size_t>(send.busIndex)] != 0)
             {
+                const StereoSample sendSample = send.latencyDelay.process(
+                    {trackSample.left * send.gain, trackSample.right * send.gain});
                 addBusFrameSample(static_cast<size_t>(send.busIndex),
-                                  {trackSample.left * send.gain, trackSample.right * send.gain});
+                                  sendSample);
             }
         }
         trackFrameSamples[trackIndex] = {};
+        trackFrameClapInstrumentSamples[trackIndex] = {};
         trackFrameTouched[trackIndex] = 0;
     }
     touchedTrackIndices.clear();
@@ -1022,8 +1140,12 @@ StereoSample SynthRenderer::finishMixerFrame()
     for (size_t busIndex : busRouteOrder)
     {
         const bool hasInput = busFrameTouched[busIndex] != 0;
+        bool hasLatencyTail = busIndex < busMainLatencyDelays.size() &&
+            busMainLatencyDelays[busIndex].hasPending();
+        for (const TrackSendMix& send : busSends[busIndex])
+            hasLatencyTail = hasLatencyTail || send.latencyDelay.hasPending();
         if (busOutputAudible[busIndex] == 0 ||
-            (!hasInput && busEffectHasTail[busIndex] == 0))
+            (!hasInput && busEffectHasTail[busIndex] == 0 && !hasLatencyTail))
         {
             busFrameSamples[busIndex] = {};
             busFrameTouched[busIndex] = 0;
@@ -1039,6 +1161,7 @@ StereoSample SynthRenderer::finishMixerFrame()
             std::max(std::abs(output.left), std::abs(output.right)));
 
         const int parentIndex = busOutputIndices[busIndex];
+        const StereoSample mainRouteSample = busMainLatencyDelays[busIndex].process(output);
         if (parentIndex >= 0)
         {
             const size_t destination = static_cast<size_t>(parentIndex);
@@ -1049,15 +1172,15 @@ StereoSample SynthRenderer::finishMixerFrame()
                     busSoloDownstreamAudible[destination] != 0));
             if (routeAudible)
             {
-                addBusFrameSample(destination, output);
+                addBusFrameSample(destination, mainRouteSample);
             }
         }
         else if (busSoloDownstreamAudible[busIndex] != 0)
         {
-            masterSample.left += output.left;
-            masterSample.right += output.right;
+            masterSample.left += mainRouteSample.left;
+            masterSample.right += mainRouteSample.right;
         }
-        for (const TrackSendMix& send : busSends[busIndex])
+        for (TrackSendMix& send : busSends[busIndex])
         {
             if (send.busIndex < 0 || static_cast<size_t>(send.busIndex) >= busSoloDownstreamAudible.size() ||
                 send.gain <= 0.0f)
@@ -1070,7 +1193,9 @@ StereoSample SynthRenderer::finishMixerFrame()
                     busSoloDownstreamAudible[destination] != 0));
             if (!routeAudible)
                 continue;
-            addBusFrameSample(destination, {output.left * send.gain, output.right * send.gain});
+            const StereoSample sendSample = send.latencyDelay.process(
+                {output.left * send.gain, output.right * send.gain});
+            addBusFrameSample(destination, sendSample);
         }
         busFrameSamples[busIndex] = {};
         busFrameTouched[busIndex] = 0;
@@ -1152,6 +1277,22 @@ void SynthRenderer::resetTrackEqualizers()
         state.parametricCoefficients = parametricCoefficients;
     }
     activeEqualizerTailTracks.clear();
+}
+
+void SynthRenderer::resetLatencyCompensation()
+{
+    for (LatencyDelayLine& delay : trackMainLatencyDelays)
+        delay.reset();
+    for (LatencyDelayLine& delay : trackInstrumentSourceLatencyDelays)
+        delay.reset();
+    for (std::vector<TrackSendMix>& sends : trackSends)
+        for (TrackSendMix& send : sends)
+            send.latencyDelay.reset();
+    for (LatencyDelayLine& delay : busMainLatencyDelays)
+        delay.reset();
+    for (std::vector<TrackSendMix>& sends : busSends)
+        for (TrackSendMix& send : sends)
+            send.latencyDelay.reset();
 }
 
 void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
@@ -1765,7 +1906,8 @@ float SynthRenderer::busPeakLevel(size_t busIndex) const
     return busIndex < busPeakLevels.size() ? busPeakLevels[busIndex] : 0.0f;
 }
 
-void SynthRenderer::addTrackSample(size_t trackIndex, float left, float right)
+void SynthRenderer::addTrackSample(size_t trackIndex, float left, float right,
+                                   bool clapInstrumentOutput)
 {
     if (trackIndex >= trackFrameSamples.size())
         return;
@@ -1774,7 +1916,8 @@ void SynthRenderer::addTrackSample(size_t trackIndex, float left, float right)
         trackFrameTouched[trackIndex] = 1;
         touchedTrackIndices.push_back(trackIndex);
     }
-    StereoSample& sample = trackFrameSamples[trackIndex];
+    StereoSample& sample = clapInstrumentOutput
+        ? trackFrameClapInstrumentSamples[trackIndex] : trackFrameSamples[trackIndex];
     sample.left += left;
     sample.right += right;
 }
@@ -1811,6 +1954,7 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
         activeNotes.clear();
         activeAudioRegions.clear();
         resetTrackEqualizers();
+        resetLatencyCompensation();
         for (size_t trackIndex = 0; trackIndex < trackInstrumentFilterStates.size(); ++trackIndex)
         {
             std::vector<EffectState>& effects = trackInstrumentFilterStates[trackIndex];
