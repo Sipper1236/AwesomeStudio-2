@@ -745,7 +745,13 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
 
 void SynthRenderer::resetTransport()
 {
-    clapInstrumentsAllNotesOff();
+    for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
+    {
+        if (instrument == nullptr)
+            continue;
+        instrument->resetProcessingState();
+        instrument->allNotesOff();
+    }
     activeNotes.clear();
     activeAudioRegions.clear();
     resetTrackEqualizers();
@@ -1246,6 +1252,8 @@ void SynthRenderer::resetEffectChain(std::vector<EffectState>& states)
 {
     for (EffectState& state : states)
     {
+        if (state.clapEffect != nullptr)
+            state.clapEffect->resetProcessingState();
         std::fill(state.delayLeft.begin(), state.delayLeft.end(), 0.0f);
         std::fill(state.delayRight.begin(), state.delayRight.end(), 0.0f);
         for (std::vector<float>& line : state.reverbLines)
@@ -1273,14 +1281,53 @@ bool SynthRenderer::effectChainHasTail(const std::vector<EffectState>& states) c
 StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states, StereoSample input)
 {
     StereoSample output = input;
+    const auto updateClapParameters = [this](EffectState& state, const MixerEffect& effect)
+    {
+        if (state.clapEffect == nullptr || !state.clapEffect->isValid())
+            return;
+        for (qsizetype parameterIndex = 0;
+             parameterIndex < effect.pluginParameterAutomation.size(); ++parameterIndex)
+        {
+            const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
+                ? effect.pluginParameterValues[parameterIndex] : 0.0f;
+            float value = automationValue(
+                effect.pluginParameterAutomation[parameterIndex], currentBeat, defaultValue);
+            if (static_cast<size_t>(parameterIndex) < state.liveParameterOverrides.size() &&
+                std::isfinite(state.liveParameterOverrides[static_cast<size_t>(parameterIndex)]))
+                value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
+            state.clapEffect->setParameter(parameterIndex, value);
+        }
+        for (qsizetype parameterIndex = effect.pluginParameterAutomation.size();
+             parameterIndex < static_cast<qsizetype>(state.liveParameterOverrides.size());
+             ++parameterIndex)
+        {
+            const float value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
+            if (std::isfinite(value))
+                state.clapEffect->setParameter(parameterIndex, value);
+        }
+    };
     for (EffectState& state : states)
     {
         const MixerEffect& effect = state.settings;
+        if (effect.type == MixerEffectType::ClapPlugin)
+            updateClapParameters(state, effect);
         if (!effect.enabled || effect.wet <= 0.0f)
+        {
+            if (effect.type == MixerEffectType::ClapPlugin && state.clapEffect != nullptr &&
+                state.clapEffect->isValid())
+            {
+                StereoSample discardedWet = output;
+                float discardedDryLeft = output.left;
+                float discardedDryRight = output.right;
+                state.clapEffect->process(discardedWet.left, discardedWet.right,
+                                          discardedDryLeft, discardedDryRight);
+            }
             continue;
+        }
 
         const StereoSample dry = output;
         StereoSample wet = dry;
+        StereoSample alignedDry = dry;
         float tailLevel = 0.0f;
         if (effect.type == MixerEffectType::Delay && !state.delayLeft.empty() &&
             state.delayLeft.size() == state.delayRight.size())
@@ -1430,28 +1477,12 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
         else if (effect.type == MixerEffectType::ClapPlugin &&
                  state.clapEffect != nullptr && state.clapEffect->isValid())
         {
-            for (qsizetype parameterIndex = 0;
-                 parameterIndex < effect.pluginParameterAutomation.size(); ++parameterIndex)
+            if (!state.clapEffect->process(wet.left, wet.right,
+                                           alignedDry.left, alignedDry.right))
             {
-                const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
-                    ? effect.pluginParameterValues[parameterIndex] : 0.0f;
-                float value = automationValue(
-                    effect.pluginParameterAutomation[parameterIndex], currentBeat, defaultValue);
-                if (static_cast<size_t>(parameterIndex) < state.liveParameterOverrides.size() &&
-                    std::isfinite(state.liveParameterOverrides[static_cast<size_t>(parameterIndex)]))
-                    value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
-                state.clapEffect->setParameter(parameterIndex, value);
-            }
-            for (qsizetype parameterIndex = effect.pluginParameterAutomation.size();
-                 parameterIndex < static_cast<qsizetype>(state.liveParameterOverrides.size());
-                 ++parameterIndex)
-            {
-                const float value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
-                if (std::isfinite(value))
-                    state.clapEffect->setParameter(parameterIndex, value);
-            }
-            if (!state.clapEffect->process(wet.left, wet.right))
                 wet = dry;
+                alignedDry = dry;
+            }
             if (!std::isfinite(wet.left) || !std::isfinite(wet.right))
                 wet = dry;
             tailLevel = std::max(std::abs(wet.left), std::abs(wet.right));
@@ -1489,8 +1520,8 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
             state.tailFramesRemaining = std::max(state.tailFramesRemaining,
                 static_cast<qint64>(std::ceil(5.0 * sampleRate)));
         }
-        output = {dry.left * (1.0f - effect.wet) + wet.left * effect.wet,
-                  dry.right * (1.0f - effect.wet) + wet.right * effect.wet};
+        output = {alignedDry.left * (1.0f - effect.wet) + wet.left * effect.wet,
+                  alignedDry.right * (1.0f - effect.wet) + wet.right * effect.wet};
     }
     return output;
 }
@@ -1769,7 +1800,13 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
     // A backwards frame means the transport restarted or wrapped at the loop boundary.
     if (lastFrame != -1 && projectFrame < lastFrame)
     {
-        clapInstrumentsAllNotesOff();
+        for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
+        {
+            if (instrument == nullptr)
+                continue;
+            instrument->resetProcessingState();
+            instrument->allNotesOff();
+        }
         ++playbackCycle;
         activeNotes.clear();
         activeAudioRegions.clear();

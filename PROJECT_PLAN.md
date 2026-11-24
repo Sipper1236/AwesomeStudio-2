@@ -72,11 +72,12 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 
 - [x] Linux LV2 effect hosting and CLAP effect/instrument discovery, loading, parameter controls, and saved plug-in state
 - [x] LV2/CLAP parameter automation plus reusable built-in synth patches
-- [ ] VST3 hosting, native plug-in editors, and plug-in latency compensation
+- [ ] VST3 hosting and native plug-in editors
+- [ ] Plug-in latency compensation
 - [ ] Native MIDI input backends for other platforms and broader controller targets
 - [x] Autosave, rotating backups, project recovery, and versioned migrations
 - [x] Optional multi-format export, stems, cancellable batch rendering, and progress reporting
-- [ ] Block-based CLAP processing
+- [x] Block-based CLAP processing with a 64-frame host buffering delay
 - [ ] Cross-platform packaging and a focused automated test suite
 
 ## Build requirements

@@ -64,7 +64,9 @@ public:
     bool saveState(QString& pluginState) const;
     void serviceMainThread();
     void stopProcessing();
+    void resetProcessingState();
     bool process(float& left, float& right);
+    bool process(float& left, float& right, float& alignedDryLeft, float& alignedDryRight);
 
 private:
     struct Private;

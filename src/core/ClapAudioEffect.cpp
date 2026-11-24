@@ -42,6 +42,7 @@ namespace
 #if defined(AWESOME_STUDIO_HAS_CLAP)
 constexpr const char* clapStatePrefix = "CLAP_STATE_V1:";
 constexpr uint32_t maximumClapParameters = 256;
+constexpr uint32_t clapBlockFrames = 64;
 
 struct ClapHostContext
 {
@@ -451,17 +452,24 @@ struct ClapAudioPluginInstance::Private
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     struct PendingEvent
     {
-        enum class Kind { Note, Midi } kind = Kind::Note;
+        enum class Kind { Note, Midi, Parameter } kind = Kind::Note;
         union Payload
         {
             clap_event_note_t note;
             clap_event_midi_t midi;
+            clap_event_param_value_t parameter;
             Payload() : note{} {}
         } payload;
 
         const clap_event_header_t* header() const
         {
-            return kind == Kind::Note ? &payload.note.header : &payload.midi.header;
+            switch (kind)
+            {
+            case Kind::Note: return &payload.note.header;
+            case Kind::Midi: return &payload.midi.header;
+            case Kind::Parameter: return &payload.parameter.header;
+            }
+            return nullptr;
         }
     };
 
@@ -474,20 +482,25 @@ struct ClapAudioPluginInstance::Private
     ClapPluginDescriptor descriptor;
     std::vector<float> controlValues;
     std::vector<float> sentValues;
-    std::vector<clap_event_param_value_t> pendingEvents;
-    std::array<PendingEvent, 512> pendingInstrumentEvents{};
+    std::vector<PendingEvent> pendingEvents;
+    std::vector<clap_event_param_value_t> pendingParameterEvents;
     size_t pendingInstrumentEventCount = 0;
     clap_input_events_t inputEvents{};
     clap_input_events_t parameterEvents{};
     clap_output_events_t outputEvents{};
-    float inputLeft = 0.0f;
-    float inputRight = 0.0f;
-    float monoInput = 0.0f;
-    float outputLeft = 0.0f;
-    float outputRight = 0.0f;
-    float monoOutput = 0.0f;
+    std::array<float, clapBlockFrames> inputLeft{};
+    std::array<float, clapBlockFrames> inputRight{};
+    std::array<float, clapBlockFrames> monoInput{};
+    std::array<float, clapBlockFrames> outputLeft{};
+    std::array<float, clapBlockFrames> outputRight{};
+    std::array<float, clapBlockFrames> monoOutput{};
+    std::array<float, clapBlockFrames> dryLeft{};
+    std::array<float, clapBlockFrames> dryRight{};
     float* inputChannels[2]{};
     float* outputChannels[2]{};
+    uint32_t bufferedFrames = 0;
+    uint32_t outputRead = 0;
+    bool outputReady = false;
     int64_t steadyTime = 0;
     std::thread::id processingThread;
     bool activated = false;
@@ -501,46 +514,43 @@ struct ClapAudioPluginInstance::Private
     static uint32_t CLAP_ABI inputEventCount(const clap_input_events_t* events)
     {
         const Private* self = fromInputEvents(events);
-        return self == nullptr ? 0 : static_cast<uint32_t>(
-            self->pendingEvents.size() + self->pendingInstrumentEventCount);
+        return self == nullptr ? 0 : static_cast<uint32_t>(self->pendingEvents.size());
     }
 
     static const clap_event_header_t* CLAP_ABI inputEventAt(
         const clap_input_events_t* events, uint32_t index)
     {
         const Private* self = fromInputEvents(events);
-        if (self == nullptr)
-            return nullptr;
-        if (index < self->pendingEvents.size())
-            return &self->pendingEvents[index].header;
-        const uint32_t instrumentIndex = index - static_cast<uint32_t>(self->pendingEvents.size());
-        return instrumentIndex < self->pendingInstrumentEventCount
-            ? self->pendingInstrumentEvents[instrumentIndex].header() : nullptr;
+        return self == nullptr || index >= self->pendingEvents.size()
+            ? nullptr : self->pendingEvents[index].header();
     }
 
     static uint32_t CLAP_ABI parameterEventCount(const clap_input_events_t* events)
     {
         const Private* self = fromInputEvents(events);
-        return self == nullptr ? 0 : static_cast<uint32_t>(self->pendingEvents.size());
+        return self == nullptr ? 0 : static_cast<uint32_t>(self->pendingParameterEvents.size());
     }
 
     static const clap_event_header_t* CLAP_ABI parameterEventAt(
         const clap_input_events_t* events, uint32_t index)
     {
         const Private* self = fromInputEvents(events);
-        return self == nullptr || index >= self->pendingEvents.size()
-            ? nullptr : &self->pendingEvents[index].header;
+        return self == nullptr || index >= self->pendingParameterEvents.size()
+            ? nullptr : &self->pendingParameterEvents[index].header;
     }
 
     void queueNoteEvent(uint16_t type, int32_t noteId, int channel, int key, float velocity)
     {
         if (kind != ClapPluginKind::Instrument ||
-            pendingInstrumentEventCount >= pendingInstrumentEvents.size())
+            pendingInstrumentEventCount >= 512 ||
+            pendingEvents.size() >= pendingEvents.capacity())
             return;
-        PendingEvent& pending = pendingInstrumentEvents[pendingInstrumentEventCount++];
+        ++pendingInstrumentEventCount;
+        PendingEvent& pending = pendingEvents.emplace_back();
         pending.kind = PendingEvent::Kind::Note;
         pending.payload.note = {};
         pending.payload.note.header.size = sizeof(clap_event_note_t);
+        pending.payload.note.header.time = bufferedFrames;
         pending.payload.note.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
         pending.payload.note.header.type = type;
         pending.payload.note.header.flags = CLAP_EVENT_IS_LIVE;
@@ -554,12 +564,15 @@ struct ClapAudioPluginInstance::Private
     void queueMidiEvent(uint16_t portIndex, const std::array<uint8_t, 3>& data)
     {
         if (kind != ClapPluginKind::Instrument ||
-            pendingInstrumentEventCount >= pendingInstrumentEvents.size())
+            pendingInstrumentEventCount >= 512 ||
+            pendingEvents.size() >= pendingEvents.capacity())
             return;
-        PendingEvent& pending = pendingInstrumentEvents[pendingInstrumentEventCount++];
+        ++pendingInstrumentEventCount;
+        PendingEvent& pending = pendingEvents.emplace_back();
         pending.kind = PendingEvent::Kind::Midi;
         pending.payload.midi = {};
         pending.payload.midi.header.size = sizeof(clap_event_midi_t);
+        pending.payload.midi.header.time = bufferedFrames;
         pending.payload.midi.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
         pending.payload.midi.header.type = CLAP_EVENT_MIDI;
         pending.payload.midi.header.flags = CLAP_EVENT_IS_LIVE;
@@ -701,7 +714,8 @@ ClapAudioPluginInstance::ClapAudioPluginInstance(const QString& id, ClapPluginKi
 
     d->controlValues.resize(static_cast<size_t>(d->descriptor.parameters.size()));
     d->sentValues.assign(d->controlValues.size(), std::numeric_limits<float>::quiet_NaN());
-    d->pendingEvents.reserve(d->controlValues.size());
+    d->pendingEvents.reserve(d->controlValues.size() * clapBlockFrames + 512);
+    d->pendingParameterEvents.reserve(d->controlValues.size());
     for (qsizetype index = 0; index < d->descriptor.parameters.size(); ++index)
     {
         const ClapPluginParameter& parameter = d->descriptor.parameters[index];
@@ -724,12 +738,15 @@ ClapAudioPluginInstance::ClapAudioPluginInstance(const QString& id, ClapPluginKi
         d->descriptor.outputChannels == 0)
         return;
 
-    d->inputChannels[0] = d->descriptor.inputChannels == 1 ? &d->monoInput : &d->inputLeft;
-    d->inputChannels[1] = &d->inputRight;
-    d->outputChannels[0] = d->descriptor.outputChannels == 1 ? &d->monoOutput : &d->outputLeft;
-    d->outputChannels[1] = &d->outputRight;
+    d->inputChannels[0] = d->descriptor.inputChannels == 1
+        ? d->monoInput.data() : d->inputLeft.data();
+    d->inputChannels[1] = d->inputRight.data();
+    d->outputChannels[0] = d->descriptor.outputChannels == 1
+        ? d->monoOutput.data() : d->outputLeft.data();
+    d->outputChannels[1] = d->outputRight.data();
 
-    if (d->plugin->activate == nullptr || !d->plugin->activate(d->plugin, sampleRate, 1, 1))
+    if (d->plugin->activate == nullptr ||
+        !d->plugin->activate(d->plugin, sampleRate, 1, clapBlockFrames))
         return;
     d->activated = true;
     d->inputEvents.ctx = d.get();
@@ -894,7 +911,40 @@ void ClapAudioPluginInstance::stopProcessing()
 #endif
 }
 
+void ClapAudioPluginInstance::resetProcessingState()
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d == nullptr)
+        return;
+    d->bufferedFrames = 0;
+    d->outputRead = 0;
+    d->outputReady = false;
+    d->pendingEvents.clear();
+    d->pendingParameterEvents.clear();
+    d->pendingInstrumentEventCount = 0;
+    d->steadyTime = 0;
+    d->inputLeft.fill(0.0f);
+    d->inputRight.fill(0.0f);
+    d->monoInput.fill(0.0f);
+    d->outputLeft.fill(0.0f);
+    d->outputRight.fill(0.0f);
+    d->monoOutput.fill(0.0f);
+    d->dryLeft.fill(0.0f);
+    d->dryRight.fill(0.0f);
+    if (isValid() && d->plugin->reset != nullptr)
+        d->plugin->reset(d->plugin);
+#endif
+}
+
 bool ClapAudioPluginInstance::process(float& left, float& right)
+{
+    float alignedDryLeft = 0.0f;
+    float alignedDryRight = 0.0f;
+    return process(left, right, alignedDryLeft, alignedDryRight);
+}
+
+bool ClapAudioPluginInstance::process(float& left, float& right,
+                                      float& alignedDryLeft, float& alignedDryRight)
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     if (!isValid())
@@ -905,15 +955,12 @@ bool ClapAudioPluginInstance::process(float& left, float& right)
     if (!d->processing)
     {
         if (d->plugin->start_processing == nullptr || !d->plugin->start_processing(d->plugin))
-        {
-            d->pendingInstrumentEventCount = 0;
             return false;
-        }
         d->processing = true;
         d->processingThread = std::this_thread::get_id();
     }
 
-    d->pendingEvents.clear();
+    d->pendingParameterEvents.clear();
     for (size_t index = 0; index < d->controlValues.size(); ++index)
     {
         const float value = d->controlValues[index];
@@ -927,20 +974,27 @@ bool ClapAudioPluginInstance::process(float& left, float& right)
         if (!std::isfinite(d->sentValues[index]) ||
             std::abs(d->sentValues[index] - value) > 1.0e-7f)
         {
-            clap_event_param_value_t event{};
-            event.header.size = sizeof(event);
-            event.header.time = 0;
-            event.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
-            event.header.type = CLAP_EVENT_PARAM_VALUE;
-            event.header.flags = CLAP_EVENT_DONT_RECORD;
-            event.param_id = parameter.id;
-            event.cookie = nullptr;
-            event.note_id = -1;
-            event.port_index = -1;
-            event.channel = -1;
-            event.key = -1;
-            event.value = value;
-            d->pendingEvents.push_back(event);
+            Private::PendingEvent pending;
+            pending.kind = Private::PendingEvent::Kind::Parameter;
+            pending.payload.parameter = {};
+            pending.payload.parameter.header.size = sizeof(clap_event_param_value_t);
+            pending.payload.parameter.header.time = d->bufferedFrames;
+            pending.payload.parameter.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+            pending.payload.parameter.header.type = CLAP_EVENT_PARAM_VALUE;
+            pending.payload.parameter.header.flags = CLAP_EVENT_DONT_RECORD;
+            pending.payload.parameter.param_id = parameter.id;
+            pending.payload.parameter.cookie = nullptr;
+            pending.payload.parameter.note_id = -1;
+            pending.payload.parameter.port_index = -1;
+            pending.payload.parameter.channel = -1;
+            pending.payload.parameter.key = -1;
+            pending.payload.parameter.value = value;
+            if (d->pendingEvents.size() < d->pendingEvents.capacity())
+                d->pendingEvents.push_back(pending);
+
+            clap_event_param_value_t flushEvent = pending.payload.parameter;
+            flushEvent.header.time = 0;
+            d->pendingParameterEvents.push_back(flushEvent);
             d->sentValues[index] = value;
         }
     }
@@ -949,41 +1003,90 @@ bool ClapAudioPluginInstance::process(float& left, float& right)
         d->params != nullptr && d->params->flush != nullptr)
         d->params->flush(d->plugin, &d->parameterEvents, &d->outputEvents);
 
-    d->inputLeft = left;
-    d->inputRight = right;
-    d->monoInput = (left + right) * 0.5f;
-    d->outputLeft = d->outputRight = d->monoOutput = 0.0f;
-    clap_audio_buffer_t inputBuffer{};
-    inputBuffer.data32 = d->kind == ClapPluginKind::Instrument ? nullptr : d->inputChannels;
-    inputBuffer.channel_count = d->descriptor.inputChannels;
-    clap_audio_buffer_t outputBuffer{};
-    outputBuffer.data32 = d->outputChannels;
-    outputBuffer.channel_count = d->descriptor.outputChannels;
-
-    clap_process_t process{};
-    process.steady_time = d->steadyTime++;
-    process.frames_count = 1;
-    process.audio_inputs = d->kind == ClapPluginKind::Instrument ? nullptr : &inputBuffer;
-    process.audio_outputs = &outputBuffer;
-    process.audio_inputs_count = d->kind == ClapPluginKind::Instrument ? 0 : 1;
-    process.audio_outputs_count = 1;
-    process.in_events = &d->inputEvents;
-    process.out_events = &d->outputEvents;
-    const clap_process_status status = d->plugin->process(d->plugin, &process);
-    d->pendingInstrumentEventCount = 0;
-    if (status == CLAP_PROCESS_ERROR)
-        return false;
-    if (outputBuffer.channel_count == 1)
-        left = right = d->monoOutput;
-    else
+    const float sourceLeft = left;
+    const float sourceRight = right;
+    const float sourceDryLeft = alignedDryLeft;
+    const float sourceDryRight = alignedDryRight;
+    left = 0.0f;
+    right = 0.0f;
+    alignedDryLeft = 0.0f;
+    alignedDryRight = 0.0f;
+    if (d->outputReady)
     {
-        left = d->outputLeft;
-        right = d->outputRight;
+        left = d->descriptor.outputChannels == 1
+            ? d->monoOutput[d->outputRead] : d->outputLeft[d->outputRead];
+        right = d->descriptor.outputChannels == 1
+            ? d->monoOutput[d->outputRead] : d->outputRight[d->outputRead];
+        alignedDryLeft = d->dryLeft[d->outputRead];
+        alignedDryRight = d->dryRight[d->outputRead];
+        if (++d->outputRead >= clapBlockFrames)
+        {
+            d->outputReady = false;
+            d->outputRead = 0;
+        }
     }
-    return std::isfinite(left) && std::isfinite(right);
+
+    const uint32_t frame = d->bufferedFrames;
+    d->inputLeft[frame] = d->kind == ClapPluginKind::AudioEffect ? sourceLeft : 0.0f;
+    d->inputRight[frame] = d->kind == ClapPluginKind::AudioEffect ? sourceRight : 0.0f;
+    d->monoInput[frame] = (d->inputLeft[frame] + d->inputRight[frame]) * 0.5f;
+    d->dryLeft[frame] = d->kind == ClapPluginKind::AudioEffect ? sourceDryLeft : 0.0f;
+    d->dryRight[frame] = d->kind == ClapPluginKind::AudioEffect ? sourceDryRight : 0.0f;
+    ++d->bufferedFrames;
+
+    if (d->bufferedFrames == clapBlockFrames)
+    {
+        d->outputLeft.fill(0.0f);
+        d->outputRight.fill(0.0f);
+        d->monoOutput.fill(0.0f);
+        clap_audio_buffer_t inputBuffer{};
+        inputBuffer.data32 = d->kind == ClapPluginKind::Instrument ? nullptr : d->inputChannels;
+        inputBuffer.channel_count = d->descriptor.inputChannels;
+        clap_audio_buffer_t outputBuffer{};
+        outputBuffer.data32 = d->outputChannels;
+        outputBuffer.channel_count = d->descriptor.outputChannels;
+
+        clap_process_t process{};
+        process.steady_time = d->steadyTime;
+        d->steadyTime += clapBlockFrames;
+        process.frames_count = clapBlockFrames;
+        process.audio_inputs = d->kind == ClapPluginKind::Instrument ? nullptr : &inputBuffer;
+        process.audio_outputs = &outputBuffer;
+        process.audio_inputs_count = d->kind == ClapPluginKind::Instrument ? 0 : 1;
+        process.audio_outputs_count = 1;
+        process.in_events = &d->inputEvents;
+        process.out_events = &d->outputEvents;
+        const clap_process_status status = d->plugin->process(d->plugin, &process);
+        d->pendingEvents.clear();
+        d->pendingInstrumentEventCount = 0;
+        if (status == CLAP_PROCESS_ERROR)
+        {
+            d->outputLeft.fill(0.0f);
+            d->outputRight.fill(0.0f);
+            d->monoOutput.fill(0.0f);
+            for (size_t index = 0; index < d->sentValues.size(); ++index)
+                if (!d->descriptor.parameters[static_cast<qsizetype>(index)].readOnly)
+                    d->sentValues[index] = std::numeric_limits<float>::quiet_NaN();
+        }
+        else
+        {
+            for (float& sample : d->outputLeft)
+                if (!std::isfinite(sample)) sample = 0.0f;
+            for (float& sample : d->outputRight)
+                if (!std::isfinite(sample)) sample = 0.0f;
+            for (float& sample : d->monoOutput)
+                if (!std::isfinite(sample)) sample = 0.0f;
+        }
+        d->bufferedFrames = 0;
+        d->outputRead = 0;
+        d->outputReady = true;
+    }
+    return true;
 #else
     Q_UNUSED(left)
     Q_UNUSED(right)
+    Q_UNUSED(alignedDryLeft)
+    Q_UNUSED(alignedDryRight)
     return false;
 #endif
 }
