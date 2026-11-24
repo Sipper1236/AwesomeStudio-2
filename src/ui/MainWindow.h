@@ -296,7 +296,10 @@ private:
         SelectedTrackOutputBusLevel = 25,
         SelectedTrackOutputBusPan = 26,
         SelectedTrackOutputBusMute = 27,
-        SelectedTrackOutputBusSolo = 28
+        SelectedTrackOutputBusSolo = 28,
+        SelectedTrackParametricEqFrequency = 29,
+        SelectedTrackParametricEqGain = 30,
+        SelectedTrackParametricEqQ = 31
     };
     struct MidiControllerMapping
     {

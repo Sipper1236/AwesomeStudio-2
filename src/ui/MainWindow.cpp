@@ -4520,7 +4520,7 @@ void MainWindow::createMenus()
     connect(midiControllerListenAction, &QAction::toggled,
             this, &MainWindow::setMidiControllerListening);
 
-    const std::array<QString, 29> controllerTargets = {
+    const std::array<QString, 32> controllerTargets = {
         tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo"),
         tr("Selected track mute"), tr("Selected track solo"),
         tr("Selected synth filter cutoff"), tr("Selected synth filter resonance"),
@@ -4542,7 +4542,10 @@ void MainWindow::createMenus()
         tr("Selected track output bus level"),
         tr("Selected track output bus pan"),
         tr("Selected track output bus mute"),
-        tr("Selected track output bus solo")
+        tr("Selected track output bus solo"),
+        tr("Selected track parametric EQ frequency (selected band)"),
+        tr("Selected track parametric EQ gain (selected band)"),
+        tr("Selected track parametric EQ Q (selected band)")
     };
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
@@ -10666,6 +10669,8 @@ void MainWindow::beginMidiControllerLearn(int target)
          target == static_cast<int>(MidiControllerTarget::SelectedTrackPan) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackMute) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackSolo) ||
+         (target >= static_cast<int>(MidiControllerTarget::SelectedTrackParametricEqFrequency) &&
+          target <= static_cast<int>(MidiControllerTarget::SelectedTrackParametricEqQ)) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) ||
          (target >= static_cast<int>(MidiControllerTarget::SelectedTrackSynthAttack) &&
@@ -10790,6 +10795,24 @@ void MainWindow::applyMidiControllerTarget(int target, int value)
     if (target == static_cast<int>(MidiControllerTarget::Tempo))
     {
         tempoControl->setValue(20.0 + value * 280.0 / 127.0);
+        return;
+    }
+
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackParametricEqFrequency) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackParametricEqQ))
+    {
+        const int parameter = target -
+            static_cast<int>(MidiControllerTarget::SelectedTrackParametricEqFrequency);
+        const double normalized = static_cast<double>(value) / 127.0;
+        double parameterValue = 0.0;
+        switch (parameter)
+        {
+            case 0: parameterValue = 20.0 * std::pow(1000.0, normalized); break;
+            case 1: parameterValue = -18.0 + normalized * 36.0; break;
+            case 2: parameterValue = 0.1 * std::pow(100.0, normalized); break;
+            default: return;
+        }
+        parametricEqBandParameterControls[static_cast<size_t>(parameter)]->setValue(parameterValue);
         return;
     }
 
