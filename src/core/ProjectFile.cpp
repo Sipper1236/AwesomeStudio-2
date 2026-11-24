@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 60;
+constexpr int currentProjectVersion = 61;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -1425,6 +1425,8 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
             {QStringLiteral("effects"), saveEffects(bus.effects)},
             {QStringLiteral("gain"), bus.gain},
             {QStringLiteral("pan"), bus.pan},
+            {QStringLiteral("gainAutomation"), saveAutomation(bus.gainAutomation)},
+            {QStringLiteral("panAutomation"), saveAutomation(bus.panAutomation)},
             {QStringLiteral("muted"), bus.muted},
             {QStringLiteral("solo"), bus.solo}
         });
@@ -1654,6 +1656,12 @@ bool ProjectFile::load(const QString& path, ProjectData& project, QString* error
             }
             bus.gain = static_cast<float>(gain);
             bus.pan = static_cast<float>(pan);
+            if (version >= 61 &&
+                (!loadAutomation(busObject.value(QStringLiteral("gainAutomation")),
+                                 bus.gainAutomation, QStringLiteral("mixer bus level"), version, error) ||
+                 !loadAutomation(busObject.value(QStringLiteral("panAutomation")),
+                                 bus.panAutomation, QStringLiteral("mixer bus pan"), version, error)))
+                return false;
             bus.muted = busObject.value(QStringLiteral("muted")).toBool(false);
             bus.solo = busObject.value(QStringLiteral("solo")).toBool(false);
             loaded.buses.push_back(std::move(bus));

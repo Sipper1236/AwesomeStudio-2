@@ -369,6 +369,8 @@ struct MixerBus
     QVector<MixerEffect> effects;
     float gain = 1.0f;
     float pan = 0.0f;
+    QVector<AutomationPoint> gainAutomation;
+    QVector<AutomationPoint> panAutomation;
     bool muted = false;
     bool solo = false;
 };
