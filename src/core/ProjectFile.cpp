@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 53;
+constexpr int currentProjectVersion = 54;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -487,6 +487,48 @@ bool loadAudioFadeCurvePoints(const QJsonValue& value, QVector<float>& points,
     return true;
 }
 
+QJsonArray saveAudioFadeBezierHandles(const QVector<QPointF>& sourceHandles)
+{
+    QVector<QPointF> handles = sourceHandles;
+    normalizeAudioFadeBezierHandles(handles);
+    QJsonArray array;
+    for (const QPointF& handle : handles)
+        array.push_back(QJsonArray{handle.x(), handle.y()});
+    return array;
+}
+
+bool loadAudioFadeBezierHandles(const QJsonValue& value, QVector<QPointF>& handles,
+                               const QString& label, QString* error)
+{
+    if (!value.isArray() || value.toArray().size() != audioFadeBezierHandleCount)
+    {
+        setError(error, QStringLiteral("The audio region contains invalid %1 handles.").arg(label));
+        return false;
+    }
+    QVector<QPointF> loaded;
+    loaded.reserve(audioFadeBezierHandleCount);
+    for (const QJsonValue& item : value.toArray())
+    {
+        if (!item.isArray() || item.toArray().size() != 2)
+        {
+            setError(error, QStringLiteral("The audio region contains invalid %1 handles.").arg(label));
+            return false;
+        }
+        const QJsonArray coordinates = item.toArray();
+        const double x = coordinates[0].toDouble(std::numeric_limits<double>::quiet_NaN());
+        const double y = coordinates[1].toDouble(std::numeric_limits<double>::quiet_NaN());
+        if (!std::isfinite(x) || !std::isfinite(y) || x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0)
+        {
+            setError(error, QStringLiteral("The audio region contains out-of-range %1 handles.").arg(label));
+            return false;
+        }
+        loaded.push_back(QPointF(x, y));
+    }
+    normalizeAudioFadeBezierHandles(loaded);
+    handles = std::move(loaded);
+    return true;
+}
+
 QJsonObject saveClip(const MidiClip& clip)
 {
     QJsonObject object{
@@ -512,6 +554,12 @@ QJsonObject saveClip(const MidiClip& clip)
     if (clip.audioFadeOutCurve == AudioFadeCurve::Drawn)
         object.insert(QStringLiteral("audioFadeOutCurvePoints"),
                       saveAudioFadeCurvePoints(clip.audioFadeOutCurvePoints));
+    if (clip.audioFadeInCurve == AudioFadeCurve::Bezier)
+        object.insert(QStringLiteral("audioFadeInBezierHandles"),
+                      saveAudioFadeBezierHandles(clip.audioFadeInBezierHandles));
+    if (clip.audioFadeOutCurve == AudioFadeCurve::Bezier)
+        object.insert(QStringLiteral("audioFadeOutBezierHandles"),
+                      saveAudioFadeBezierHandles(clip.audioFadeOutBezierHandles));
     return object;
 }
 
@@ -700,7 +748,7 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
     {
         const int fadeInCurve = object.value(QStringLiteral("audioFadeInCurve")).toInt(-1);
         const int fadeOutCurve = object.value(QStringLiteral("audioFadeOutCurve")).toInt(-1);
-        const int maximumFadeCurve = version >= 51 ? 4 : version >= 33 ? 3 : 2;
+        const int maximumFadeCurve = version >= 54 ? 5 : version >= 51 ? 4 : version >= 33 ? 3 : 2;
         if (fadeInCurve < 0 || fadeInCurve > maximumFadeCurve ||
             fadeOutCurve < 0 || fadeOutCurve > maximumFadeCurve)
         {
@@ -733,6 +781,19 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
             !loadAudioFadeCurvePoints(object.value(QStringLiteral("audioFadeOutCurvePoints")),
                                       clip.audioFadeOutCurvePoints,
                                       QStringLiteral("fade-out curve"), error))
+            return false;
+    }
+    if (version >= 54)
+    {
+        if (clip.audioFadeInCurve == AudioFadeCurve::Bezier &&
+            !loadAudioFadeBezierHandles(object.value(QStringLiteral("audioFadeInBezierHandles")),
+                                        clip.audioFadeInBezierHandles,
+                                        QStringLiteral("fade-in Bezier"), error))
+            return false;
+        if (clip.audioFadeOutCurve == AudioFadeCurve::Bezier &&
+            !loadAudioFadeBezierHandles(object.value(QStringLiteral("audioFadeOutBezierHandles")),
+                                        clip.audioFadeOutBezierHandles,
+                                        QStringLiteral("fade-out Bezier"), error))
             return false;
     }
     loadAudioReference(clip.audioSourcePath, mediaBaseDir, media, clip.audioSource);

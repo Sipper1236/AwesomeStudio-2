@@ -165,6 +165,62 @@ void normalizeAudioFadeCurvePoints(QVector<float>& points)
     points.back() = 1.0f;
 }
 
+QVector<QPointF> defaultAudioFadeBezierHandles()
+{
+    return {{1.0 / 3.0, 1.0 / 3.0}, {2.0 / 3.0, 2.0 / 3.0}};
+}
+
+void normalizeAudioFadeBezierHandles(QVector<QPointF>& handles)
+{
+    if (handles.size() != audioFadeBezierHandleCount)
+        handles = defaultAudioFadeBezierHandles();
+    for (QPointF& handle : handles)
+    {
+        const double x = std::isfinite(handle.x()) ? handle.x() : 0.5;
+        const double y = std::isfinite(handle.y()) ? handle.y() : 0.5;
+        handle.setX(std::clamp(x, 0.0, 1.0));
+        handle.setY(std::clamp(y, 0.0, 1.0));
+    }
+    if (handles[0].x() > handles[1].x())
+        std::swap(handles[0], handles[1]);
+}
+
+QVector<float> audioFadeBezierCurvePoints(const QVector<QPointF>& sourceHandles)
+{
+    QVector<QPointF> handles = sourceHandles;
+    normalizeAudioFadeBezierHandles(handles);
+    const QPointF first = handles[0];
+    const QPointF second = handles[1];
+    const auto cubic = [](double a, double b, double t)
+    {
+        const double inverse = 1.0 - t;
+        return 3.0 * inverse * inverse * t * a +
+               3.0 * inverse * t * t * b + t * t * t;
+    };
+
+    QVector<float> points;
+    points.reserve(audioFadeBezierCurvePointCount);
+    for (int index = 0; index < audioFadeBezierCurvePointCount; ++index)
+    {
+        const double targetX = static_cast<double>(index) / (audioFadeBezierCurvePointCount - 1);
+        double low = 0.0;
+        double high = 1.0;
+        for (int iteration = 0; iteration < 20; ++iteration)
+        {
+            const double parameter = (low + high) * 0.5;
+            if (cubic(first.x(), second.x(), parameter) < targetX)
+                low = parameter;
+            else
+                high = parameter;
+        }
+        const double parameter = (low + high) * 0.5;
+        const double value = index == 0 ? 0.0 : index == audioFadeBezierCurvePointCount - 1
+            ? 1.0 : cubic(first.y(), second.y(), parameter);
+        points.push_back(static_cast<float>(std::clamp(value, 0.0, 1.0)));
+    }
+    return points;
+}
+
 float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape,
                         const QVector<float>* drawnPoints)
 {
@@ -186,13 +242,15 @@ float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, doub
             return static_cast<float>(fadeIn ? shaped : 1.0 - shaped);
         }
         case AudioFadeCurve::Drawn:
+        case AudioFadeCurve::Bezier:
         {
             double shaped = position;
-            if (drawnPoints != nullptr && drawnPoints->size() == audioFadeCurvePointCount)
+            if (drawnPoints != nullptr && drawnPoints->size() > 1)
             {
-                const double pointPosition = position * (audioFadeCurvePointCount - 1);
+                const int pointCount = static_cast<int>(drawnPoints->size());
+                const double pointPosition = position * (pointCount - 1);
                 const int first = static_cast<int>(pointPosition);
-                const int second = std::min(audioFadeCurvePointCount - 1, first + 1);
+                const int second = std::min(pointCount - 1, first + 1);
                 const double fraction = pointPosition - first;
                 shaped = (*drawnPoints)[first] * (1.0 - fraction) +
                          (*drawnPoints)[second] * fraction;
@@ -809,18 +867,20 @@ void ProjectData::normalize()
             clip.audioFadeInBeats = std::clamp(clip.audioFadeInBeats, 0.0, clip.lengthBeats);
             clip.audioFadeOutBeats = std::clamp(clip.audioFadeOutBeats, 0.0, clip.lengthBeats);
             clip.audioFadeInCurve = static_cast<AudioFadeCurve>(std::clamp(
-                static_cast<int>(clip.audioFadeInCurve), 0, 4));
+                static_cast<int>(clip.audioFadeInCurve), 0, 5));
             clip.audioFadeOutCurve = static_cast<AudioFadeCurve>(std::clamp(
-                static_cast<int>(clip.audioFadeOutCurve), 0, 4));
+                static_cast<int>(clip.audioFadeOutCurve), 0, 5));
             if (!std::isfinite(clip.audioFadeInShape))
                 clip.audioFadeInShape = 1.0;
             if (!std::isfinite(clip.audioFadeOutShape))
                 clip.audioFadeOutShape = 1.0;
             clip.audioFadeInShape = std::clamp(clip.audioFadeInShape, 0.25, 4.0);
             clip.audioFadeOutShape = std::clamp(clip.audioFadeOutShape, 0.25, 4.0);
-            if (!clip.audioFadeInCurvePoints.isEmpty())
+            if (clip.audioFadeInCurve == AudioFadeCurve::Drawn &&
+                !clip.audioFadeInCurvePoints.isEmpty())
                 normalizeAudioFadeCurvePoints(clip.audioFadeInCurvePoints);
-            if (!clip.audioFadeOutCurvePoints.isEmpty())
+            if (clip.audioFadeOutCurve == AudioFadeCurve::Drawn &&
+                !clip.audioFadeOutCurvePoints.isEmpty())
                 normalizeAudioFadeCurvePoints(clip.audioFadeOutCurvePoints);
             if (clip.audioFadeInCurve == AudioFadeCurve::Drawn &&
                 clip.audioFadeInCurvePoints.isEmpty())
@@ -828,6 +888,16 @@ void ProjectData::normalize()
             if (clip.audioFadeOutCurve == AudioFadeCurve::Drawn &&
                 clip.audioFadeOutCurvePoints.isEmpty())
                 clip.audioFadeOutCurvePoints = defaultAudioFadeCurvePoints();
+            if (clip.audioFadeInCurve == AudioFadeCurve::Bezier)
+            {
+                normalizeAudioFadeBezierHandles(clip.audioFadeInBezierHandles);
+                clip.audioFadeInCurvePoints = audioFadeBezierCurvePoints(clip.audioFadeInBezierHandles);
+            }
+            if (clip.audioFadeOutCurve == AudioFadeCurve::Bezier)
+            {
+                normalizeAudioFadeBezierHandles(clip.audioFadeOutBezierHandles);
+                clip.audioFadeOutCurvePoints = audioFadeBezierCurvePoints(clip.audioFadeOutBezierHandles);
+            }
             if (clip.audioSource != nullptr)
             {
                 if (clip.audioSourcePath.isEmpty())

@@ -3,6 +3,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QFontMetrics>
+#include <QLineF>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
@@ -372,6 +373,8 @@ protected:
                                 painter.drawPath(fadePath);
                             }
                         }
+                        if (selected)
+                            drawFadeBezierHandles(painter, clip, trackIndex);
                     }
                     continue;
                 }
@@ -626,6 +629,14 @@ protected:
             const MidiClip& clip = track.clips[hit];
             selectedClipId = clip.id;
             bool fadeIn = false;
+            int handleIndex = -1;
+            if (clip.isAudioRegion() && fadeBezierHandleAt(clip, row, point, fadeIn, handleIndex))
+            {
+                beginFadeBezierHandleDrag(track.id, clip, fadeIn, handleIndex);
+                emit owner->clipSelected(track.id, clip.id);
+                update();
+                return;
+            }
             if (event->modifiers().testFlag(Qt::ControlModifier) && clip.isAudioRegion() &&
                 drawnFadeAt(clip, row, point, fadeIn))
             {
@@ -667,6 +678,12 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override
     {
         const QPoint point = event->position().toPoint();
+        if (draggingFadeBezierHandle)
+        {
+            updateFadeBezierHandle(point);
+            update();
+            return;
+        }
         if (drawingFadeCurve)
         {
             updateFadeCurveDrawing(point);
@@ -720,6 +737,12 @@ protected:
                 const int row = (point.y() - rulerHeight) / currentRowHeight();
                 const MidiClip& clip = project.tracks[row].clips[hit];
                 bool fadeIn = false;
+                int handleIndex = -1;
+                if (clip.isAudioRegion() && fadeBezierHandleAt(clip, row, point, fadeIn, handleIndex))
+                {
+                    setCursor(Qt::SizeAllCursor);
+                    return;
+                }
                 if (clip.isAudioRegion() && drawnFadeAt(clip, row, point, fadeIn))
                 {
                     setCursor(Qt::CrossCursor);
@@ -818,6 +841,20 @@ protected:
     {
         if (event->button() != Qt::LeftButton)
             return;
+        if (draggingFadeBezierHandle)
+        {
+            draggingFadeBezierHandle = false;
+            unsetCursor();
+            const MidiClip* clip = project.findClip(fadeBezierTrackId, fadeBezierClipId);
+            const QVector<QPointF> after = clip == nullptr ? fadeBezierBefore :
+                (fadeBezierIn ? clip->audioFadeInBezierHandles : clip->audioFadeOutBezierHandles);
+            if (clip != nullptr && fadeBezierBefore != after)
+                emit owner->audioFadeBezierHandlesChanged(fadeBezierTrackId, fadeBezierClipId,
+                    fadeBezierIn, fadeBezierBefore, after);
+            fadeBezierBefore.clear();
+            update();
+            return;
+        }
         if (drawingFadeCurve)
         {
             drawingFadeCurve = false;
@@ -1241,6 +1278,127 @@ private:
         return clipBounds(clip, trackIndex).adjusted(6, 27, -6, -6);
     }
 
+    QPointF fadeBezierHandlePosition(const MidiClip& clip, int trackIndex,
+                                     bool fadeIn, int handleIndex) const
+    {
+        const double fadeBeats = fadeIn ? clip.audioFadeInBeats : clip.audioFadeOutBeats;
+        const QVector<QPointF>& handles = fadeIn
+            ? clip.audioFadeInBezierHandles : clip.audioFadeOutBezierHandles;
+        const QRectF waveBounds = audioWaveBounds(clip, trackIndex);
+        if (fadeBeats <= 0.0 || clip.lengthBeats <= 0.0 ||
+            handles.size() != audioFadeBezierHandleCount ||
+            handleIndex < 0 || handleIndex >= handles.size())
+            return {};
+        const double fadeWidth = std::min(waveBounds.width(),
+            fadeBeats / clip.lengthBeats * waveBounds.width());
+        const double fadeStartX = fadeIn ? waveBounds.left() : waveBounds.right() - fadeWidth;
+        const QPointF handle = handles[handleIndex];
+        const double shapedGain = fadeIn ? handle.y() : 1.0 - handle.y();
+        return {fadeStartX + fadeWidth * handle.x(),
+                waveBounds.bottom() - 1.0 - shapedGain * (waveBounds.height() - 2.0)};
+    }
+
+    void drawFadeBezierHandles(QPainter& painter, const MidiClip& clip, int trackIndex) const
+    {
+        painter.save();
+        const QRectF waveBounds = audioWaveBounds(clip, trackIndex);
+        for (const bool fadeIn : {true, false})
+        {
+            const AudioFadeCurve curve = fadeIn ? clip.audioFadeInCurve : clip.audioFadeOutCurve;
+            const double beats = fadeIn ? clip.audioFadeInBeats : clip.audioFadeOutBeats;
+            if (curve != AudioFadeCurve::Bezier || beats <= 0.0)
+                continue;
+            const double width = std::min(waveBounds.width(), beats / clip.lengthBeats * waveBounds.width());
+            const double startX = fadeIn ? waveBounds.left() : waveBounds.right() - width;
+            const QPointF start(fadeIn ? waveBounds.left() : startX,
+                                fadeIn ? waveBounds.bottom() - 1.0 : waveBounds.top() + 1.0);
+            const QPointF end(fadeIn ? startX + width : waveBounds.right(),
+                              fadeIn ? waveBounds.top() + 1.0 : waveBounds.bottom() - 1.0);
+            const QPointF first = fadeBezierHandlePosition(clip, trackIndex, fadeIn, 0);
+            const QPointF second = fadeBezierHandlePosition(clip, trackIndex, fadeIn, 1);
+            painter.setPen(QPen(QColor(QStringLiteral("#c7d2da")), 1, Qt::DashLine));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawLine(start, first);
+            painter.drawLine(first, second);
+            painter.drawLine(second, end);
+            painter.setPen(QPen(QColor(QStringLiteral("#18313a")), 1.5));
+            painter.setBrush(QColor(QStringLiteral("#f0cf82")));
+            painter.drawEllipse(first, 4.5, 4.5);
+            painter.drawEllipse(second, 4.5, 4.5);
+        }
+        painter.restore();
+    }
+
+    bool fadeBezierHandleAt(const MidiClip& clip, int trackIndex, const QPoint& point,
+                            bool& fadeIn, int& handleIndex) const
+    {
+        if (trackIndex < 0 || trackIndex >= project.tracks.size() || !clip.isAudioRegion() ||
+            clip.id != selectedClipId || selectedTrackId != project.tracks[trackIndex].id)
+            return false;
+        for (const bool isFadeIn : {true, false})
+        {
+            const AudioFadeCurve curve = isFadeIn ? clip.audioFadeInCurve : clip.audioFadeOutCurve;
+            const double beats = isFadeIn ? clip.audioFadeInBeats : clip.audioFadeOutBeats;
+            if (curve != AudioFadeCurve::Bezier || beats <= 0.0)
+                continue;
+            for (int index = 0; index < audioFadeBezierHandleCount; ++index)
+            {
+                if (QLineF(point, fadeBezierHandlePosition(clip, trackIndex, isFadeIn, index)).length() <= 9.0)
+                {
+                    fadeIn = isFadeIn;
+                    handleIndex = index;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void beginFadeBezierHandleDrag(quint64 trackId, const MidiClip& clip, bool fadeIn, int handleIndex)
+    {
+        draggingFadeBezierHandle = true;
+        fadeBezierTrackId = trackId;
+        fadeBezierClipId = clip.id;
+        fadeBezierIn = fadeIn;
+        fadeBezierHandleIndex = handleIndex;
+        fadeBezierBefore = fadeIn ? clip.audioFadeInBezierHandles : clip.audioFadeOutBezierHandles;
+        QVector<QPointF>& handles = fadeIn
+            ? project.findClip(trackId, clip.id)->audioFadeInBezierHandles
+            : project.findClip(trackId, clip.id)->audioFadeOutBezierHandles;
+        normalizeAudioFadeBezierHandles(handles);
+        setCursor(Qt::SizeAllCursor);
+    }
+
+    void updateFadeBezierHandle(const QPoint& point)
+    {
+        const int trackIndex = trackIndexForId(fadeBezierTrackId);
+        MidiClip* clip = project.findClip(fadeBezierTrackId, fadeBezierClipId);
+        if (trackIndex < 0 || clip == nullptr || fadeBezierHandleIndex < 0 ||
+            fadeBezierHandleIndex >= audioFadeBezierHandleCount)
+            return;
+        QVector<QPointF>& handles = fadeBezierIn
+            ? clip->audioFadeInBezierHandles : clip->audioFadeOutBezierHandles;
+        normalizeAudioFadeBezierHandles(handles);
+        const QRectF waveBounds = audioWaveBounds(*clip, trackIndex);
+        const double fadeBeats = fadeBezierIn ? clip->audioFadeInBeats : clip->audioFadeOutBeats;
+        const double fadeWidth = clip->lengthBeats > 0.0
+            ? std::min(waveBounds.width(), fadeBeats / clip->lengthBeats * waveBounds.width()) : 0.0;
+        if (fadeWidth < 2.0)
+            return;
+        const double fadeStartX = fadeBezierIn ? waveBounds.left() : waveBounds.right() - fadeWidth;
+        double minimumX = fadeBezierHandleIndex == 0 ? 0.0 : handles[0].x() + 0.01;
+        double maximumX = fadeBezierHandleIndex == 1 ? 1.0 : handles[1].x() - 0.01;
+        if (minimumX > maximumX)
+            return;
+        const double x = std::clamp((point.x() - fadeStartX) / fadeWidth, minimumX, maximumX);
+        const double gain = std::clamp((waveBounds.bottom() - 1.0 - point.y()) /
+            std::max(1.0, waveBounds.height() - 2.0), 0.0, 1.0);
+        handles[fadeBezierHandleIndex] = QPointF(x, fadeBezierIn ? gain : 1.0 - gain);
+        QVector<float>& points = fadeBezierIn
+            ? clip->audioFadeInCurvePoints : clip->audioFadeOutCurvePoints;
+        points = audioFadeBezierCurvePoints(handles);
+    }
+
     bool drawnFadeAt(const MidiClip& clip, int trackIndex, const QPoint& point,
                      bool& fadeIn) const
     {
@@ -1431,11 +1589,17 @@ private:
     bool resizingAudioRegion = false;
     bool resizeLeftEdge = false;
     bool drawingFadeCurve = false;
+    bool draggingFadeBezierHandle = false;
     bool drawnFadeIn = false;
+    bool fadeBezierIn = false;
     int drawingFadeLastIndex = -1;
+    int fadeBezierHandleIndex = -1;
     quint64 drawnFadeTrackId = 0;
     quint64 drawnFadeClipId = 0;
+    quint64 fadeBezierTrackId = 0;
+    quint64 fadeBezierClipId = 0;
     QVector<float> drawnFadeBefore;
+    QVector<QPointF> fadeBezierBefore;
 };
 
 ArrangementEditor::ArrangementEditor(QWidget* parent) : QScrollArea(parent)

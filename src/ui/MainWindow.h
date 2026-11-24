@@ -68,6 +68,8 @@ private:
         double fadeOutShape = 1.0;
         QVector<float> fadeInCurvePoints;
         QVector<float> fadeOutCurvePoints;
+        QVector<QPointF> fadeInBezierHandles;
+        QVector<QPointF> fadeOutBezierHandles;
     };
 
     struct AudioTrimState

@@ -2489,7 +2489,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             return;
         AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
             clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
-            clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+            clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints,
+            clip->audioFadeInBezierHandles, clip->audioFadeOutBezierHandles};
         AudioFadeState after = before;
         if (fadeIn)
         {
@@ -2500,6 +2501,30 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         {
             before.fadeOutCurvePoints = beforePoints;
             after.fadeOutCurvePoints = afterPoints;
+        }
+        undoStack.push(new AudioFadeEditCommand(this, trackId, {before}, {after}));
+    });
+    connect(arrangementEditor, &ArrangementEditor::audioFadeBezierHandlesChanged, this,
+            [this](quint64 trackId, quint64 clipId, bool fadeIn,
+                   const QVector<QPointF>& beforeHandles, const QVector<QPointF>& afterHandles)
+    {
+        const MidiClip* clip = project.findClip(trackId, clipId);
+        if (clip == nullptr || !clip->isAudioRegion() || beforeHandles == afterHandles)
+            return;
+        AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
+            clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
+            clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints,
+            clip->audioFadeInBezierHandles, clip->audioFadeOutBezierHandles};
+        AudioFadeState after = before;
+        if (fadeIn)
+        {
+            before.fadeInBezierHandles = beforeHandles;
+            after.fadeInBezierHandles = afterHandles;
+        }
+        else
+        {
+            before.fadeOutBezierHandles = beforeHandles;
+            after.fadeOutBezierHandles = afterHandles;
         }
         undoStack.push(new AudioFadeEditCommand(this, trackId, {before}, {after}));
     });
@@ -3782,7 +3807,8 @@ void MainWindow::createDocks()
         control->addItem(QObject::tr("Equal power"), static_cast<int>(AudioFadeCurve::EqualPower));
         control->addItem(QObject::tr("Custom power"), static_cast<int>(AudioFadeCurve::Custom));
         control->addItem(QObject::tr("Drawn (Ctrl+drag)"), static_cast<int>(AudioFadeCurve::Drawn));
-        control->setToolTip(QObject::tr("Choose Drawn, then hold Ctrl and drag through the fade on the Playlist."));
+        control->addItem(QObject::tr("Bezier handles"), static_cast<int>(AudioFadeCurve::Bezier));
+        control->setToolTip(QObject::tr("Drawn uses Ctrl+drag; drag Bezier handles on the selected region."));
         return control;
     };
     audioFadeInCurveControl = makeFadeCurveControl();
@@ -6849,7 +6875,8 @@ void MainWindow::setSelectedAudioFade(bool fadeIn, double beats)
     const double fadeBeats = std::clamp(beats, 0.0, clip->lengthBeats);
     const AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
         clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
-        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints,
+        clip->audioFadeInBezierHandles, clip->audioFadeOutBezierHandles};
     AudioFadeState after = before;
     if (fadeIn)
         after.fadeInBeats = fadeBeats;
@@ -6864,12 +6891,13 @@ void MainWindow::setSelectedAudioFadeCurve(bool fadeIn, int curve)
 {
     InstrumentTrack* track = selectedTrack();
     MidiClip* clip = selectedClip();
-    if (track == nullptr || clip == nullptr || !clip->isAudioRegion() || curve < 0 || curve > 4)
+    if (track == nullptr || clip == nullptr || !clip->isAudioRegion() || curve < 0 || curve > 5)
         return;
     const auto fadeCurve = static_cast<AudioFadeCurve>(curve);
     const AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
         clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
-        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints,
+        clip->audioFadeInBezierHandles, clip->audioFadeOutBezierHandles};
     AudioFadeState after = before;
     AudioFadeCurve& nextCurve = fadeIn ? after.fadeInCurve : after.fadeOutCurve;
     if (nextCurve == fadeCurve)
@@ -6878,6 +6906,9 @@ void MainWindow::setSelectedAudioFadeCurve(bool fadeIn, int curve)
     QVector<float>& points = fadeIn ? after.fadeInCurvePoints : after.fadeOutCurvePoints;
     if (fadeCurve == AudioFadeCurve::Drawn && points.isEmpty())
         points = defaultAudioFadeCurvePoints();
+    QVector<QPointF>& handles = fadeIn ? after.fadeInBezierHandles : after.fadeOutBezierHandles;
+    if (fadeCurve == AudioFadeCurve::Bezier && handles.isEmpty())
+        handles = defaultAudioFadeBezierHandles();
     undoStack.push(new AudioFadeEditCommand(this, track->id, {before}, {after}));
 }
 
@@ -6890,7 +6921,8 @@ void MainWindow::setSelectedAudioFadeShape(bool fadeIn, double shape)
     const double normalizedShape = std::clamp(shape, 0.25, 4.0);
     const AudioFadeState before{clip->id, clip->audioFadeInBeats, clip->audioFadeOutBeats,
         clip->audioFadeInCurve, clip->audioFadeOutCurve, clip->audioFadeInShape,
-        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints};
+        clip->audioFadeOutShape, clip->audioFadeInCurvePoints, clip->audioFadeOutCurvePoints,
+        clip->audioFadeInBezierHandles, clip->audioFadeOutBezierHandles};
     AudioFadeState after = before;
     double& nextShape = fadeIn ? after.fadeInShape : after.fadeOutShape;
     if (std::abs(nextShape - normalizedShape) < 1.0e-6)
@@ -6949,11 +6981,13 @@ void MainWindow::createSelectedAudioCrossfade()
         {outgoing->id, outgoing->audioFadeInBeats, outgoing->audioFadeOutBeats,
          outgoing->audioFadeInCurve, outgoing->audioFadeOutCurve,
          outgoing->audioFadeInShape, outgoing->audioFadeOutShape,
-         outgoing->audioFadeInCurvePoints, outgoing->audioFadeOutCurvePoints},
+         outgoing->audioFadeInCurvePoints, outgoing->audioFadeOutCurvePoints,
+         outgoing->audioFadeInBezierHandles, outgoing->audioFadeOutBezierHandles},
         {incoming->id, incoming->audioFadeInBeats, incoming->audioFadeOutBeats,
          incoming->audioFadeInCurve, incoming->audioFadeOutCurve,
          incoming->audioFadeInShape, incoming->audioFadeOutShape,
-         incoming->audioFadeInCurvePoints, incoming->audioFadeOutCurvePoints}
+         incoming->audioFadeInCurvePoints, incoming->audioFadeOutCurvePoints,
+         incoming->audioFadeInBezierHandles, incoming->audioFadeOutBezierHandles}
     };
     QVector<AudioFadeState> after = before;
     after[0].fadeOutBeats = overlapBeats;
@@ -6983,6 +7017,8 @@ void MainWindow::applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeS
         clip->audioFadeOutShape = fade.fadeOutShape;
         clip->audioFadeInCurvePoints = fade.fadeInCurvePoints;
         clip->audioFadeOutCurvePoints = fade.fadeOutCurvePoints;
+        clip->audioFadeInBezierHandles = fade.fadeInBezierHandles;
+        clip->audioFadeOutBezierHandles = fade.fadeOutBezierHandles;
     }
     project.normalize();
     audioEngine.setProject(project);

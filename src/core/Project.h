@@ -2,6 +2,7 @@
 
 #include <QVector>
 #include <QString>
+#include <QPointF>
 #include <QtGlobal>
 
 #include <array>
@@ -37,10 +38,13 @@ enum class AudioFadeCurve
     Smooth,
     EqualPower,
     Custom,
-    Drawn
+    Drawn,
+    Bezier
 };
 
 constexpr int audioFadeCurvePointCount = 33;
+constexpr int audioFadeBezierHandleCount = 2;
+constexpr int audioFadeBezierCurvePointCount = 129;
 
 struct AudioAsset
 {
@@ -101,12 +105,17 @@ struct MidiClip
     double audioFadeOutShape = 1.0;
     QVector<float> audioFadeInCurvePoints;
     QVector<float> audioFadeOutCurvePoints;
+    QVector<QPointF> audioFadeInBezierHandles;
+    QVector<QPointF> audioFadeOutBezierHandles;
 
     bool isAudioRegion() const { return !audioSourcePath.isEmpty(); }
 };
 
 QVector<float> defaultAudioFadeCurvePoints();
 void normalizeAudioFadeCurvePoints(QVector<float>& points);
+QVector<QPointF> defaultAudioFadeBezierHandles();
+void normalizeAudioFadeBezierHandles(QVector<QPointF>& handles);
+QVector<float> audioFadeBezierCurvePoints(const QVector<QPointF>& handles);
 float audioFadeEnvelope(AudioFadeCurve curve, bool fadeIn, double progress, double shape = 1.0,
                         const QVector<float>* drawnPoints = nullptr);
 

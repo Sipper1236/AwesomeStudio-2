@@ -33,6 +33,9 @@ signals:
                             double lengthBeats, qint64 audioStartFrame);
     void audioFadeCurveDrawn(quint64 trackId, quint64 clipId, bool fadeIn,
                              const QVector<float>& before, const QVector<float>& after);
+    void audioFadeBezierHandlesChanged(quint64 trackId, quint64 clipId, bool fadeIn,
+                                       const QVector<QPointF>& before,
+                                       const QVector<QPointF>& after);
     void audioRegionRelinkRequested(quint64 trackId, quint64 clipId);
     void trackSelected(quint64 trackId);
     void automationChanged(quint64 trackId, int parameter, const QString& pluginUri,
