@@ -2729,6 +2729,36 @@ private:
     MainWindow::AudioRelinkState after;
 };
 
+class DrumSampleRelinkCommand final : public QUndoCommand
+{
+public:
+    DrumSampleRelinkCommand(MainWindow* window, quint64 trackId,
+                            MainWindow::DrumSampleRelinkState before,
+                            MainWindow::DrumSampleRelinkState after)
+        : window(window), trackId(trackId), before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Relink drum sample"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyDrumSampleRelinkHistory(trackId, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyDrumSampleRelinkHistory(trackId, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    MainWindow::DrumSampleRelinkState before;
+    MainWindow::DrumSampleRelinkState after;
+};
+
 MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     : QMainWindow(parent), audioEngine(engine)
 {
@@ -5427,7 +5457,10 @@ void MainWindow::refreshProjectUi()
         drumSampleButtons[pad]->setText(sample == nullptr || sample->path.isEmpty()
             ? tr("Load %1 sample…").arg(padName)
             : sample->source != nullptr ? QFileInfo(sample->path).fileName()
-                                        : tr("%1 · OFFLINE").arg(padName));
+                                        : tr("%1 · OFFLINE · click to relink").arg(padName));
+        drumSampleButtons[pad]->setToolTip(sample != nullptr && !sample->path.isEmpty() &&
+                                           sample->source == nullptr
+            ? tr("Choose a replacement WAV for this offline drum layer") : QString());
         drumSampleButtons[pad]->setEnabled(drumRackSelected);
         clearDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
                                                 !sample->path.isEmpty());
@@ -5436,21 +5469,21 @@ void MainWindow::refreshProjectUi()
                 ? tr("Load %1 extra-low layer…").arg(padName)
                 : sample->veryLowVelocitySource != nullptr
                     ? QFileInfo(sample->veryLowVelocityPath).fileName()
-                    : tr("%1 extra-low · OFFLINE").arg(padName));
+                    : tr("%1 extra-low · OFFLINE · click to relink").arg(padName));
         veryLowVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
         clearVeryLowVelocityDrumSampleButtons[pad]->setEnabled(
             drumRackSelected && sample != nullptr && !sample->veryLowVelocityPath.isEmpty());
         lowVelocityDrumSampleButtons[pad]->setText(sample == nullptr || sample->lowVelocityPath.isEmpty()
             ? tr("Load %1 low-velocity layer…").arg(padName)
             : sample->lowVelocitySource != nullptr ? QFileInfo(sample->lowVelocityPath).fileName()
-                                                   : tr("%1 low layer · OFFLINE").arg(padName));
+                : tr("%1 low layer · OFFLINE · click to relink").arg(padName));
         lowVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
         clearLowVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
                                                            !sample->lowVelocityPath.isEmpty());
         highVelocityDrumSampleButtons[pad]->setText(sample == nullptr || sample->highVelocityPath.isEmpty()
             ? tr("Load %1 high-velocity layer…").arg(padName)
             : sample->highVelocitySource != nullptr ? QFileInfo(sample->highVelocityPath).fileName()
-                                                    : tr("%1 layer · OFFLINE").arg(padName));
+                : tr("%1 layer · OFFLINE · click to relink").arg(padName));
         highVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
         clearHighVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr &&
                                                             !sample->highVelocityPath.isEmpty());
@@ -5459,7 +5492,7 @@ void MainWindow::refreshProjectUi()
                 ? tr("Load %1 extra-high layer…").arg(padName)
                 : sample->veryHighVelocitySource != nullptr
                     ? QFileInfo(sample->veryHighVelocityPath).fileName()
-                    : tr("%1 extra-high · OFFLINE").arg(padName));
+                    : tr("%1 extra-high · OFFLINE · click to relink").arg(padName));
         veryHighVelocityDrumSampleButtons[pad]->setEnabled(drumRackSelected && sample != nullptr);
         clearVeryHighVelocityDrumSampleButtons[pad]->setEnabled(
             drumRackSelected && sample != nullptr && !sample->veryHighVelocityPath.isEmpty());
@@ -11278,6 +11311,13 @@ void MainWindow::importDrumSample(int pad)
         pad < 0 || pad >= static_cast<int>(track->drumSamples.size()))
         return;
 
+    const DrumPadSample& existingSample = track->drumSamples[static_cast<size_t>(pad)];
+    if (!existingSample.path.isEmpty() && existingSample.source == nullptr)
+    {
+        relinkDrumSample(pad, 2);
+        return;
+    }
+
     const QString path = QFileDialog::getOpenFileName(this, tr("Load drum sample"), QString(),
                                                        tr("WAV audio (*.wav)"));
     if (path.isEmpty())
@@ -11306,6 +11346,83 @@ void MainWindow::importDrumSample(int pad)
     refreshProjectUi();
     statusBar()->showMessage(tr("Drum sample set: %1")
                                  .arg(loadedFileName), 2500);
+}
+
+void MainWindow::relinkDrumSample(int pad, int layer)
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+        pad < 0 || pad >= static_cast<int>(track->drumSamples.size()) || layer < 0 || layer >= 5)
+        return;
+    DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+    QString* sourcePath = nullptr;
+    std::shared_ptr<const AudioAsset>* sourceAsset = nullptr;
+    switch (layer)
+    {
+        case 0: sourcePath = &sample.veryLowVelocityPath;
+                sourceAsset = &sample.veryLowVelocitySource; break;
+        case 1: sourcePath = &sample.lowVelocityPath;
+                sourceAsset = &sample.lowVelocitySource; break;
+        case 2: sourcePath = &sample.path;
+                sourceAsset = &sample.source; break;
+        case 3: sourcePath = &sample.highVelocityPath;
+                sourceAsset = &sample.highVelocitySource; break;
+        case 4: sourcePath = &sample.veryHighVelocityPath;
+                sourceAsset = &sample.veryHighVelocitySource; break;
+    }
+    if (sourcePath == nullptr || sourceAsset == nullptr || sourcePath->isEmpty() ||
+        *sourceAsset != nullptr)
+        return;
+
+    const QString selectedPath = QFileDialog::getOpenFileName(this, tr("Relink drum sample"),
+        QFileInfo(*sourcePath).absolutePath(), tr("WAV audio (*.wav)"));
+    if (selectedPath.isEmpty())
+        return;
+    std::shared_ptr<const AudioAsset> asset = findProjectAudioAsset(selectedPath);
+    QString error;
+    if (asset == nullptr && !AudioFile::loadWav(selectedPath, asset, &error))
+    {
+        QMessageBox::critical(this, tr("Could not relink drum sample"), error);
+        return;
+    }
+    const DrumSampleRelinkState before{pad, layer, *sourcePath, *sourceAsset};
+    const DrumSampleRelinkState after{pad, layer, asset->path, asset};
+    *sourcePath = after.path;
+    *sourceAsset = after.source;
+    const quint64 decodedBytes = projectAudioBytes();
+    *sourcePath = before.path;
+    *sourceAsset = before.source;
+    if (decodedBytes > AudioFile::maximumProjectDecodedBytes)
+    {
+        QMessageBox::warning(this, tr("Audio memory limit"),
+            tr("This project can load up to 512 MiB of decoded audio. Remove another audio source first."));
+        return;
+    }
+    undoStack.push(new DrumSampleRelinkCommand(this, track->id, before, after));
+    statusBar()->showMessage(tr("Relinked drum sample to %1")
+        .arg(QFileInfo(after.path).fileName()), 3000);
+}
+
+void MainWindow::applyDrumSampleRelinkHistory(
+    quint64 trackId, const DrumSampleRelinkState& state)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+        state.pad < 0 || state.pad >= static_cast<int>(track->drumSamples.size()) ||
+        state.layer < 0 || state.layer >= 5)
+        return;
+    DrumPadSample& sample = track->drumSamples[static_cast<size_t>(state.pad)];
+    switch (state.layer)
+    {
+        case 0: sample.veryLowVelocityPath = state.path; sample.veryLowVelocitySource = state.source; break;
+        case 1: sample.lowVelocityPath = state.path; sample.lowVelocitySource = state.source; break;
+        case 2: sample.path = state.path; sample.source = state.source; break;
+        case 3: sample.highVelocityPath = state.path; sample.highVelocitySource = state.source; break;
+        case 4: sample.veryHighVelocityPath = state.path; sample.veryHighVelocitySource = state.source; break;
+    }
+    audioEngine.setProject(project);
+    settingsDirty = true;
+    refreshProjectUi();
 }
 
 void MainWindow::clearDrumSample(int pad)
@@ -11378,6 +11495,20 @@ void MainWindow::importDrumVelocityLayer(int pad, int layer)
         return;
 
     DrumPadSample& sample = track->drumSamples[static_cast<size_t>(pad)];
+    int relinkLayer = layer;
+    if (layer >= 2)
+        ++relinkLayer;
+    const QString existingPath = layer == 0 ? sample.veryLowVelocityPath
+        : layer == 1 ? sample.lowVelocityPath
+        : layer == 2 ? sample.highVelocityPath : sample.veryHighVelocityPath;
+    const std::shared_ptr<const AudioAsset>& existingSource = layer == 0 ? sample.veryLowVelocitySource
+        : layer == 1 ? sample.lowVelocitySource
+        : layer == 2 ? sample.highVelocitySource : sample.veryHighVelocitySource;
+    if (!existingPath.isEmpty() && existingSource == nullptr)
+    {
+        relinkDrumSample(pad, relinkLayer);
+        return;
+    }
     QString* targetPath = nullptr;
     std::shared_ptr<const AudioAsset>* targetSource = nullptr;
     QString layerName;
@@ -11406,7 +11537,8 @@ void MainWindow::importDrumVelocityLayer(int pad, int layer)
         default: return;
     }
     const QString path = QFileDialog::getOpenFileName(this,
-        tr("Load %1-velocity drum layer").arg(layerName), QString(), tr("WAV audio (*.wav)"));
+        tr("Load %1-velocity drum layer").arg(layerName),
+        QFileInfo(existingPath).absolutePath(), tr("WAV audio (*.wav)"));
     if (path.isEmpty())
         return;
 

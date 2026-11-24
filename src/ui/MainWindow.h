@@ -51,6 +51,7 @@ class MainWindow final : public QMainWindow
     friend class AudioTakeSplitCommand;
     friend class AudioTrimCommand;
     friend class AudioRelinkCommand;
+    friend class DrumSampleRelinkCommand;
     friend class ClipDuplicateCommand;
     friend class ClipRemoveCommand;
     friend class ClipMoveCommand;
@@ -106,6 +107,14 @@ private:
         std::weak_ptr<const AudioAsset> source;
         qint64 audioStartFrame = 0;
         bool reloadSource = false;
+    };
+
+    struct DrumSampleRelinkState
+    {
+        int pad = 0;
+        int layer = 2;
+        QString path;
+        std::shared_ptr<const AudioAsset> source;
     };
 
     void createActions();
@@ -215,6 +224,8 @@ private:
     void recordBusAutomationValue(quint64 busId, int parameter, float value);
     void finishAutomationWrite();
     void importDrumSample(int pad);
+    void relinkDrumSample(int pad, int layer);
+    void applyDrumSampleRelinkHistory(quint64 trackId, const DrumSampleRelinkState& state);
     void clearDrumSample(int pad);
     void importVeryLowVelocityDrumSample(int pad);
     void clearVeryLowVelocityDrumSample(int pad);
