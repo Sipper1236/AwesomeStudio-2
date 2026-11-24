@@ -23,7 +23,7 @@ Status describes the executable built by the repository's CMake target. Source f
 
 1. Add hardware-referenced input/output latency calibration.
 2. Add live drum pattern-chain playback outside the Playlist and format-2 time-signature changes.
-3. Add broader automation targets, RPM/AppImage packages, and signed installers.
+3. Add broader automation targets, AppImage packaging, and signed installers.
 4. Add external MIDI clock synchronization and hardware output timestamp support.
 
 The older JUCE-oriented files under `src/core` are excluded from the current build and need separate integration work before they can change any status above.
