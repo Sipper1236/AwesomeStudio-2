@@ -334,7 +334,15 @@ private:
         SelectedTrackEqLowCrossover = 35,
         SelectedTrackEqHighCrossover = 36,
         SelectedTrackAuxSendLevel1 = 37,
-        SelectedTrackAuxSendLevel64 = 100
+        SelectedTrackAuxSendLevel64 = 100,
+        SelectedDrumSampleTuning = 101,
+        SelectedDrumSampleStart = 102,
+        SelectedDrumSampleEnd = 103,
+        SelectedDrumSampleLoop = 104,
+        SelectedDrumPadAttack = 105,
+        SelectedDrumPadDecay = 106,
+        SelectedDrumPadSustain = 107,
+        SelectedDrumPadRelease = 108
     };
     struct MidiControllerMapping
     {
@@ -436,6 +444,7 @@ private:
     std::array<QDoubleSpinBox*, 4> drumPadDecayControls{};
     std::array<QDoubleSpinBox*, 4> drumPadSustainControls{};
     std::array<QDoubleSpinBox*, 4> drumPadReleaseControls{};
+    QComboBox* drumPadSelectionControl = nullptr;
     std::array<QPushButton*, 4> highVelocityDrumSampleButtons{};
     std::array<QPushButton*, 4> clearHighVelocityDrumSampleButtons{};
     std::array<QSpinBox*, 4> highVelocityThresholdControls{};

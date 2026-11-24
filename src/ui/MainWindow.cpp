@@ -4694,6 +4694,12 @@ void MainWindow::createDocks()
     const std::array<QString, 4> drumPadNames = {
         tr("Kick"), tr("Snare"), tr("Closed hat"), tr("Open hat")
     };
+    drumPadSelectionControl = new QComboBox(drumSampleControls);
+    for (int pad = 0; pad < static_cast<int>(drumPadNames.size()); ++pad)
+        drumPadSelectionControl->addItem(drumPadNames[static_cast<size_t>(pad)], pad);
+    auto* selectedPadRow = new QFormLayout();
+    selectedPadRow->addRow(tr("MIDI control pad"), drumPadSelectionControl);
+    drumSampleLayout->addLayout(selectedPadRow);
     for (int pad = 0; pad < static_cast<int>(drumPadNames.size()); ++pad)
     {
         auto* row = new QWidget(drumSampleControls);
@@ -5179,10 +5185,19 @@ void MainWindow::createMenus()
     };
     for (int sendIndex = 0; sendIndex < 64; ++sendIndex)
         controllerTargets.push_back(tr("Selected track send %1 level").arg(sendIndex + 1));
+    controllerTargets.resize(static_cast<int>(MidiControllerTarget::SelectedDrumSampleTuning));
+    controllerTargets << tr("Selected drum pad sample tuning")
+                      << tr("Selected drum pad sample start")
+                      << tr("Selected drum pad sample end")
+                      << tr("Selected drum pad sample loop")
+                      << tr("Selected drum pad attack")
+                      << tr("Selected drum pad decay")
+                      << tr("Selected drum pad sustain")
+                      << tr("Selected drum pad release");
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
     for (int target = 0;
-         target <= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64); ++target)
+         target <= static_cast<int>(MidiControllerTarget::SelectedDrumPadRelease); ++target)
     {
         QAction* learnAction = learnControllerMenu->addAction(controllerTargets[target]);
         connect(learnAction, &QAction::triggered, this,
@@ -12474,10 +12489,11 @@ void MainWindow::setMidiClockSyncEnabled(bool enabled)
 
 void MainWindow::beginMidiControllerLearn(int target)
 {
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedDrumPadRelease) + 1;
     if (target < 0 || target >= targetCount)
         return;
     const InstrumentTrack* track = selectedTrack();
+    const bool drumTarget = target >= static_cast<int>(MidiControllerTarget::SelectedDrumSampleTuning);
     const bool outputBusTarget = target >=
             static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusLevel) &&
         target <= static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo);
@@ -12498,6 +12514,11 @@ void MainWindow::beginMidiControllerLearn(int target)
          outputBusTarget) && track == nullptr)
     {
         statusBar()->showMessage(tr("Select a track before learning its MIDI control"), 3000);
+        return;
+    }
+    if (drumTarget && (track == nullptr || track->instrumentType != InstrumentType::DrumRack))
+    {
+        statusBar()->showMessage(tr("Select a drum rack track before learning its pad control"), 3000);
         return;
     }
     if (outputBusTarget && track->outputBusId == 0)
@@ -12552,7 +12573,7 @@ void MainWindow::loadMidiControllerMappings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedDrumPadRelease) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const QString prefix = QString::number(target);
@@ -12572,7 +12593,7 @@ void MainWindow::saveMidiControllerMappings() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedDrumPadRelease) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const MidiControllerMapping mapping = midiControllerMappings.value(target);
@@ -12614,6 +12635,47 @@ void MainWindow::handleMidiControlChange(int channel, int controller, int value,
 void MainWindow::applyMidiControllerTarget(int target, int value)
 {
     value = std::clamp(value, 0, 127);
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedDrumSampleTuning) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedDrumPadRelease))
+    {
+        const InstrumentTrack* track = selectedTrack();
+        if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+            drumPadSelectionControl == nullptr)
+            return;
+        const int pad = drumPadSelectionControl->currentData().toInt();
+        if (pad < 0 || pad >= static_cast<int>(drumSampleTuneControls.size()))
+            return;
+        const double normalized = static_cast<double>(value) / 127.0;
+        switch (static_cast<MidiControllerTarget>(target))
+        {
+            case MidiControllerTarget::SelectedDrumSampleTuning:
+                drumSampleTuneControls[static_cast<size_t>(pad)]->setValue(-24.0 + normalized * 48.0);
+                return;
+            case MidiControllerTarget::SelectedDrumSampleStart:
+                drumSampleStartControls[static_cast<size_t>(pad)]->setValue(normalized * 99.0);
+                return;
+            case MidiControllerTarget::SelectedDrumSampleEnd:
+                drumSampleEndControls[static_cast<size_t>(pad)]->setValue(0.1 + normalized * 99.9);
+                return;
+            case MidiControllerTarget::SelectedDrumSampleLoop:
+                drumSampleLoopControls[static_cast<size_t>(pad)]->setChecked(value >= 64);
+                return;
+            case MidiControllerTarget::SelectedDrumPadAttack:
+                drumPadAttackControls[static_cast<size_t>(pad)]->setValue(normalized * 5.0);
+                return;
+            case MidiControllerTarget::SelectedDrumPadDecay:
+                drumPadDecayControls[static_cast<size_t>(pad)]->setValue(normalized * 5.0);
+                return;
+            case MidiControllerTarget::SelectedDrumPadSustain:
+                drumPadSustainControls[static_cast<size_t>(pad)]->setValue(normalized);
+                return;
+            case MidiControllerTarget::SelectedDrumPadRelease:
+                drumPadReleaseControls[static_cast<size_t>(pad)]->setValue(normalized * 5.0);
+                return;
+            default:
+                return;
+        }
+    }
     if (target == static_cast<int>(MidiControllerTarget::MasterLevel))
     {
         masterControl->setValue(static_cast<int>(std::lround(value * 100.0 / 127.0)));
