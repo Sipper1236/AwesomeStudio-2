@@ -57,7 +57,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Automatic punch-pass comp groups plus undoable manual grouping/ungrouping of aligned WAV regions, per-section take selection, and clicked-beat group splitting
 - [x] Named arrangement markers with ruler seeking and undoable editing
 - [x] Custom power and freehand drawn fades, portable media packaging, and WAV relinking
-- [x] Selectable audio output plus coded hardware loopback calibration with per-input/output compensation and input-buffer estimate subtraction
+- [x] Selectable audio output plus repeated coded hardware loopback calibration using a median measurement, per-input/output compensation, and input-buffer estimate subtraction
 - [x] Recover audio output safely when the selected Linux audio device disconnects or the available outputs change
 - [x] Format-2 meter maps with meter-aware Playlist/piano-roll rulers and snapping, step-sequencer bars, pattern placement/lengths, MIDI recording lengths, and imported MIDI clip lengths
 - [x] Configurable meter-relative Playlist snap for clip moves, audio trim edges, automation points, and ruler marker/tempo edits

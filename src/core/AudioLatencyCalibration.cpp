@@ -14,6 +14,8 @@ namespace
 {
 constexpr qsizetype maximumCaptureSeconds = 3;
 constexpr qsizetype probeFrameCount = 1023;
+constexpr int calibrationRepeatCount = 3;
+constexpr int calibrationRepeatIntervalMs = 750;
 constexpr int maximumRoundTripMs = 500;
 constexpr float probeAmplitude = 0.45f;
 constexpr float minimumCorrelation = 0.08f;
@@ -189,7 +191,7 @@ bool AudioLatencyCalibration::startProbe(QString* error)
 {
     sink = std::make_unique<QAudioSink>(outputDevice, sinkFormat);
     sink->setVolume(0.3f);
-    const qsizetype outputFrames = static_cast<qsizetype>(captureSampleRate) * 2;
+    const qsizetype outputFrames = static_cast<qsizetype>(captureSampleRate) * 3;
     const qint64 requestedBuffer = sinkFormat.bytesForFrames(outputFrames);
     if (requestedBuffer > 0)
         sink->setBufferSize(requestedBuffer);
@@ -207,7 +209,10 @@ bool AudioLatencyCalibration::startProbe(QString* error)
 
     silenceFrames = captureSampleRate / 5;
     const qsizetype trailingFrames = captureSampleRate / 5;
-    const qsizetype totalFrames = silenceFrames + probe.size() + trailingFrames;
+    const qsizetype repeatIntervalFrames = static_cast<qsizetype>(captureSampleRate) *
+                                          calibrationRepeatIntervalMs / 1000;
+    const qsizetype totalFrames = silenceFrames +
+        (calibrationRepeatCount - 1) * repeatIntervalFrames + probe.size() + trailingFrames;
     const qsizetype bytesPerFrame = sinkFormat.bytesPerFrame();
     if (bytesPerFrame <= 0 || totalFrames > std::numeric_limits<int>::max() / bytesPerFrame)
     {
@@ -220,14 +225,18 @@ bool AudioLatencyCalibration::startProbe(QString* error)
 
     QByteArray output(static_cast<int>(totalFrames * bytesPerFrame), '\0');
     const int bytesPerSample = sinkFormat.bytesPerSample();
-    for (qsizetype frame = 0; frame < probe.size(); ++frame)
+    for (int repeat = 0; repeat < calibrationRepeatCount; ++repeat)
     {
-        const float value = probe[frame];
-        for (int channel = 0; channel < sinkFormat.channelCount(); ++channel)
+        const qsizetype repeatStart = silenceFrames + repeat * repeatIntervalFrames;
+        for (qsizetype frame = 0; frame < probe.size(); ++frame)
         {
-            char* destination = output.data() +
-                (silenceFrames + frame) * bytesPerFrame + channel * bytesPerSample;
-            writeSample(destination, sinkFormat.sampleFormat(), value);
+            const float value = probe[frame];
+            for (int channel = 0; channel < sinkFormat.channelCount(); ++channel)
+            {
+                char* destination = output.data() +
+                    (repeatStart + frame) * bytesPerFrame + channel * bytesPerSample;
+                writeSample(destination, sinkFormat.sampleFormat(), value);
+            }
         }
     }
 
@@ -243,7 +252,7 @@ bool AudioLatencyCalibration::startProbe(QString* error)
         return false;
     }
     probeStarted = true;
-    timeout->start(1800);
+    timeout->start(2500);
     return true;
 }
 
@@ -251,41 +260,49 @@ void AudioLatencyCalibration::finishProbe()
 {
     if (!probeStarted || !capture.isActive())
         return;
-    const qsizetype searchStart = outputStartCaptureFrame + silenceFrames;
-    const qsizetype searchEnd = std::min(
-        capturedMono.size() - probe.size(),
-        searchStart + static_cast<qsizetype>(captureSampleRate) * maximumRoundTripMs / 1000);
-    if (searchStart < 0 || searchEnd < searchStart)
+    const qsizetype repeatIntervalFrames = static_cast<qsizetype>(captureSampleRate) *
+                                           calibrationRepeatIntervalMs / 1000;
+    QVector<double> roundTripMeasurements;
+    for (int repeat = 0; repeat < calibrationRepeatCount; ++repeat)
     {
-        complete(false, 0.0, tr("The input did not capture enough audio for calibration."));
-        return;
-    }
-
-    double bestCorrelation = 0.0;
-    qsizetype bestFrame = -1;
-    for (qsizetype startFrame = searchStart; startFrame <= searchEnd; ++startFrame)
-    {
-        double dot = 0.0;
-        double energy = 0.0;
-        for (qsizetype index = 0; index < probe.size(); ++index)
-        {
-            const double sample = capturedMono[startFrame + index];
-            dot += sample * probe[index];
-            energy += sample * sample;
-        }
-        if (energy <= 1.0e-10)
+        const qsizetype searchStart = outputStartCaptureFrame + silenceFrames +
+                                      repeat * repeatIntervalFrames;
+        const qsizetype searchEnd = std::min(
+            capturedMono.size() - probe.size(),
+            searchStart + static_cast<qsizetype>(captureSampleRate) * maximumRoundTripMs / 1000);
+        if (searchStart < 0 || searchEnd < searchStart)
             continue;
-        const double correlation = std::abs(dot) / std::sqrt(energy * probe.size());
-        if (correlation > bestCorrelation)
+
+        double bestCorrelation = 0.0;
+        qsizetype bestFrame = -1;
+        for (qsizetype startFrame = searchStart; startFrame <= searchEnd; ++startFrame)
         {
-            bestCorrelation = correlation;
-            bestFrame = startFrame;
+            double dot = 0.0;
+            double energy = 0.0;
+            for (qsizetype index = 0; index < probe.size(); ++index)
+            {
+                const double sample = capturedMono[startFrame + index];
+                dot += sample * probe[index];
+                energy += sample * sample;
+            }
+            if (energy <= 1.0e-10)
+                continue;
+            const double correlation = std::abs(dot) / std::sqrt(energy * probe.size());
+            if (correlation > bestCorrelation)
+            {
+                bestCorrelation = correlation;
+                bestFrame = startFrame;
+            }
         }
+        if (bestFrame >= 0 && bestCorrelation >= minimumCorrelation)
+            roundTripMeasurements.append(static_cast<double>(bestFrame - searchStart) *
+                                         1000.0 / captureSampleRate);
     }
 
-    if (bestFrame < 0 || bestCorrelation < minimumCorrelation)
+    if (roundTripMeasurements.size() < 2)
     {
-        complete(false, 0.0, tr("No clear loopback signal was detected. Check the cable, input, and output levels."));
+        complete(false, 0.0,
+                 tr("Fewer than two calibration probes were detected clearly. Check the cable, input, and output levels."));
         return;
     }
 
@@ -296,8 +313,11 @@ void AudioLatencyCalibration::finishProbe()
         complete(false, 0.0, captureError);
         return;
     }
-    const double roundTripMs = static_cast<double>(bestFrame - searchStart) *
-                               1000.0 / captureSampleRate;
+    std::sort(roundTripMeasurements.begin(), roundTripMeasurements.end());
+    const qsizetype middle = roundTripMeasurements.size() / 2;
+    const double roundTripMs = roundTripMeasurements.size() % 2 == 0
+        ? (roundTripMeasurements[middle - 1] + roundTripMeasurements[middle]) * 0.5
+        : roundTripMeasurements[middle];
     const double inputBufferEstimateMs = capture.estimatedInputLatencyMs().value_or(0.0);
     complete(true, std::max(0.0, roundTripMs - inputBufferEstimateMs));
 }
