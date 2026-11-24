@@ -1671,7 +1671,7 @@ private:
             painter.setPen(QPen(QColor(QStringLiteral("#172029")), 1.5));
             painter.setBrush(bus.id == selectedAutomationBusId && index == selectedAutomationPoint
                                  ? QColor(QStringLiteral("#fff0c2")) : QColor(QStringLiteral("#e6b66f")));
-            painter.drawEllipse(center, 4.5, 4.5);
+            painter.drawEllipse(QPointF(center), 4.5, 4.5);
         }
     }
 
