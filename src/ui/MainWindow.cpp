@@ -4938,7 +4938,7 @@ void MainWindow::createMenus()
     connect(midiControllerListenAction, &QAction::toggled,
             this, &MainWindow::setMidiControllerListening);
 
-    const std::array<QString, 37> controllerTargets = {
+    QVector<QString> controllerTargets = {
         tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo"),
         tr("Selected track mute"), tr("Selected track solo"),
         tr("Selected synth filter cutoff"), tr("Selected synth filter resonance"),
@@ -4970,15 +4970,17 @@ void MainWindow::createMenus()
         tr("Selected track low/mid EQ crossover"),
         tr("Selected track mid/high EQ crossover")
     };
+    for (int sendIndex = 0; sendIndex < 64; ++sendIndex)
+        controllerTargets.push_back(tr("Selected track send %1 level").arg(sendIndex + 1));
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
     for (int target = 0;
-         target <= static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover); ++target)
+         target <= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64); ++target)
     {
-        QAction* learnAction = learnControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
+        QAction* learnAction = learnControllerMenu->addAction(controllerTargets[target]);
         connect(learnAction, &QAction::triggered, this,
                 [this, target] { beginMidiControllerLearn(target); });
-        QAction* clearAction = clearControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
+        QAction* clearAction = clearControllerMenu->addAction(controllerTargets[target]);
         connect(clearAction, &QAction::triggered, this,
                 [this, target] { clearMidiControllerMapping(target); });
     }
@@ -6480,6 +6482,8 @@ void MainWindow::refreshMixer()
             sendBus->setCurrentIndex(std::max(0, sendBus->findData(
                 QVariant::fromValue<qulonglong>(send.busId))));
             auto* sendLevel = new QSlider(Qt::Horizontal, sendRow);
+            sendLevel->setObjectName(QStringLiteral("mixerTrackSendLevel_%1_%2")
+                                         .arg(trackId).arg(sendIndex));
             sendLevel->setRange(0, 100);
             sendLevel->setValue(static_cast<int>(std::round(send.gain * 100.0f)));
             const int sendAutomationTarget = mixerSendLevelAutomationTarget(static_cast<int>(sendIndex));
@@ -11982,7 +11986,7 @@ void MainWindow::setMidiControllerListening(bool enabled)
 
 void MainWindow::beginMidiControllerLearn(int target)
 {
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) + 1;
     if (target < 0 || target >= targetCount)
         return;
     const InstrumentTrack* track = selectedTrack();
@@ -12001,6 +12005,8 @@ void MainWindow::beginMidiControllerLearn(int target)
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) ||
          (target >= static_cast<int>(MidiControllerTarget::SelectedTrackSynthAttack) &&
           target <= static_cast<int>(MidiControllerTarget::SelectedTrackFilterType)) ||
+         (target >= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel1) &&
+          target <= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64)) ||
          outputBusTarget) && track == nullptr)
     {
         statusBar()->showMessage(tr("Select a track before learning its MIDI control"), 3000);
@@ -12009,6 +12015,13 @@ void MainWindow::beginMidiControllerLearn(int target)
     if (outputBusTarget && track->outputBusId == 0)
     {
         statusBar()->showMessage(tr("Route the selected track to a mixer bus before learning its bus controls"), 3500);
+        return;
+    }
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel1) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) &&
+        target - static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel1) >= track->sends.size())
+    {
+        statusBar()->showMessage(tr("Add that auxiliary send to the selected track before learning its level"), 3500);
         return;
     }
     if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) &&
@@ -12051,7 +12064,7 @@ void MainWindow::loadMidiControllerMappings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const QString prefix = QString::number(target);
@@ -12071,7 +12084,7 @@ void MainWindow::saveMidiControllerMappings() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const MidiControllerMapping mapping = midiControllerMappings.value(target);
@@ -12200,6 +12213,18 @@ void MainWindow::applyMidiControllerTarget(int target, int value)
             default:
                 return;
         }
+    }
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel1) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel64))
+    {
+        const int sendIndex = target - static_cast<int>(MidiControllerTarget::SelectedTrackAuxSendLevel1);
+        if (sendIndex < track->sends.size())
+        {
+            if (QSlider* control = mixerDock->findChild<QSlider*>(
+                    QStringLiteral("mixerTrackSendLevel_%1_%2").arg(track->id).arg(sendIndex)))
+                control->setValue(static_cast<int>(std::lround(value * 100.0 / 127.0)));
+        }
+        return;
     }
     if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorWaveform) &&
         target <= static_cast<int>(MidiControllerTarget::SelectedTrackFilterType))

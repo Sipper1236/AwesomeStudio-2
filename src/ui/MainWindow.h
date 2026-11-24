@@ -317,7 +317,9 @@ private:
         SelectedTrackEqMidGain = 33,
         SelectedTrackEqHighGain = 34,
         SelectedTrackEqLowCrossover = 35,
-        SelectedTrackEqHighCrossover = 36
+        SelectedTrackEqHighCrossover = 36,
+        SelectedTrackAuxSendLevel1 = 37,
+        SelectedTrackAuxSendLevel64 = 100
     };
     struct MidiControllerMapping
     {
