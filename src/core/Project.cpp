@@ -328,7 +328,7 @@ double ProjectData::barBoundaryAtOrAfter(double beat) const
     {
         if (change.beat <= 1.0e-9)
             continue;
-        if (change.beat > beat + 1.0e-9)
+        if (change.beat > beat)
             break;
         segmentStart = change.beat;
         barLength = static_cast<double>(change.beatsPerBar) * 4.0 / change.beatUnit;
@@ -343,6 +343,45 @@ double ProjectData::barBoundaryAtOrAfter(double beat) const
             return change.beat;
     }
     return std::max(beat, boundary);
+}
+
+double ProjectData::barBoundaryAtOrBefore(double beat) const
+{
+    beat = std::max(0.0, beat);
+    double segmentStart = 0.0;
+    double barLength = quarterNotesPerBarAtBeat(0.0);
+    for (const TimeSignatureChange& change : timeSignatureChanges)
+    {
+        if (change.beat <= 1.0e-9)
+            continue;
+        if (change.beat > beat)
+            break;
+        segmentStart = change.beat;
+        barLength = static_cast<double>(change.beatsPerBar) * 4.0 / change.beatUnit;
+    }
+    if (!std::isfinite(barLength) || barLength <= 0.0)
+        return beat;
+    const double boundary = segmentStart +
+        std::floor((beat - segmentStart) / barLength + 1.0e-9) * barLength;
+    return std::clamp(boundary, segmentStart, beat);
+}
+
+double ProjectData::snapBeatToBarDivision(double beat, int divisions) const
+{
+    beat = std::max(0.0, beat);
+    divisions = std::clamp(divisions, 1, 64);
+    const double barStart = barBoundaryAtOrBefore(beat);
+    const double barLength = quarterNotesPerBarAtBeat(beat);
+    const double step = barLength / divisions;
+    if (!std::isfinite(step) || step <= 0.0)
+        return beat;
+    double snapped = barStart + std::round((beat - barStart) / step) * step;
+    for (const TimeSignatureChange& change : timeSignatureChanges)
+    {
+        if (change.beat > beat && change.beat < snapped - 1.0e-9)
+            snapped = change.beat;
+    }
+    return std::clamp(snapped, 0.0, 16384.0);
 }
 
 double ProjectData::quarterNotesPerBar() const

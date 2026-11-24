@@ -500,6 +500,8 @@ struct ProjectData
     double patternLengthBeats() const;
     double patternLengthBeatsAt(double startBeat, int barCount) const;
     double barBoundaryAtOrAfter(double beat) const;
+    double barBoundaryAtOrBefore(double beat) const;
+    double snapBeatToBarDivision(double beat, int divisions) const;
     double quarterNotesPerBar() const;
     double quarterNotesPerBarAtBeat(double beat) const;
     TimeSignatureChange timeSignatureAtBeat(double beat) const;
