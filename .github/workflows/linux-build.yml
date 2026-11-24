@@ -1,0 +1,73 @@
+name: Linux build
+
+on:
+  push:
+    branches:
+      - main
+      - codex/awesomestudio-core-daw
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-x64:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            qt6-base-dev \
+            qt6-multimedia-dev \
+            libasound2-dev \
+            liblilv-dev \
+            libflac-dev \
+            libsndfile1-dev \
+            libmp3lame-dev
+
+      - name: Configure Release build
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Linux executable
+        run: cmake --build build --parallel
+
+      - name: Package Linux build archive
+        run: |
+          package_dir="dist/AwesomeStudio-Linux-x86_64"
+          mkdir -p "$package_dir"
+          install -Dm755 build/AwesomeStudio "$package_dir/AwesomeStudio"
+          cp LICENSE README.md third_party/VST3-SDK-LICENSE.txt "$package_dir/"
+          cat > "$package_dir/RUNNING.txt" <<'EOF'
+          Awesome Studio Linux x86_64 build
+
+          This is a dynamically linked build made on Ubuntu 24.04. It requires
+          Qt 6 Widgets and Multimedia plus ALSA, Lilv, FLAC, libsndfile, and
+          LAME runtime libraries. Install the matching runtime packages from
+          your Linux distribution, then run ./AwesomeStudio.
+
+          Projects and audio media are not included in this archive.
+          EOF
+          tar -czf AwesomeStudio-Linux-x86_64.tar.gz -C dist AwesomeStudio-Linux-x86_64
+
+      - name: Upload Linux executable and archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: AwesomeStudio-Linux-x86_64
+          path: |
+            build/AwesomeStudio
+            AwesomeStudio-Linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
