@@ -59,6 +59,7 @@ class MainWindow final : public QMainWindow
 public:
     explicit MainWindow(AudioEngine& audioEngine, QWidget* parent = nullptr);
     ~MainWindow() override;
+    bool openProjectFile(const QString& path);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

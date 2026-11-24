@@ -67,6 +67,7 @@ This is not feature parity with FL Studio, Reaper, or Ardour yet. The project is
 - Right-click the Playlist ruler to add a named arrangement marker or a tempo change; right-click either tag to edit or remove it. Left-click the ruler or a marker to seek and start playback. Marker and tempo edits can be undone and are saved in the project.
 - Use **File → Save portable project copy…** to save an `.aws` copy beside a companion `<name>_media` folder. It copies referenced WAVs once and rewrites their paths relative to the copy; unavailable sources remain linked by their existing paths. Right-click an offline Playlist audio region and choose **Relink WAV…** to attach a replacement while preserving its arrangement timing and fades.
 - Save and reopen `.aws` projects. Each save keeps up to three rotating `.aws.bakN` versions beside the project. Open one from **File → Open** to restore it as the current project. Dirty saved projects are autosaved to a `.autosave` sidecar every two minutes; opening a project offers recovery when that sidecar is newer, and saving the recovered project clears it. Dirty unsaved sessions are autosaved under the application data folder and offered for recovery at the next launch.
+- On Linux, double-click an `.aws` project to open it in Awesome Studio, or run `AwesomeStudio /path/to/project.aws`.
 - Use the editor without an audio device; connect an output device to audition notes.
 - If an active output device disconnects, playback stops safely and the app tries the new system default; connect or select an available output to continue.
 
@@ -87,7 +88,7 @@ cmake --build build --parallel
 ./build/AwesomeStudio
 ```
 
-To download a Linux x86_64 build, open the repository's Actions tab and download the `AwesomeStudio-Linux-x86_64` artifact. It contains an AppImage, Ubuntu 24.04 `.deb` and `.rpm` packages, the dynamically linked executable, and a tar.gz archive with licenses and runtime notes. Make the AppImage executable and launch it directly. On Debian or Ubuntu, install the package with `sudo apt install ./awesome-studio_0.2.0_amd64.deb`; on Fedora-compatible systems, install the RPM with `sudo dnf install ./awesome-studio-0.2.0-1.x86_64.rpm`. The standalone archive requires Qt 6 Widgets/Multimedia and Linux audio runtime libraries to be installed separately.
+To download a Linux x86_64 build, open the repository's Actions tab and download the `AwesomeStudio-Linux-x86_64` artifact. It contains an AppImage, Ubuntu 24.04 `.deb` and `.rpm` packages, the dynamically linked executable, and a tar.gz archive with licenses and runtime notes. The AppImage and install packages include a desktop launcher, project-file association, icon, and AppStream metadata. Make the AppImage executable and launch it directly. On Debian or Ubuntu, install the package with `sudo apt install ./awesome-studio_0.2.0_amd64.deb`; on Fedora-compatible systems, install the RPM with `sudo dnf install ./awesome-studio-0.2.0-1.x86_64.rpm`. The standalone archive requires Qt 6 Widgets/Multimedia and Linux audio runtime libraries to be installed separately.
 
 This development branch currently builds and packages Linux x86_64 only. Windows and macOS workflows and build artifacts are paused while Linux development continues.
 

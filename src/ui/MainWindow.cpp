@@ -3327,72 +3327,11 @@ void MainWindow::createActions()
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, [this]
     {
-        if (!maybeSave())
-            return;
         const QString selectedPath = QFileDialog::getOpenFileName(
             this, tr("Open project"), projectPath,
             tr("Awesome Studio project (*.aws *.aws.bak1 *.aws.bak2 *.aws.bak3)"));
-        if (selectedPath.isEmpty())
-            return;
-        const QString path = projectPathForBackup(selectedPath);
-        const bool recoveredBackup = path != selectedPath;
-        QString loadPath = selectedPath;
-        const QFileInfo autosaveInfo(projectAutosavePath(path));
-        const QFileInfo projectInfo(path);
-        bool recoveredAutosave = false;
-        if (!recoveredBackup && autosaveInfo.exists() &&
-            autosaveInfo.lastModified() >= projectInfo.lastModified())
-        {
-            const QMessageBox::StandardButton choice = QMessageBox::question(
-                this, tr("Recover autosave"),
-                tr("A newer autosave is available for %1. Recover it?")
-                    .arg(QFileInfo(path).fileName()),
-                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-            if (choice == QMessageBox::Yes)
-            {
-                loadPath = autosaveInfo.filePath();
-                recoveredAutosave = true;
-            }
-            else
-            {
-                QFile::remove(autosaveInfo.filePath());
-            }
-        }
-        ProjectData loaded;
-        QString error;
-        if (!ProjectFile::load(loadPath, loaded, &error) && recoveredAutosave)
-        {
-            QMessageBox::warning(this, tr("Autosave could not be recovered"),
-                                 tr("The original project will be opened instead.\n%1").arg(error));
-            QFile::remove(projectAutosavePath(path));
-            recoveredAutosave = false;
-            error.clear();
-            if (!ProjectFile::load(path, loaded, &error))
-            {
-                QMessageBox::critical(this, tr("Could not open project"), error);
-                return;
-            }
-        }
-        else if (!error.isEmpty())
-        {
-            QMessageBox::critical(this, tr("Could not open project"), error);
-            return;
-        }
-        setProject(loaded, path);
-        if (recoveredAutosave)
-        {
-            settingsDirty = true;
-            refreshDirtyState();
-            statusBar()->showMessage(tr("Recovered autosave for %1; save the project to keep it.")
-                                         .arg(QFileInfo(path).fileName()), 6000);
-        }
-        else if (recoveredBackup)
-        {
-            settingsDirty = true;
-            refreshDirtyState();
-            statusBar()->showMessage(tr("Opened backup for %1; save to restore it as the current project.")
-                                         .arg(QFileInfo(path).fileName()), 6000);
-        }
+        if (!selectedPath.isEmpty())
+            openProjectFile(selectedPath);
     });
 
     auto* saveAction = new QAction(style()->standardIcon(QStyle::SP_DialogSaveButton), tr("Save"), this);
@@ -3592,6 +3531,75 @@ void MainWindow::createActions()
     undoAction->setShortcut(QKeySequence::Undo);
     redoAction = undoStack.createRedoAction(this, tr("Redo"));
     redoAction->setShortcut(QKeySequence::Redo);
+}
+
+bool MainWindow::openProjectFile(const QString& selectedPath)
+{
+    if (selectedPath.isEmpty() || !maybeSave())
+        return false;
+
+    const QString path = projectPathForBackup(selectedPath);
+    const bool recoveredBackup = path != selectedPath;
+    QString loadPath = selectedPath;
+    const QFileInfo autosaveInfo(projectAutosavePath(path));
+    const QFileInfo projectInfo(path);
+    bool recoveredAutosave = false;
+    if (!recoveredBackup && autosaveInfo.exists() &&
+        autosaveInfo.lastModified() >= projectInfo.lastModified())
+    {
+        const QMessageBox::StandardButton choice = QMessageBox::question(
+            this, tr("Recover autosave"),
+            tr("A newer autosave is available for %1. Recover it?")
+                .arg(QFileInfo(path).fileName()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (choice == QMessageBox::Yes)
+        {
+            loadPath = autosaveInfo.filePath();
+            recoveredAutosave = true;
+        }
+        else
+        {
+            QFile::remove(autosaveInfo.filePath());
+        }
+    }
+
+    ProjectData loaded;
+    QString error;
+    if (!ProjectFile::load(loadPath, loaded, &error) && recoveredAutosave)
+    {
+        QMessageBox::warning(this, tr("Autosave could not be recovered"),
+                             tr("The original project will be opened instead.\n%1").arg(error));
+        QFile::remove(projectAutosavePath(path));
+        recoveredAutosave = false;
+        error.clear();
+        if (!ProjectFile::load(path, loaded, &error))
+        {
+            QMessageBox::critical(this, tr("Could not open project"), error);
+            return false;
+        }
+    }
+    else if (!error.isEmpty())
+    {
+        QMessageBox::critical(this, tr("Could not open project"), error);
+        return false;
+    }
+
+    setProject(loaded, path);
+    if (recoveredAutosave)
+    {
+        settingsDirty = true;
+        refreshDirtyState();
+        statusBar()->showMessage(tr("Recovered autosave for %1; save the project to keep it.")
+                                     .arg(QFileInfo(path).fileName()), 6000);
+    }
+    else if (recoveredBackup)
+    {
+        settingsDirty = true;
+        refreshDirtyState();
+        statusBar()->showMessage(tr("Opened backup for %1; save to restore it as the current project.")
+                                     .arg(QFileInfo(path).fileName()), 6000);
+    }
+    return true;
 }
 
 void MainWindow::createToolBars()

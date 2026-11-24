@@ -105,6 +105,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Optional multi-format export, stems, cancellable batch rendering, and progress reporting
 - [x] Block-based CLAP processing with a 64-frame host buffering delay
 - [x] Linux Debian, RPM, and AppImage packages with executable/archive artifacts in GitHub Actions
+- [x] Linux package desktop integration with AppStream metadata and `.aws` project-file opening
 - [ ] Signed installers and a focused automated test suite
 
 ## Build requirements

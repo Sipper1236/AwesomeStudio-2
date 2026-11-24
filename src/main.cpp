@@ -2,6 +2,8 @@
 #include "ui/MainWindow.h"
 
 #include <QApplication>
+#include <QFileInfo>
+#include <QTimer>
 
 int main(int argc, char* argv[])
 {
@@ -13,5 +15,14 @@ int main(int argc, char* argv[])
     AudioEngine audioEngine;
     MainWindow mainWindow(audioEngine);
     mainWindow.show();
+    const QStringList arguments = application.arguments();
+    if (arguments.size() > 1)
+    {
+        const QString projectPath = QFileInfo(arguments.at(1)).absoluteFilePath();
+        QTimer::singleShot(0, &mainWindow, [&mainWindow, projectPath]
+        {
+            mainWindow.openProjectFile(projectPath);
+        });
+    }
     return application.exec();
 }

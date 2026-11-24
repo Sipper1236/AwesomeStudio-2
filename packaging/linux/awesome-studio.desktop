@@ -2,8 +2,9 @@
 Type=Application
 Name=Awesome Studio
 Comment=Digital audio workstation
-Exec=AwesomeStudio
+Exec=AwesomeStudio %f
 Icon=awesome-studio
+MimeType=application/x-awesome-studio-project;
 Categories=AudioVideo;Audio;Music;
 Terminal=false
 StartupNotify=true

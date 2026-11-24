@@ -162,6 +162,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         DESTINATION share/applications)
     install(FILES packaging/linux/awesome-studio.svg
         DESTINATION share/icons/hicolor/scalable/apps)
+    install(FILES packaging/linux/awesome-studio-mime.xml
+        DESTINATION share/mime/packages RENAME awesome-studio.xml)
+    install(FILES packaging/linux/awesome-studio.metainfo.xml
+        DESTINATION share/metainfo)
     install(FILES LICENSE README.md DESTINATION share/doc/awesome-studio)
 
     set(CPACK_GENERATOR "DEB;RPM")

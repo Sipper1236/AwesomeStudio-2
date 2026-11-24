@@ -65,9 +65,13 @@ jobs:
           appdir="AppDir"
           mkdir -p "$appdir/usr/bin" \
             "$appdir/usr/share/applications" \
+            "$appdir/usr/share/mime/packages" \
+            "$appdir/usr/share/metainfo" \
             "$appdir/usr/share/icons/hicolor/scalable/apps"
           install -Dm755 build/AwesomeStudio "$appdir/usr/bin/AwesomeStudio"
           cp packaging/linux/awesome-studio.desktop "$appdir/usr/share/applications/"
+          cp packaging/linux/awesome-studio-mime.xml "$appdir/usr/share/mime/packages/awesome-studio.xml"
+          cp packaging/linux/awesome-studio.metainfo.xml "$appdir/usr/share/metainfo/"
           cp packaging/linux/awesome-studio.svg "$appdir/usr/share/icons/hicolor/scalable/apps/"
           rsvg-convert --width 256 --height 256 packaging/linux/awesome-studio.svg \
             --output "$appdir/awesome-studio.png"
