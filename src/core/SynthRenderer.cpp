@@ -2107,6 +2107,27 @@ bool SynthRenderer::hasPendingVst3LatencyRestart() const
     return hasPendingInEffects(masterEffectStates);
 }
 
+bool SynthRenderer::hasPendingClapRestart() const
+{
+    for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
+        if (instrument != nullptr && instrument->hasPendingRestart())
+            return true;
+    const auto hasPendingInEffects = [](const std::vector<EffectState>& states)
+    {
+        return std::any_of(states.cbegin(), states.cend(), [](const EffectState& state)
+        {
+            return state.clapEffect != nullptr && state.clapEffect->hasPendingRestart();
+        });
+    };
+    for (const std::vector<EffectState>& states : trackEffectStates)
+        if (hasPendingInEffects(states))
+            return true;
+    for (const std::vector<EffectState>& states : busEffectStates)
+        if (hasPendingInEffects(states))
+            return true;
+    return hasPendingInEffects(masterEffectStates);
+}
+
 void SynthRenderer::servicePluginCallbacks()
 {
     for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
@@ -2139,6 +2160,28 @@ void SynthRenderer::serviceVst3LatencyRestarts()
     serviceInEffects(masterEffectStates);
     if (rebuildCompensation)
         recomputeLatencyCompensation();
+}
+
+bool SynthRenderer::serviceClapRestarts()
+{
+    bool rebuildCompensation = false;
+    for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
+        if (instrument != nullptr)
+            rebuildCompensation = instrument->serviceRestart() || rebuildCompensation;
+    const auto serviceInEffects = [&rebuildCompensation](std::vector<EffectState>& states)
+    {
+        for (EffectState& state : states)
+            if (state.clapEffect != nullptr)
+                rebuildCompensation = state.clapEffect->serviceRestart() || rebuildCompensation;
+    };
+    for (std::vector<EffectState>& states : trackEffectStates)
+        serviceInEffects(states);
+    for (std::vector<EffectState>& states : busEffectStates)
+        serviceInEffects(states);
+    serviceInEffects(masterEffectStates);
+    if (rebuildCompensation)
+        recomputeLatencyCompensation();
+    return rebuildCompensation;
 }
 
 void SynthRenderer::stopPluginProcessing()

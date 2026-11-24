@@ -81,7 +81,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] VST3 per-block transport context for project position, tempo, meter, loop state, and PPQ note events
 - [ ] VST3 note expression
 - [x] VST3 latency restart notifications with component reactivation and Mixer compensation recalculation
-- [ ] Dynamic CLAP latency changes and transport output timing compensation
+- [x] Dynamic CLAP latency restart handling and Mixer compensation recalculation
+- [ ] Transport output timing compensation
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
 - [ ] Broader controller target coverage
 - [x] Autosave, rotating backups, project recovery, and versioned migrations

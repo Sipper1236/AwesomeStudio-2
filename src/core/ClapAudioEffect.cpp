@@ -511,6 +511,7 @@ struct ClapAudioPluginInstance::Private
     bool outputReady = false;
     int64_t steadyTime = 0;
     uint32_t reportedLatencyFrames = 0;
+    double sampleRate = 44100.0;
     std::thread::id processingThread;
     bool activated = false;
     bool processing = false;
@@ -695,6 +696,7 @@ ClapAudioPluginInstance::ClapAudioPluginInstance(const QString& id, ClapPluginKi
     d->kind = kind;
     if (!std::isfinite(sampleRate) || sampleRate <= 0.0)
         return;
+    d->sampleRate = sampleRate;
     const ClapCatalogEntry* entry = findCatalogEntry(id, kind);
     if (entry == nullptr)
         return;
@@ -785,6 +787,72 @@ bool ClapAudioPluginInstance::isValid() const
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     return d != nullptr && d->plugin != nullptr && d->activated;
+#else
+    return false;
+#endif
+}
+
+bool ClapAudioPluginInstance::hasPendingRestart() const
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    return d != nullptr &&
+        d->hostContext.restartRequested.load(std::memory_order_acquire);
+#else
+    return false;
+#endif
+}
+
+bool ClapAudioPluginInstance::serviceRestart()
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d == nullptr || d->plugin == nullptr || !d->hostContext.restartRequested.exchange(
+            false, std::memory_order_acq_rel))
+        return false;
+    if (d->processing)
+    {
+        d->hostContext.restartRequested.store(true, std::memory_order_release);
+        return false;
+    }
+
+    const qint64 previousLatency = d->activated
+        ? static_cast<qint64>(clapBlockFrames) + d->reportedLatencyFrames : 0;
+    if (d->activated)
+    {
+        if (d->plugin->deactivate == nullptr)
+        {
+            d->hostContext.restartRequested.store(true, std::memory_order_release);
+            return false;
+        }
+        d->plugin->deactivate(d->plugin);
+        d->activated = false;
+    }
+    if (d->plugin->activate == nullptr ||
+        !d->plugin->activate(d->plugin, d->sampleRate, 1, clapBlockFrames))
+    {
+        d->hostContext.restartRequested.store(true, std::memory_order_release);
+        return previousLatency != 0;
+    }
+    d->activated = true;
+    d->reportedLatencyFrames = d->latency != nullptr && d->latency->get != nullptr
+        ? d->latency->get(d->plugin) : 0;
+    d->bufferedFrames = 0;
+    d->outputRead = 0;
+    d->outputReady = false;
+    d->pendingEvents.clear();
+    d->pendingParameterEvents.clear();
+    d->pendingInstrumentEventCount = 0;
+    d->steadyTime = 0;
+    d->inputLeft.fill(0.0f);
+    d->inputRight.fill(0.0f);
+    d->monoInput.fill(0.0f);
+    d->outputLeft.fill(0.0f);
+    d->outputRight.fill(0.0f);
+    d->monoOutput.fill(0.0f);
+    d->dryLeft.fill(0.0f);
+    d->dryRight.fill(0.0f);
+    std::fill(d->sentValues.begin(), d->sentValues.end(),
+              std::numeric_limits<float>::quiet_NaN());
+    return true;
 #else
     return false;
 #endif

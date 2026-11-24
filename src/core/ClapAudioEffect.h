@@ -54,6 +54,8 @@ public:
     ClapAudioPluginInstance& operator=(const ClapAudioPluginInstance&) = delete;
 
     bool isValid() const;
+    bool hasPendingRestart() const;
+    bool serviceRestart();
     qint64 processingLatencyFrames() const;
     qsizetype parameterCount() const;
     float parameterValue(qsizetype index) const;

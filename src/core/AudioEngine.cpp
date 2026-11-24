@@ -500,7 +500,8 @@ void AudioEngine::servicePluginCallbacks()
 
     const std::shared_ptr<SynthRenderer>& renderer = renderState->renderer;
     renderer->servicePluginCallbacks();
-    if (!renderer->hasPendingVst3LatencyRestart())
+    if (!renderer->hasPendingClapRestart() &&
+        !renderer->hasPendingVst3LatencyRestart())
         return;
 
     if (pluginStateCaptureInProgress.exchange(true, std::memory_order_acq_rel))
@@ -523,6 +524,7 @@ void AudioEngine::servicePluginCallbacks()
         sink->suspend();
     while (activeRenderCallbacks.load(std::memory_order_acquire) != 0)
         std::this_thread::yield();
+    renderer->serviceClapRestarts();
     renderer->serviceVst3LatencyRestarts();
 }
 

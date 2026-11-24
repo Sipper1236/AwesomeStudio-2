@@ -46,6 +46,8 @@ public:
     void setLiveVst3InstrumentParameterOverride(size_t trackIndex,
                                                qsizetype parameterIndex, float value);
     void capturePluginStates(ProjectData& target) const;
+    bool hasPendingClapRestart() const;
+    bool serviceClapRestarts();
     bool hasPendingVst3LatencyRestart() const;
     void servicePluginCallbacks();
     void serviceVst3LatencyRestarts();
