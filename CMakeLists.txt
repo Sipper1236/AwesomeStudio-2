@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.28)
 project(AwesomeStudio VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -7,6 +7,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Multimedia)
+
+include(FetchContent)
+set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(steinberg_vst3sdk
+    GIT_REPOSITORY https://github.com/steinbergmedia/vst3sdk.git
+    GIT_TAG v3.8.1_build_84
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES base cmake pluginterfaces public.sdk
+    EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(steinberg_vst3sdk)
 
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig QUIET)
@@ -33,6 +46,8 @@ add_executable(AwesomeStudio
     src/core/Lv2AudioEffect.h
     src/core/ClapAudioEffect.cpp
     src/core/ClapAudioEffect.h
+    src/core/Vst3AudioEffect.cpp
+    src/core/Vst3AudioEffect.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
     src/core/MidiFile.cpp
@@ -51,10 +66,32 @@ add_executable(AwesomeStudio
     src/ui/StepSequencer.h
     src/ui/MidiEditor.cpp
     src/ui/MidiEditor.h
+    ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
 )
 
+if(WIN32)
+    target_sources(AwesomeStudio PRIVATE
+        ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_win32.cpp
+    )
+elseif(APPLE)
+    enable_language(OBJCXX)
+    target_sources(AwesomeStudio PRIVATE
+        ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_mac.mm
+    )
+    set_source_files_properties(
+        ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_mac.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(AwesomeStudio PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    target_link_libraries(AwesomeStudio PRIVATE "-framework Cocoa")
+elseif(UNIX)
+    target_sources(AwesomeStudio PRIVATE
+        ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_linux.cpp
+    )
+endif()
+
 target_include_directories(AwesomeStudio PRIVATE src third_party/clap/include)
-target_link_libraries(AwesomeStudio PRIVATE Qt6::Widgets Qt6::Multimedia)
+target_link_libraries(AwesomeStudio PRIVATE Qt6::Widgets Qt6::Multimedia sdk_hosting)
 target_link_libraries(AwesomeStudio PRIVATE ${CMAKE_DL_LIBS})
 if(WIN32)
     target_link_libraries(AwesomeStudio PRIVATE winmm)
@@ -76,6 +113,7 @@ target_compile_features(AwesomeStudio PRIVATE cxx_std_17)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_definitions(AwesomeStudio PRIVATE AWESOME_STUDIO_HAS_CLAP=1)
 endif()
+target_compile_definitions(AwesomeStudio PRIVATE AWESOME_STUDIO_HAS_VST3=1)
 
 if(TARGET PkgConfig::ALSA)
     target_link_libraries(AwesomeStudio PRIVATE PkgConfig::ALSA)
@@ -109,3 +147,4 @@ else()
 endif()
 
 install(TARGETS AwesomeStudio RUNTIME DESTINATION bin BUNDLE DESTINATION .)
+install(FILES third_party/VST3-SDK-LICENSE.txt DESTINATION share/AwesomeStudio)

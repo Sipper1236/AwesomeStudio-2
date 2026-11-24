@@ -730,8 +730,12 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     {
         qint64 frames = 0;
         for (const EffectState& effect : effects)
+        {
             if (effect.clapEffect != nullptr)
                 frames += effect.clapEffect->processingLatencyFrames();
+            if (effect.vst3Effect != nullptr)
+                frames += effect.vst3Effect->processingLatencyFrames();
+        }
         return frames;
     };
     std::vector<qint64> trackSignalLatencies(trackEffectStates.size(), 0);
@@ -1348,6 +1352,16 @@ void SynthRenderer::prepareEffectChain(const QVector<MixerEffect>& settings,
                     static_cast<size_t>(state.clapEffect->parameterCount()),
                     std::numeric_limits<float>::quiet_NaN());
         }
+        else if (effect.enabled && effect.wet > 0.0f &&
+                 effect.type == MixerEffectType::Vst3Plugin && !effect.pluginUri.isEmpty())
+        {
+            state.vst3Effect = std::make_unique<Vst3AudioEffectInstance>(
+                effect.pluginUri, sampleRate, effect.pluginParameterValues, effect.pluginState);
+            if (state.vst3Effect != nullptr)
+                state.liveParameterOverrides.assign(
+                    static_cast<size_t>(state.vst3Effect->parameterCount()),
+                    std::numeric_limits<float>::quiet_NaN());
+        }
         states.push_back(std::move(state));
     }
 }
@@ -1395,6 +1409,8 @@ void SynthRenderer::resetEffectChain(std::vector<EffectState>& states)
     {
         if (state.clapEffect != nullptr)
             state.clapEffect->resetProcessingState();
+        if (state.vst3Effect != nullptr)
+            state.vst3Effect->resetProcessingState();
         std::fill(state.delayLeft.begin(), state.delayLeft.end(), 0.0f);
         std::fill(state.delayRight.begin(), state.delayRight.end(), 0.0f);
         for (std::vector<float>& line : state.reverbLines)
@@ -1447,11 +1463,38 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
                 state.clapEffect->setParameter(parameterIndex, value);
         }
     };
+    const auto updateVst3Parameters = [this](EffectState& state, const MixerEffect& effect)
+    {
+        if (state.vst3Effect == nullptr || !state.vst3Effect->isValid())
+            return;
+        for (qsizetype parameterIndex = 0;
+             parameterIndex < effect.pluginParameterAutomation.size(); ++parameterIndex)
+        {
+            const float defaultValue = parameterIndex < effect.pluginParameterValues.size()
+                ? effect.pluginParameterValues[parameterIndex] : 0.0f;
+            float value = automationValue(
+                effect.pluginParameterAutomation[parameterIndex], currentBeat, defaultValue);
+            if (static_cast<size_t>(parameterIndex) < state.liveParameterOverrides.size() &&
+                std::isfinite(state.liveParameterOverrides[static_cast<size_t>(parameterIndex)]))
+                value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
+            state.vst3Effect->setParameter(parameterIndex, value);
+        }
+        for (qsizetype parameterIndex = effect.pluginParameterAutomation.size();
+             parameterIndex < static_cast<qsizetype>(state.liveParameterOverrides.size());
+             ++parameterIndex)
+        {
+            const float value = state.liveParameterOverrides[static_cast<size_t>(parameterIndex)];
+            if (std::isfinite(value))
+                state.vst3Effect->setParameter(parameterIndex, value);
+        }
+    };
     for (EffectState& state : states)
     {
         const MixerEffect& effect = state.settings;
         if (effect.type == MixerEffectType::ClapPlugin)
             updateClapParameters(state, effect);
+        if (effect.type == MixerEffectType::Vst3Plugin)
+            updateVst3Parameters(state, effect);
         if (!effect.enabled || effect.wet <= 0.0f)
         {
             if (effect.type == MixerEffectType::ClapPlugin && state.clapEffect != nullptr &&
@@ -1461,6 +1504,15 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
                 float discardedDryLeft = output.left;
                 float discardedDryRight = output.right;
                 state.clapEffect->process(discardedWet.left, discardedWet.right,
+                                          discardedDryLeft, discardedDryRight);
+            }
+            if (effect.type == MixerEffectType::Vst3Plugin && state.vst3Effect != nullptr &&
+                state.vst3Effect->isValid())
+            {
+                StereoSample discardedWet = output;
+                float discardedDryLeft = output.left;
+                float discardedDryRight = output.right;
+                state.vst3Effect->process(discardedWet.left, discardedWet.right,
                                           discardedDryLeft, discardedDryRight);
             }
             continue;
@@ -1619,6 +1671,23 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
                  state.clapEffect != nullptr && state.clapEffect->isValid())
         {
             if (!state.clapEffect->process(wet.left, wet.right,
+                                           alignedDry.left, alignedDry.right))
+            {
+                wet = dry;
+                alignedDry = dry;
+            }
+            if (!std::isfinite(wet.left) || !std::isfinite(wet.right))
+                wet = dry;
+            tailLevel = std::max(std::abs(wet.left), std::abs(wet.right));
+            if (std::max(std::abs(dry.left), std::abs(dry.right)) > 1.0e-5f ||
+                tailLevel > 1.0e-5f)
+                state.tailFramesRemaining = std::max(state.tailFramesRemaining,
+                    static_cast<qint64>(std::ceil(5.0 * sampleRate)));
+        }
+        else if (effect.type == MixerEffectType::Vst3Plugin &&
+                 state.vst3Effect != nullptr && state.vst3Effect->isValid())
+        {
+            if (!state.vst3Effect->process(wet.left, wet.right,
                                            alignedDry.left, alignedDry.right))
             {
                 wet = dry;
@@ -1819,7 +1888,9 @@ void SynthRenderer::captureEffectStates(const std::vector<EffectState>& states,
         const bool saved = state.lv2Effect != nullptr && state.lv2Effect->isValid()
             ? state.lv2Effect->saveState(savedState)
             : state.clapEffect != nullptr && state.clapEffect->isValid()
-                ? state.clapEffect->saveState(savedState) : false;
+                ? state.clapEffect->saveState(savedState)
+                : state.vst3Effect != nullptr && state.vst3Effect->isValid()
+                    ? state.vst3Effect->saveState(savedState) : false;
         if (saved)
             effect.pluginState = std::move(savedState);
     }
@@ -1868,7 +1939,7 @@ void SynthRenderer::servicePluginCallbacks()
     serviceEffectCallbacks(masterEffectStates);
 }
 
-void SynthRenderer::stopClapProcessing()
+void SynthRenderer::stopPluginProcessing()
 {
     for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
         if (instrument != nullptr)
@@ -1876,8 +1947,12 @@ void SynthRenderer::stopClapProcessing()
     const auto stopEffectProcessing = [](std::vector<EffectState>& states)
     {
         for (EffectState& state : states)
+        {
             if (state.clapEffect != nullptr)
                 state.clapEffect->stopProcessing();
+            if (state.vst3Effect != nullptr)
+                state.vst3Effect->stopProcessing();
+        }
     };
     for (std::vector<EffectState>& states : trackEffectStates)
         stopEffectProcessing(states);

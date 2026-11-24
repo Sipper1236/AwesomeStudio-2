@@ -1359,11 +1359,11 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             }
         }
     }
-    struct ClapProcessingExit
+    struct PluginProcessingExit
     {
         SynthRenderer& renderer;
-        ~ClapProcessingExit() { renderer.stopClapProcessing(); }
-    } clapProcessingExit{renderer};
+        ~PluginProcessingExit() { renderer.stopPluginProcessing(); }
+    } pluginProcessingExit{renderer};
     renderer.resetTrackPeakLevels();
     renderer.resetBusPeakLevels();
     liveMidiBlockPeaks.fill(0.0f);

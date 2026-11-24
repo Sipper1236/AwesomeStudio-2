@@ -1,0 +1,683 @@
+#include "Vst3AudioEffect.h"
+
+#include "Project.h"
+
+#include <QDataStream>
+#include <QDir>
+#include <QFileInfo>
+#include <QIODevice>
+
+#include <public.sdk/source/vst/hosting/hostclasses.h>
+#include <public.sdk/source/vst/hosting/module.h>
+#include <public.sdk/source/vst/hosting/parameterchanges.h>
+#include <public.sdk/source/vst/hosting/plugprovider.h>
+#include <public.sdk/source/vst/utility/memoryibstream.h>
+#include <public.sdk/source/vst/utility/stringconvert.h>
+#include <pluginterfaces/vst/ivstcomponent.h>
+#include <pluginterfaces/vst/ivstaudioprocessor.h>
+#include <pluginterfaces/vst/ivsteditcontroller.h>
+#include <public.sdk/source/vst/utility/uid.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace
+{
+using Vst3Module = VST3::Hosting::Module;
+using Vst3ClassInfo = VST3::Hosting::ClassInfo;
+using Vst3Factory = VST3::Hosting::PluginFactory;
+using Vst3Component = Steinberg::Vst::IComponent;
+using Vst3Controller = Steinberg::Vst::IEditController;
+using Vst3Processor = Steinberg::Vst::IAudioProcessor;
+
+class AwesomeHostApplication final : public Steinberg::Vst::HostApplication
+{
+public:
+    Steinberg::tresult PLUGIN_API getName(Steinberg::Vst::String128 name) override
+    {
+        return Steinberg::Vst::StringConvert::convert("Awesome Studio", name)
+            ? Steinberg::kResultTrue : Steinberg::kInternalError;
+    }
+};
+
+constexpr std::uint32_t maximumVst3Parameters = 256;
+constexpr std::uint32_t vst3BlockFrames = 64;
+constexpr int parameterCurveResolution = 256;
+constexpr auto vst3StatePrefix = "VST3_STATE_V1:";
+
+struct Vst3CatalogEntry
+{
+    Vst3PluginDescriptor descriptor;
+    Vst3Module::Ptr module;
+    Vst3ClassInfo classInfo;
+};
+
+Steinberg::FUnknown* hostContext()
+{
+    static auto* application = new AwesomeHostApplication();
+    static const bool configured = []
+    {
+        Steinberg::Vst::PlugProvider::setErrorStream(nullptr);
+        Steinberg::Vst::PluginContextFactory::instance().setPluginContext(application);
+        return true;
+    }();
+    Q_UNUSED(configured)
+    return application;
+}
+
+QString uidString(const Vst3ClassInfo& classInfo)
+{
+    return QString::fromStdString(classInfo.ID().toString(false));
+}
+
+float plainValueForNormalized(const Vst3PluginParameter& parameter, double normalized)
+{
+    if (parameter.plainValuesByNormalized.isEmpty())
+        return parameter.defaultValue;
+    const double position = std::clamp(normalized, 0.0, 1.0) * parameterCurveResolution;
+    const int lowerIndex = std::clamp(static_cast<int>(std::floor(position)),
+                                      0, parameterCurveResolution);
+    const int upperIndex = std::min(lowerIndex + 1, parameterCurveResolution);
+    const float amount = static_cast<float>(position - lowerIndex);
+    const float lower = parameter.plainValuesByNormalized[lowerIndex];
+    const float upper = parameter.plainValuesByNormalized[upperIndex];
+    return lower + (upper - lower) * amount;
+}
+
+double normalizedValueForPlain(const Vst3PluginParameter& parameter, float plain)
+{
+    const QVector<float>& values = parameter.plainValuesByNormalized;
+    if (values.size() < 2)
+        return 0.0;
+    for (int index = 1; index < values.size(); ++index)
+    {
+        const float previous = values[index - 1];
+        const float current = values[index];
+        const float lower = std::min(previous, current);
+        const float upper = std::max(previous, current);
+        if (plain < lower || plain > upper)
+            continue;
+        const float span = current - previous;
+        const double fraction = std::abs(span) < 1.0e-20f
+            ? 0.0 : static_cast<double>((plain - previous) / span);
+        return std::clamp((index - 1 + fraction) / parameterCurveResolution, 0.0, 1.0);
+    }
+    return plain <= parameter.minimum ? 0.0 : 1.0;
+}
+
+bool inspectPlugin(const Vst3Module::Ptr& module, const Vst3ClassInfo& classInfo,
+                   Vst3PluginDescriptor& descriptor)
+{
+    if (!module || classInfo.category() != kVstAudioEffectClass)
+        return false;
+
+    const Vst3Factory factory = module->getFactory();
+    factory.setHostContext(hostContext());
+    auto provider = Steinberg::owned(new Steinberg::Vst::PlugProvider(factory, classInfo, true));
+    if (!provider->initialize())
+        return false;
+
+    Steinberg::IPtr<Vst3Component> component = provider->getComponentPtr();
+    Steinberg::IPtr<Vst3Controller> controller = provider->getControllerPtr();
+    Steinberg::FUnknownPtr<Vst3Processor> processor(component);
+    if (!component || !processor ||
+        component->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput) != 1 ||
+        component->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput) != 1)
+        return false;
+
+    Steinberg::Vst::BusInfo inputInfo{};
+    Steinberg::Vst::BusInfo outputInfo{};
+    if (component->getBusInfo(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, 0, inputInfo) !=
+            Steinberg::kResultTrue ||
+        component->getBusInfo(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, 0, outputInfo) !=
+            Steinberg::kResultTrue ||
+        inputInfo.busType != Steinberg::Vst::kMain || outputInfo.busType != Steinberg::Vst::kMain ||
+        inputInfo.channelCount < 1 || inputInfo.channelCount > 2 ||
+        outputInfo.channelCount < 1 || outputInfo.channelCount > 2)
+        return false;
+
+    descriptor.id = uidString(classInfo);
+    descriptor.name = QString::fromStdString(classInfo.name());
+    descriptor.vendor = QString::fromStdString(classInfo.vendor());
+    descriptor.path = QString::fromUtf8(module->getPath().data(),
+                                        static_cast<qsizetype>(module->getPath().size()));
+    descriptor.inputChannels = static_cast<std::uint32_t>(inputInfo.channelCount);
+    descriptor.outputChannels = static_cast<std::uint32_t>(outputInfo.channelCount);
+    descriptor.parameters.clear();
+
+    if (!controller)
+        return true;
+    const Steinberg::int32 count = std::clamp<Steinberg::int32>(
+        controller->getParameterCount(), 0, static_cast<Steinberg::int32>(maximumVst3Parameters));
+    descriptor.parameters.reserve(count);
+    for (Steinberg::int32 index = 0; index < count; ++index)
+    {
+        Steinberg::Vst::ParameterInfo info{};
+        if (controller->getParameterInfo(index, info) != Steinberg::kResultTrue ||
+            info.id == Steinberg::Vst::kNoParamId)
+            continue;
+
+        Vst3PluginParameter parameter;
+        parameter.id = info.id;
+        parameter.name = QString::fromStdString(
+            Steinberg::Vst::StringConvert::convert(info.title, 128));
+        if (parameter.name.isEmpty())
+            parameter.name = QStringLiteral("Parameter %1").arg(index + 1);
+        parameter.integer = info.stepCount > 0;
+        parameter.toggled = info.stepCount == 1;
+        parameter.hidden = (info.flags & Steinberg::Vst::ParameterInfo::kIsHidden) != 0;
+        parameter.readOnly = (info.flags & Steinberg::Vst::ParameterInfo::kIsReadOnly) != 0;
+        parameter.plainValuesByNormalized.reserve(parameterCurveResolution + 1);
+        bool validCurve = true;
+        for (int sample = 0; sample <= parameterCurveResolution; ++sample)
+        {
+            const double normalized = static_cast<double>(sample) / parameterCurveResolution;
+            const double plain = controller->normalizedParamToPlain(info.id, normalized);
+            if (!std::isfinite(plain) || std::abs(plain) > 1.0e9)
+            {
+                validCurve = false;
+                break;
+            }
+            parameter.plainValuesByNormalized.push_back(static_cast<float>(plain));
+        }
+        if (!validCurve || parameter.plainValuesByNormalized.size() != parameterCurveResolution + 1)
+            continue;
+        const auto range = std::minmax_element(parameter.plainValuesByNormalized.cbegin(),
+                                               parameter.plainValuesByNormalized.cend());
+        parameter.minimum = *range.first;
+        parameter.maximum = *range.second;
+        if (parameter.maximum <= parameter.minimum)
+            continue;
+        parameter.defaultValue = plainValueForNormalized(parameter, info.defaultNormalizedValue);
+        descriptor.parameters.push_back(std::move(parameter));
+    }
+    return true;
+}
+
+const std::vector<Vst3CatalogEntry>& catalog()
+{
+    static std::once_flag once;
+    static std::vector<Vst3CatalogEntry> entries;
+    std::call_once(once, []
+    {
+        for (const std::string& path : Vst3Module::getModulePaths())
+        {
+            std::string error;
+            const auto module = Vst3Module::create(path, error);
+            if (!module)
+                continue;
+            const Vst3Factory factory = module->getFactory();
+            factory.setHostContext(hostContext());
+            for (const Vst3ClassInfo& classInfo : factory.classInfos())
+            {
+                Vst3PluginDescriptor descriptor;
+                if (!inspectPlugin(module, classInfo, descriptor))
+                    continue;
+                const bool duplicate = std::any_of(entries.cbegin(), entries.cend(),
+                    [&descriptor](const Vst3CatalogEntry& item)
+                    {
+                        return item.descriptor.id == descriptor.id;
+                    });
+                if (!duplicate)
+                    entries.push_back({std::move(descriptor), module, classInfo});
+            }
+        }
+        std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right)
+        {
+            if (left.descriptor.name != right.descriptor.name)
+                return left.descriptor.name < right.descriptor.name;
+            return left.descriptor.vendor < right.descriptor.vendor;
+        });
+    });
+    return entries;
+}
+
+const Vst3CatalogEntry* catalogEntry(const QString& id)
+{
+    const auto& entries = catalog();
+    const auto entry = std::find_if(entries.cbegin(), entries.cend(), [&id](const auto& value)
+    {
+        return value.descriptor.id.compare(id, Qt::CaseInsensitive) == 0;
+    });
+    return entry == entries.cend() ? nullptr : &*entry;
+}
+
+bool loadStream(const QByteArray& bytes, Steinberg::ResizableMemoryIBStream& stream)
+{
+    if (bytes.isEmpty())
+        return true;
+    if (stream.write(const_cast<char*>(bytes.constData()), static_cast<Steinberg::int32>(bytes.size()),
+                     nullptr) != Steinberg::kResultTrue)
+        return false;
+    stream.rewind();
+    return true;
+}
+
+QByteArray streamBytes(const Steinberg::ResizableMemoryIBStream& stream)
+{
+    return QByteArray(static_cast<const char*>(stream.getData()),
+                      static_cast<qsizetype>(stream.getCursor()));
+}
+}
+
+struct Vst3AudioEffectInstance::Private
+{
+    Vst3Module::Ptr module;
+    Steinberg::IPtr<Steinberg::Vst::PlugProvider> provider;
+    Steinberg::IPtr<Vst3Component> component;
+    Steinberg::IPtr<Vst3Controller> controller;
+    Steinberg::IPtr<Vst3Processor> processor;
+    Vst3PluginDescriptor descriptor;
+    Steinberg::Vst::ParameterChanges parameterChanges;
+    std::vector<float> controlValues;
+    std::vector<double> normalizedValues;
+    std::vector<double> lastSentValues;
+    std::array<float, vst3BlockFrames> inputLeft{};
+    std::array<float, vst3BlockFrames> inputRight{};
+    std::array<float, vst3BlockFrames> monoInput{};
+    std::array<float, vst3BlockFrames> outputLeft{};
+    std::array<float, vst3BlockFrames> outputRight{};
+    std::array<float, vst3BlockFrames> monoOutput{};
+    std::array<float, vst3BlockFrames> dryLeft{};
+    std::array<float, vst3BlockFrames> dryRight{};
+    std::uint32_t inputChannels = 0;
+    std::uint32_t outputChannels = 0;
+    std::uint32_t bufferedFrames = 0;
+    std::uint32_t outputRead = 0;
+    std::uint32_t reportedLatencyFrames = 0;
+    bool outputReady = false;
+    bool active = false;
+    bool processing = false;
+
+    ~Private()
+    {
+        if (processing && processor)
+            processor->setProcessing(false);
+        if (active && component)
+            component->setActive(false);
+    }
+
+    void restoreState(const QString& state)
+    {
+        if (state.isEmpty() || !state.startsWith(QLatin1String(vst3StatePrefix)))
+            return;
+        const QByteArray payload = QByteArray::fromBase64(
+            state.mid(static_cast<qsizetype>(std::char_traits<char>::length(vst3StatePrefix)))
+                .toLatin1());
+        QDataStream stream(payload);
+        stream.setByteOrder(QDataStream::LittleEndian);
+        quint32 componentSize = 0;
+        quint32 controllerSize = 0;
+        stream >> componentSize;
+        if (stream.status() != QDataStream::Ok || componentSize > maximumPluginStateBytes)
+            return;
+        QByteArray componentBytes(static_cast<qsizetype>(componentSize), Qt::Uninitialized);
+        if (componentSize > 0 && stream.readRawData(componentBytes.data(),
+                static_cast<int>(componentSize)) != static_cast<int>(componentSize))
+            return;
+        stream >> controllerSize;
+        if (stream.status() != QDataStream::Ok || controllerSize > maximumPluginStateBytes ||
+            static_cast<quint64>(componentSize) + controllerSize > maximumPluginStateBytes)
+            return;
+        QByteArray controllerBytes(static_cast<qsizetype>(controllerSize), Qt::Uninitialized);
+        if (controllerSize > 0 && stream.readRawData(controllerBytes.data(),
+                static_cast<int>(controllerSize)) != static_cast<int>(controllerSize))
+            return;
+
+        Steinberg::ResizableMemoryIBStream componentStream(componentBytes.size());
+        Steinberg::ResizableMemoryIBStream controllerStream(controllerBytes.size());
+        if (!loadStream(componentBytes, componentStream) ||
+            !loadStream(controllerBytes, controllerStream))
+            return;
+        if (!componentBytes.isEmpty())
+        {
+            component->setState(&componentStream);
+            componentStream.rewind();
+            if (controller)
+                controller->setComponentState(&componentStream);
+        }
+        if (controller && !controllerBytes.isEmpty())
+            controller->setState(&controllerStream);
+    }
+
+    void prepareParameterQueues()
+    {
+        parameterChanges.setMaxParameters(static_cast<Steinberg::int32>(descriptor.parameters.size()));
+        for (const Vst3PluginParameter& parameter : descriptor.parameters)
+        {
+            Steinberg::int32 queueIndex = 0;
+            auto* queue = parameterChanges.addParameterData(parameter.id, queueIndex);
+            if (queue == nullptr)
+                continue;
+            for (Steinberg::int32 frame = 0; frame < static_cast<Steinberg::int32>(vst3BlockFrames); ++frame)
+            {
+                Steinberg::int32 pointIndex = 0;
+                queue->addPoint(frame, 0.0, pointIndex);
+            }
+            static_cast<Steinberg::Vst::ParameterValueQueue*>(queue)->clear();
+        }
+        parameterChanges.clearQueue();
+    }
+
+    void processBlock()
+    {
+        outputLeft.fill(0.0f);
+        outputRight.fill(0.0f);
+        monoOutput.fill(0.0f);
+
+        Steinberg::Vst::Sample32* inputPointers[2] = {
+            inputChannels == 1 ? monoInput.data() : inputLeft.data(), inputRight.data()
+        };
+        Steinberg::Vst::Sample32* outputPointers[2] = {
+            outputChannels == 1 ? monoOutput.data() : outputLeft.data(), outputRight.data()
+        };
+        Steinberg::Vst::AudioBusBuffers inputBus{};
+        inputBus.numChannels = static_cast<Steinberg::int32>(inputChannels);
+        inputBus.channelBuffers32 = inputPointers;
+        Steinberg::Vst::AudioBusBuffers outputBus{};
+        outputBus.numChannels = static_cast<Steinberg::int32>(outputChannels);
+        outputBus.channelBuffers32 = outputPointers;
+
+        Steinberg::Vst::ProcessData data{};
+        data.processMode = Steinberg::Vst::kRealtime;
+        data.symbolicSampleSize = Steinberg::Vst::kSample32;
+        data.numSamples = static_cast<Steinberg::int32>(vst3BlockFrames);
+        data.numInputs = 1;
+        data.numOutputs = 1;
+        data.inputs = &inputBus;
+        data.outputs = &outputBus;
+        data.inputParameterChanges = &parameterChanges;
+        const bool processed = processor && processor->process(data) == Steinberg::kResultTrue;
+        parameterChanges.clearQueue();
+        if (!processed)
+        {
+            outputLeft.fill(0.0f);
+            outputRight.fill(0.0f);
+            monoOutput.fill(0.0f);
+            std::fill(lastSentValues.begin(), lastSentValues.end(),
+                      std::numeric_limits<double>::quiet_NaN());
+        }
+        else
+        {
+            for (float& sample : outputLeft)
+                if (!std::isfinite(sample)) sample = 0.0f;
+            for (float& sample : outputRight)
+                if (!std::isfinite(sample)) sample = 0.0f;
+            for (float& sample : monoOutput)
+                if (!std::isfinite(sample)) sample = 0.0f;
+        }
+        bufferedFrames = 0;
+        outputRead = 0;
+        outputReady = true;
+    }
+};
+
+QVector<Vst3PluginDescriptor> Vst3AudioEffectInstance::availableEffects()
+{
+    QVector<Vst3PluginDescriptor> result;
+    const auto& entries = catalog();
+    result.reserve(static_cast<qsizetype>(entries.size()));
+    for (const Vst3CatalogEntry& entry : entries)
+        result.push_back(entry.descriptor);
+    return result;
+}
+
+bool Vst3AudioEffectInstance::describe(const QString& id, Vst3PluginDescriptor& descriptor)
+{
+    const Vst3CatalogEntry* entry = catalogEntry(id);
+    if (entry == nullptr)
+        return false;
+    descriptor = entry->descriptor;
+    return true;
+}
+
+Vst3AudioEffectInstance::Vst3AudioEffectInstance(const QString& id, double sampleRate,
+                                                 const QVector<float>& parameterValues,
+                                                 const QString& pluginState)
+    : d(std::make_unique<Private>())
+{
+    if (!std::isfinite(sampleRate) || sampleRate <= 0.0)
+        return;
+    const Vst3CatalogEntry* entry = catalogEntry(id);
+    if (entry == nullptr)
+        return;
+
+    d->module = entry->module;
+    d->descriptor = entry->descriptor;
+    d->inputChannels = d->descriptor.inputChannels;
+    d->outputChannels = d->descriptor.outputChannels;
+    const Vst3Factory factory = d->module->getFactory();
+    factory.setHostContext(hostContext());
+    d->provider = Steinberg::owned(new Steinberg::Vst::PlugProvider(factory, entry->classInfo, true));
+    if (!d->provider->initialize())
+        return;
+    d->component = d->provider->getComponentPtr();
+    d->controller = d->provider->getControllerPtr();
+    d->processor = Steinberg::FUnknownPtr<Vst3Processor>(d->component);
+    if (!d->component || !d->processor ||
+        d->component->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, 0, true) !=
+            Steinberg::kResultTrue ||
+        d->component->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kOutput, 0, true) !=
+            Steinberg::kResultTrue ||
+        d->processor->canProcessSampleSize(Steinberg::Vst::kSample32) != Steinberg::kResultTrue)
+        return;
+
+    d->restoreState(pluginState);
+    d->controlValues.resize(static_cast<size_t>(d->descriptor.parameters.size()));
+    d->normalizedValues.resize(d->controlValues.size(), 0.0);
+    d->lastSentValues.resize(d->controlValues.size(), std::numeric_limits<double>::quiet_NaN());
+    for (qsizetype index = 0; index < d->descriptor.parameters.size(); ++index)
+    {
+        const Vst3PluginParameter& parameter = d->descriptor.parameters[index];
+        double normalized = d->controller
+            ? d->controller->getParamNormalized(parameter.id) : 0.0;
+        if (!std::isfinite(normalized))
+            normalized = normalizedValueForPlain(parameter, parameter.defaultValue);
+        float value = index < parameterValues.size()
+            ? parameterValues[index] : plainValueForNormalized(parameter, normalized);
+        if (!std::isfinite(value))
+            value = parameter.defaultValue;
+        value = std::clamp(value, parameter.minimum, parameter.maximum);
+        if (parameter.toggled)
+            value = value >= 0.5f ? 1.0f : 0.0f;
+        else if (parameter.integer)
+            value = std::round(value);
+        d->controlValues[static_cast<size_t>(index)] = value;
+        d->normalizedValues[static_cast<size_t>(index)] = normalizedValueForPlain(parameter, value);
+    }
+    d->prepareParameterQueues();
+
+    Steinberg::Vst::ProcessSetup setup{};
+    setup.processMode = Steinberg::Vst::kRealtime;
+    setup.symbolicSampleSize = Steinberg::Vst::kSample32;
+    setup.maxSamplesPerBlock = static_cast<Steinberg::int32>(vst3BlockFrames);
+    setup.sampleRate = sampleRate;
+    if (d->processor->setupProcessing(setup) != Steinberg::kResultTrue ||
+        d->component->setActive(true) != Steinberg::kResultTrue)
+        return;
+    d->active = true;
+    d->reportedLatencyFrames = d->processor->getLatencySamples();
+    if (d->processor->setProcessing(true) != Steinberg::kResultTrue)
+    {
+        d->component->setActive(false);
+        d->active = false;
+        return;
+    }
+    d->processing = true;
+}
+
+Vst3AudioEffectInstance::~Vst3AudioEffectInstance() = default;
+
+bool Vst3AudioEffectInstance::isValid() const
+{
+    return d != nullptr && d->active && d->processor;
+}
+
+qint64 Vst3AudioEffectInstance::processingLatencyFrames() const
+{
+    return isValid() ? static_cast<qint64>(vst3BlockFrames) + d->reportedLatencyFrames : 0;
+}
+
+qsizetype Vst3AudioEffectInstance::parameterCount() const
+{
+    return d == nullptr ? 0 : static_cast<qsizetype>(d->controlValues.size());
+}
+
+float Vst3AudioEffectInstance::parameterValue(qsizetype index) const
+{
+    if (d == nullptr || index < 0 || index >= static_cast<qsizetype>(d->controlValues.size()))
+        return 0.0f;
+    return d->controlValues[static_cast<size_t>(index)];
+}
+
+void Vst3AudioEffectInstance::setParameter(qsizetype index, float value)
+{
+    if (d == nullptr || !d->controller || index < 0 ||
+        index >= static_cast<qsizetype>(d->controlValues.size()))
+        return;
+    const Vst3PluginParameter& parameter = d->descriptor.parameters[index];
+    if (parameter.readOnly)
+        return;
+    if (!std::isfinite(value))
+        value = parameter.defaultValue;
+    value = std::clamp(value, parameter.minimum, parameter.maximum);
+    if (parameter.toggled)
+        value = value >= 0.5f ? 1.0f : 0.0f;
+    else if (parameter.integer)
+        value = std::round(value);
+    d->controlValues[static_cast<size_t>(index)] = value;
+    d->normalizedValues[static_cast<size_t>(index)] = normalizedValueForPlain(parameter, value);
+}
+
+bool Vst3AudioEffectInstance::saveState(QString& pluginState) const
+{
+    if (!isValid())
+        return false;
+    Steinberg::ResizableMemoryIBStream componentStream;
+    Steinberg::ResizableMemoryIBStream controllerStream;
+    const bool componentSaved = d->component->getState(&componentStream) == Steinberg::kResultTrue;
+    const bool controllerSaved = d->controller &&
+        d->controller->getState(&controllerStream) == Steinberg::kResultTrue;
+    if (!componentSaved && !controllerSaved)
+        return false;
+
+    const QByteArray componentBytes = streamBytes(componentStream);
+    const QByteArray controllerBytes = streamBytes(controllerStream);
+    QByteArray payload;
+    QDataStream stream(&payload, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream << static_cast<quint32>(componentBytes.size());
+    if (!componentBytes.isEmpty())
+        stream.writeRawData(componentBytes.constData(), componentBytes.size());
+    stream << static_cast<quint32>(controllerBytes.size());
+    if (!controllerBytes.isEmpty())
+        stream.writeRawData(controllerBytes.constData(), controllerBytes.size());
+    const QByteArray encoded = payload.toBase64();
+    const QByteArray prefix(vst3StatePrefix);
+    if (stream.status() != QDataStream::Ok || encoded.size() + prefix.size() > maximumPluginStateBytes)
+        return false;
+    pluginState = QString::fromLatin1(prefix + encoded);
+    return true;
+}
+
+void Vst3AudioEffectInstance::stopProcessing()
+{
+    if (d != nullptr && d->processing && d->processor)
+    {
+        d->processor->setProcessing(false);
+        d->processing = false;
+    }
+}
+
+void Vst3AudioEffectInstance::resetProcessingState()
+{
+    if (d == nullptr)
+        return;
+    d->bufferedFrames = 0;
+    d->outputRead = 0;
+    d->outputReady = false;
+    d->inputLeft.fill(0.0f);
+    d->inputRight.fill(0.0f);
+    d->monoInput.fill(0.0f);
+    d->outputLeft.fill(0.0f);
+    d->outputRight.fill(0.0f);
+    d->monoOutput.fill(0.0f);
+    d->dryLeft.fill(0.0f);
+    d->dryRight.fill(0.0f);
+    std::fill(d->lastSentValues.begin(), d->lastSentValues.end(),
+              std::numeric_limits<double>::quiet_NaN());
+    if (d->processing && d->processor)
+    {
+        d->processor->setProcessing(false);
+        d->processing = false;
+    }
+}
+
+bool Vst3AudioEffectInstance::process(float& left, float& right,
+                                      float& alignedDryLeft, float& alignedDryRight)
+{
+    if (!isValid())
+        return false;
+
+    if (!d->processing)
+    {
+        if (d->processor->setProcessing(true) != Steinberg::kResultTrue)
+            return false;
+        d->processing = true;
+    }
+
+    for (size_t index = 0; index < d->normalizedValues.size(); ++index)
+    {
+        const double value = d->normalizedValues[index];
+        if (std::isfinite(d->lastSentValues[index]) &&
+            std::abs(d->lastSentValues[index] - value) <= 1.0e-10)
+            continue;
+        Steinberg::int32 queueIndex = 0;
+        auto* queue = d->parameterChanges.addParameterData(
+            d->descriptor.parameters[static_cast<qsizetype>(index)].id, queueIndex);
+        if (queue == nullptr)
+            continue;
+        Steinberg::int32 pointIndex = 0;
+        queue->addPoint(static_cast<Steinberg::int32>(d->bufferedFrames), value, pointIndex);
+        d->lastSentValues[index] = value;
+    }
+
+    const float sourceLeft = left;
+    const float sourceRight = right;
+    const float sourceDryLeft = alignedDryLeft;
+    const float sourceDryRight = alignedDryRight;
+    left = 0.0f;
+    right = 0.0f;
+    alignedDryLeft = 0.0f;
+    alignedDryRight = 0.0f;
+    if (d->outputReady)
+    {
+        left = d->outputChannels == 1 ? d->monoOutput[d->outputRead]
+                                      : d->outputLeft[d->outputRead];
+        right = d->outputChannels == 1 ? d->monoOutput[d->outputRead]
+                                       : d->outputRight[d->outputRead];
+        alignedDryLeft = d->dryLeft[d->outputRead];
+        alignedDryRight = d->dryRight[d->outputRead];
+        if (++d->outputRead >= vst3BlockFrames)
+        {
+            d->outputReady = false;
+            d->outputRead = 0;
+        }
+    }
+
+    const std::uint32_t frame = d->bufferedFrames;
+    d->inputLeft[frame] = sourceLeft;
+    d->inputRight[frame] = sourceRight;
+    d->monoInput[frame] = (sourceLeft + sourceRight) * 0.5f;
+    d->dryLeft[frame] = sourceDryLeft;
+    d->dryRight[frame] = sourceDryRight;
+    if (++d->bufferedFrames == vst3BlockFrames)
+        d->processBlock();
+    return true;
+}

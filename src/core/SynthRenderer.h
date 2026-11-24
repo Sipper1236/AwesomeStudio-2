@@ -3,6 +3,7 @@
 #include "ClapAudioEffect.h"
 #include "Lv2AudioEffect.h"
 #include "Project.h"
+#include "Vst3AudioEffect.h"
 
 #include <algorithm>
 #include <array>
@@ -44,7 +45,7 @@ public:
                                         qsizetype parameterIndex, float value);
     void capturePluginStates(ProjectData& target) const;
     void servicePluginCallbacks();
-    void stopClapProcessing();
+    void stopPluginProcessing();
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
     float trackPeakLevel(size_t trackIndex) const;
@@ -251,6 +252,7 @@ private:
         std::vector<float> liveParameterOverrides;
         std::unique_ptr<Lv2AudioEffectInstance> lv2Effect;
         std::unique_ptr<ClapAudioPluginInstance> clapEffect;
+        std::unique_ptr<Vst3AudioEffectInstance> vst3Effect;
         float filterB0 = 1.0f;
         float filterB1 = 0.0f;
         float filterB2 = 0.0f;

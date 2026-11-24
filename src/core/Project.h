@@ -313,12 +313,14 @@ enum class MixerEffectType
     Compressor,
     LowPass,
     Lv2Plugin,
-    ClapPlugin
+    ClapPlugin,
+    Vst3Plugin
 };
 
 inline bool isPluginEffect(MixerEffectType type)
 {
-    return type == MixerEffectType::Lv2Plugin || type == MixerEffectType::ClapPlugin;
+    return type == MixerEffectType::Lv2Plugin || type == MixerEffectType::ClapPlugin ||
+           type == MixerEffectType::Vst3Plugin;
 }
 
 inline constexpr qsizetype maximumPluginStateBytes = 1024 * 1024;

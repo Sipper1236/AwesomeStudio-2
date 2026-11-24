@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 54;
+constexpr int currentProjectVersion = 55;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -193,7 +193,7 @@ bool loadEffects(const QJsonValue& value, QVector<MixerEffect>& effects,
         }
         const QJsonObject object = effectValue.toObject();
         const int type = object.value(QStringLiteral("type")).toInt(-1);
-        if (type < 0 || type > (version >= 39 ? 5 : version >= 34 ? 4 : 3))
+        if (type < 0 || type > (version >= 55 ? 6 : version >= 39 ? 5 : version >= 34 ? 4 : 3))
         {
             setError(error, QStringLiteral("The %1 contains an unsupported effect type.").arg(ownerName));
             return false;

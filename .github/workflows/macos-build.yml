@@ -56,7 +56,7 @@ jobs:
 
       - name: Package portable app
         run: |
-          cp README.md LICENSE "$APP_PATH/Contents/Resources/"
+          cp README.md LICENSE third_party/VST3-SDK-LICENSE.txt "$APP_PATH/Contents/Resources/"
           ditto -c -k --sequesterRsrc --keepParent \
             "$APP_PATH" AwesomeStudio-macOS.zip
 

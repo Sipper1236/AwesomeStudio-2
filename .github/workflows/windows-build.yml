@@ -51,7 +51,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           Copy-Item build\Release\* dist -Recurse -Force
-          Copy-Item LICENSE, README.md dist
+          Copy-Item LICENSE, README.md, third_party\VST3-SDK-LICENSE.txt dist
           Compress-Archive -Path dist\* -DestinationPath AwesomeStudio-Windows-x64.zip -CompressionLevel Optimal
 
       - name: Upload Windows executable and portable app

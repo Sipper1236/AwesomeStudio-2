@@ -6,6 +6,7 @@
 #include "core/ProjectFile.h"
 #include "core/MidiFile.h"
 #include "core/MidiInput.h"
+#include "core/Vst3AudioEffect.h"
 #include "core/WavExporter.h"
 #include "ui/ArrangementEditor.h"
 #include "ui/MidiEditor.h"
@@ -1141,7 +1142,7 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
                 parameters = descriptor.parameters;
                 discoveredName = descriptor.name;
             }
-            else
+            else if (effect.type == MixerEffectType::ClapPlugin)
             {
                 ClapPluginDescriptor descriptor;
                 if (!ClapAudioPluginInstance::describe(
@@ -1160,6 +1161,27 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
                     converted.toggled = parameter.toggled;
                     converted.hidden = parameter.hidden;
                     converted.readOnly = parameter.readOnly;
+                    parameters.push_back(std::move(converted));
+                }
+            }
+            else if (effect.type == MixerEffectType::Vst3Plugin)
+            {
+                Vst3PluginDescriptor descriptor;
+                if (!Vst3AudioEffectInstance::describe(effect.pluginUri, descriptor))
+                    continue;
+                discoveredName = descriptor.name;
+                for (const Vst3PluginParameter& vstParameter : descriptor.parameters)
+                {
+                    Lv2EffectParameter converted;
+                    converted.symbol = QString::number(vstParameter.id);
+                    converted.name = vstParameter.name;
+                    converted.minimum = vstParameter.minimum;
+                    converted.maximum = vstParameter.maximum;
+                    converted.defaultValue = vstParameter.defaultValue;
+                    converted.integer = vstParameter.integer;
+                    converted.toggled = vstParameter.toggled;
+                    converted.hidden = vstParameter.hidden;
+                    converted.readOnly = vstParameter.readOnly;
                     parameters.push_back(std::move(converted));
                 }
             }
@@ -1586,6 +1608,35 @@ bool chooseMixerEffect(QWidget* parent, MixerEffectType type, MixerEffect& effec
         effect.pluginUri = plugin.uri;
         effect.pluginName = plugin.name;
         for (const Lv2EffectParameter& parameter : plugin.parameters)
+            effect.pluginParameterValues.push_back(parameter.defaultValue);
+        return true;
+    }
+
+    if (type == MixerEffectType::Vst3Plugin)
+    {
+        const QVector<Vst3PluginDescriptor> plugins = Vst3AudioEffectInstance::availableEffects();
+        if (plugins.isEmpty())
+        {
+            error = QObject::tr("No compatible VST3 audio effects were found in the standard plug-in folders.");
+            return false;
+        }
+        QStringList choices;
+        choices.reserve(plugins.size());
+        for (const Vst3PluginDescriptor& plugin : plugins)
+            choices.push_back(QStringLiteral("%1 — %2 — %3")
+                                  .arg(plugin.name, plugin.vendor, plugin.id));
+        bool accepted = false;
+        const QString selected = QInputDialog::getItem(parent, QObject::tr("Add VST3 effect"),
+            QObject::tr("Audio effect"), choices, 0, false, &accepted);
+        if (!accepted)
+            return false;
+        const int index = choices.indexOf(selected);
+        if (index < 0)
+            return false;
+        const Vst3PluginDescriptor& plugin = plugins[index];
+        effect.pluginUri = plugin.id;
+        effect.pluginName = plugin.name;
+        for (const Vst3PluginParameter& parameter : plugin.parameters)
             effect.pluginParameterValues.push_back(parameter.defaultValue);
         return true;
     }
@@ -3023,7 +3074,7 @@ void MainWindow::createToolBars()
     arrangementBar->addSeparator();
     automationViewAction = new QAction(tr("Automation lanes"), this);
     automationViewAction->setCheckable(true);
-    automationViewAction->setToolTip(tr("Show and edit track, built-in synth, or LV2/CLAP parameter automation in the Playlist"));
+    automationViewAction->setToolTip(tr("Show and edit track, built-in synth, or LV2/CLAP/VST3 effect parameter automation in the Playlist"));
     arrangementBar->addAction(automationViewAction);
     automationLaneParameterControl = new QComboBox(arrangementBar);
     automationLaneParameterControl->addItem(tr("Volume"), 0);
@@ -3041,7 +3092,7 @@ void MainWindow::createToolBars()
     arrangementBar->addWidget(automationWriteModeControl);
     automationWriteAction = new QAction(tr("Write automation"), this);
     automationWriteAction->setCheckable(true);
-    automationWriteAction->setToolTip(tr("Record the selected track, synth-filter, or LV2/CLAP parameter while the transport plays"));
+    automationWriteAction->setToolTip(tr("Record the selected track, synth-filter, or LV2/CLAP/VST3 effect parameter while the transport plays"));
     arrangementBar->addAction(automationWriteAction);
     automationWriteIdleTimer = new QTimer(this);
     automationWriteIdleTimer->setSingleShot(true);
@@ -4898,7 +4949,8 @@ void MainWindow::refreshMixer()
                 effect.type == MixerEffectType::Compressor ? tr("Compressor") :
                 effect.type == MixerEffectType::LowPass ? tr("Low-pass filter") :
                 effect.pluginName.isEmpty()
-                    ? effect.type == MixerEffectType::ClapPlugin ? tr("CLAP plug-in") : tr("LV2 plug-in")
+                    ? effect.type == MixerEffectType::Vst3Plugin ? tr("VST3 plug-in") :
+                      effect.type == MixerEffectType::ClapPlugin ? tr("CLAP plug-in") : tr("LV2 plug-in")
                     : effect.pluginName;
             auto* effectBox = new QGroupBox(tr("%1. %2").arg(index + 1).arg(effectName), chain);
             auto* effectForm = new QFormLayout(effectBox);
@@ -4981,8 +5033,10 @@ void MainWindow::refreshMixer()
                 auto* pluginUri = new QLabel(effect.pluginUri, effectBox);
                 pluginUri->setWordWrap(true);
                 pluginUri->setTextInteractionFlags(Qt::TextSelectableByMouse);
-                effectForm->addRow(effect.type == MixerEffectType::Lv2Plugin
-                                       ? tr("LV2 URI") : tr("CLAP ID"), pluginUri);
+                const QString pluginIdLabel = effect.type == MixerEffectType::Lv2Plugin
+                    ? tr("LV2 URI") : effect.type == MixerEffectType::ClapPlugin
+                        ? tr("CLAP ID") : tr("VST3 UID");
+                effectForm->addRow(pluginIdLabel, pluginUri);
                 QVector<Lv2EffectParameter> parameters;
                 bool pluginAvailable = false;
                 if (effect.type == MixerEffectType::Lv2Plugin)
@@ -5013,6 +5067,28 @@ void MainWindow::refreshMixer()
                             parameter.toggled = clapParameter.toggled;
                             parameter.hidden = clapParameter.hidden;
                             parameter.readOnly = clapParameter.readOnly;
+                            parameters.push_back(std::move(parameter));
+                        }
+                    }
+                }
+                else if (effect.type == MixerEffectType::Vst3Plugin)
+                {
+                    Vst3PluginDescriptor descriptor;
+                    if (Vst3AudioEffectInstance::describe(effect.pluginUri, descriptor))
+                    {
+                        pluginAvailable = true;
+                        for (const Vst3PluginParameter& vstParameter : descriptor.parameters)
+                        {
+                            Lv2EffectParameter parameter;
+                            parameter.symbol = QString::number(vstParameter.id);
+                            parameter.name = vstParameter.name;
+                            parameter.minimum = vstParameter.minimum;
+                            parameter.maximum = vstParameter.maximum;
+                            parameter.defaultValue = vstParameter.defaultValue;
+                            parameter.integer = vstParameter.integer;
+                            parameter.toggled = vstParameter.toggled;
+                            parameter.hidden = vstParameter.hidden;
+                            parameter.readOnly = vstParameter.readOnly;
                             parameters.push_back(std::move(parameter));
                         }
                     }
@@ -5146,6 +5222,9 @@ void MainWindow::refreshMixer()
         type->addItem(tr("LV2 plug-in…"), static_cast<int>(MixerEffectType::Lv2Plugin));
 #if defined(AWESOME_STUDIO_HAS_CLAP)
         type->addItem(tr("CLAP plug-in…"), static_cast<int>(MixerEffectType::ClapPlugin));
+#endif
+#if defined(AWESOME_STUDIO_HAS_VST3)
+        type->addItem(tr("VST3 plug-in…"), static_cast<int>(MixerEffectType::Vst3Plugin));
 #endif
         auto* add = new QPushButton(tr("Add effect"), addRow);
         add->setEnabled(canAddEffect && effects.size() < 8);

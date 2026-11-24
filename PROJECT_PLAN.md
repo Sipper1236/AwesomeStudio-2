@@ -72,9 +72,10 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 ### 3. Plugin and production workflow
 
 - [x] Linux LV2 effect hosting and CLAP effect/instrument discovery, loading, parameter controls, and saved plug-in state
-- [x] LV2/CLAP parameter automation plus reusable built-in synth patches
+- [x] LV2/CLAP/VST3 effect parameter automation plus reusable built-in synth patches
 - [x] Compensate the fixed CLAP host buffering delay and activation-reported plug-in latency across Mixer routes
-- [ ] VST3 hosting and native plug-in editors
+- [x] Cross-platform VST3 audio-effect hosting with generic controls, automation, saved state, and latency compensation
+- [ ] VST3 instrument hosting and native plug-in editors
 - [ ] Dynamic plug-in latency changes and transport output timing compensation
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
 - [ ] Broader controller target coverage
@@ -85,7 +86,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 
 ## Build requirements
 
-- CMake 3.16+
+- CMake 3.28+
 - C++17 compiler
 - Qt 6.2+ Widgets and Multimedia
 
