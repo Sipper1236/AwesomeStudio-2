@@ -4520,7 +4520,7 @@ void MainWindow::createMenus()
     connect(midiControllerListenAction, &QAction::toggled,
             this, &MainWindow::setMidiControllerListening);
 
-    const std::array<QString, 32> controllerTargets = {
+    const std::array<QString, 37> controllerTargets = {
         tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo"),
         tr("Selected track mute"), tr("Selected track solo"),
         tr("Selected synth filter cutoff"), tr("Selected synth filter resonance"),
@@ -4545,12 +4545,17 @@ void MainWindow::createMenus()
         tr("Selected track output bus solo"),
         tr("Selected track parametric EQ frequency (selected band)"),
         tr("Selected track parametric EQ gain (selected band)"),
-        tr("Selected track parametric EQ Q (selected band)")
+        tr("Selected track parametric EQ Q (selected band)"),
+        tr("Selected track low EQ gain"),
+        tr("Selected track mid EQ gain"),
+        tr("Selected track high EQ gain"),
+        tr("Selected track low/mid EQ crossover"),
+        tr("Selected track mid/high EQ crossover")
     };
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
     for (int target = 0;
-         target <= static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo); ++target)
+         target <= static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover); ++target)
     {
         QAction* learnAction = learnControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
         connect(learnAction, &QAction::triggered, this,
@@ -10658,7 +10663,7 @@ void MainWindow::setMidiControllerListening(bool enabled)
 
 void MainWindow::beginMidiControllerLearn(int target)
 {
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover) + 1;
     if (target < 0 || target >= targetCount)
         return;
     const InstrumentTrack* track = selectedTrack();
@@ -10671,6 +10676,8 @@ void MainWindow::beginMidiControllerLearn(int target)
          target == static_cast<int>(MidiControllerTarget::SelectedTrackSolo) ||
          (target >= static_cast<int>(MidiControllerTarget::SelectedTrackParametricEqFrequency) &&
           target <= static_cast<int>(MidiControllerTarget::SelectedTrackParametricEqQ)) ||
+         (target >= static_cast<int>(MidiControllerTarget::SelectedTrackEqLowGain) &&
+          target <= static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover)) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) ||
          (target >= static_cast<int>(MidiControllerTarget::SelectedTrackSynthAttack) &&
@@ -10725,7 +10732,7 @@ void MainWindow::loadMidiControllerMappings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const QString prefix = QString::number(target);
@@ -10745,7 +10752,7 @@ void MainWindow::saveMidiControllerMappings() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const MidiControllerMapping mapping = midiControllerMappings.value(target);
@@ -10813,6 +10820,25 @@ void MainWindow::applyMidiControllerTarget(int target, int value)
             default: return;
         }
         parametricEqBandParameterControls[static_cast<size_t>(parameter)]->setValue(parameterValue);
+        return;
+    }
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackEqLowGain) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackEqHighCrossover))
+    {
+        const double normalized = static_cast<double>(value) / 127.0;
+        if (target <= static_cast<int>(MidiControllerTarget::SelectedTrackEqHighGain))
+        {
+            const int band = target - static_cast<int>(MidiControllerTarget::SelectedTrackEqLowGain);
+            equalizerGainControls[static_cast<size_t>(band)]->setValue(-18.0 + normalized * 36.0);
+        }
+        else
+        {
+            const int crossover = target - static_cast<int>(MidiControllerTarget::SelectedTrackEqLowCrossover);
+            QDoubleSpinBox* control = equalizerCrossoverControls[static_cast<size_t>(crossover)];
+            const double minimum = control->minimum();
+            const double maximum = control->maximum();
+            control->setValue(minimum * std::pow(maximum / minimum, normalized));
+        }
         return;
     }
 

@@ -299,7 +299,12 @@ private:
         SelectedTrackOutputBusSolo = 28,
         SelectedTrackParametricEqFrequency = 29,
         SelectedTrackParametricEqGain = 30,
-        SelectedTrackParametricEqQ = 31
+        SelectedTrackParametricEqQ = 31,
+        SelectedTrackEqLowGain = 32,
+        SelectedTrackEqMidGain = 33,
+        SelectedTrackEqHighGain = 34,
+        SelectedTrackEqLowCrossover = 35,
+        SelectedTrackEqHighCrossover = 36
     };
     struct MidiControllerMapping
     {
