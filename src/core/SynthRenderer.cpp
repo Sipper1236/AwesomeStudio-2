@@ -748,6 +748,39 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         }
     }
 
+    recomputeLatencyCompensation();
+
+    std::sort(notes.begin(), notes.end(), [](const VoiceNote& left, const VoiceNote& right)
+    {
+        return left.startFrame < right.startFrame;
+    });
+    std::stable_sort(pitchBendEvents.begin(), pitchBendEvents.end(),
+        [](const PitchBendEvent& left, const PitchBendEvent& right)
+        {
+            if (left.frame != right.frame) return left.frame < right.frame;
+            if (left.trackIndex != right.trackIndex) return left.trackIndex < right.trackIndex;
+            return left.channel < right.channel;
+        });
+    std::stable_sort(pluginInstrumentEvents.begin(), pluginInstrumentEvents.end(),
+        [](const PluginInstrumentEvent& left, const PluginInstrumentEvent& right)
+        {
+            if (left.frame != right.frame) return left.frame < right.frame;
+            if (left.trackIndex != right.trackIndex) return left.trackIndex < right.trackIndex;
+            if (left.type != right.type)
+                return left.type == PluginInstrumentEvent::Type::NoteOff;
+            return left.noteId < right.noteId;
+        });
+    std::sort(audioRegions.begin(), audioRegions.end(), [](const AudioRegion& left, const AudioRegion& right)
+    {
+        return left.startFrame < right.startFrame;
+    });
+}
+
+void SynthRenderer::recomputeLatencyCompensation()
+{
+    if (!project)
+        return;
+
     const auto effectChainBufferingLatency = [](const std::vector<EffectState>& effects)
     {
         qint64 frames = 0;
@@ -845,31 +878,6 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
                     busInputLatencies[static_cast<size_t>(send.busIndex)] -
                     busSignalLatencies[busIndex]));
     }
-
-    std::sort(notes.begin(), notes.end(), [](const VoiceNote& left, const VoiceNote& right)
-    {
-        return left.startFrame < right.startFrame;
-    });
-    std::stable_sort(pitchBendEvents.begin(), pitchBendEvents.end(),
-        [](const PitchBendEvent& left, const PitchBendEvent& right)
-        {
-            if (left.frame != right.frame) return left.frame < right.frame;
-            if (left.trackIndex != right.trackIndex) return left.trackIndex < right.trackIndex;
-            return left.channel < right.channel;
-        });
-    std::stable_sort(pluginInstrumentEvents.begin(), pluginInstrumentEvents.end(),
-        [](const PluginInstrumentEvent& left, const PluginInstrumentEvent& right)
-        {
-            if (left.frame != right.frame) return left.frame < right.frame;
-            if (left.trackIndex != right.trackIndex) return left.trackIndex < right.trackIndex;
-            if (left.type != right.type)
-                return left.type == PluginInstrumentEvent::Type::NoteOff;
-            return left.noteId < right.noteId;
-        });
-    std::sort(audioRegions.begin(), audioRegions.end(), [](const AudioRegion& left, const AudioRegion& right)
-    {
-        return left.startFrame < right.startFrame;
-    });
 }
 
 void SynthRenderer::resetTransport()
@@ -2077,6 +2085,28 @@ void SynthRenderer::serviceEffectCallbacks(std::vector<EffectState>& states)
             state.clapEffect->serviceMainThread();
 }
 
+bool SynthRenderer::hasPendingVst3LatencyRestart() const
+{
+    for (const std::unique_ptr<Vst3AudioInstrumentInstance>& instrument : vst3Instruments)
+        if (instrument != nullptr && instrument->hasPendingLatencyRestart())
+            return true;
+    const auto hasPendingInEffects = [](const std::vector<EffectState>& states)
+    {
+        return std::any_of(states.cbegin(), states.cend(), [](const EffectState& state)
+        {
+            return state.vst3Effect != nullptr &&
+                   state.vst3Effect->hasPendingLatencyRestart();
+        });
+    };
+    for (const std::vector<EffectState>& states : trackEffectStates)
+        if (hasPendingInEffects(states))
+            return true;
+    for (const std::vector<EffectState>& states : busEffectStates)
+        if (hasPendingInEffects(states))
+            return true;
+    return hasPendingInEffects(masterEffectStates);
+}
+
 void SynthRenderer::servicePluginCallbacks()
 {
     for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
@@ -2087,6 +2117,28 @@ void SynthRenderer::servicePluginCallbacks()
     for (std::vector<EffectState>& states : busEffectStates)
         serviceEffectCallbacks(states);
     serviceEffectCallbacks(masterEffectStates);
+}
+
+void SynthRenderer::serviceVst3LatencyRestarts()
+{
+    bool rebuildCompensation = false;
+    for (const std::unique_ptr<Vst3AudioInstrumentInstance>& instrument : vst3Instruments)
+        if (instrument != nullptr)
+            rebuildCompensation = instrument->serviceLatencyRestart() || rebuildCompensation;
+    const auto serviceInEffects = [&rebuildCompensation](std::vector<EffectState>& states)
+    {
+        for (EffectState& state : states)
+            if (state.vst3Effect != nullptr)
+                rebuildCompensation = state.vst3Effect->serviceLatencyRestart() ||
+                    rebuildCompensation;
+    };
+    for (std::vector<EffectState>& states : trackEffectStates)
+        serviceInEffects(states);
+    for (std::vector<EffectState>& states : busEffectStates)
+        serviceInEffects(states);
+    serviceInEffects(masterEffectStates);
+    if (rebuildCompensation)
+        recomputeLatencyCompensation();
 }
 
 void SynthRenderer::stopPluginProcessing()

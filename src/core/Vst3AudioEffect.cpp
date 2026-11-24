@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <mutex>
@@ -48,6 +49,75 @@ public:
         return Steinberg::Vst::StringConvert::convert("Awesome Studio", name)
             ? Steinberg::kResultTrue : Steinberg::kInternalError;
     }
+};
+
+class AudioComponentHandler final : public Steinberg::Vst::IComponentHandler
+{
+public:
+    explicit AudioComponentHandler(std::atomic<Steinberg::int32>& pendingRestartFlags)
+        : pendingRestartFlags(pendingRestartFlags)
+    {
+    }
+
+    Steinberg::tresult PLUGIN_API beginEdit(Steinberg::Vst::ParamID) override
+    {
+        return Steinberg::kNotImplemented;
+    }
+
+    Steinberg::tresult PLUGIN_API performEdit(
+        Steinberg::Vst::ParamID, Steinberg::Vst::ParamValue) override
+    {
+        return Steinberg::kNotImplemented;
+    }
+
+    Steinberg::tresult PLUGIN_API endEdit(Steinberg::Vst::ParamID) override
+    {
+        return Steinberg::kNotImplemented;
+    }
+
+    Steinberg::tresult PLUGIN_API restartComponent(Steinberg::int32 flags) override
+    {
+        if ((flags & Steinberg::Vst::kLatencyChanged) == 0)
+            return Steinberg::kNotImplemented;
+        pendingRestartFlags.fetch_or(Steinberg::Vst::kLatencyChanged,
+                                     std::memory_order_release);
+        return flags == Steinberg::Vst::kLatencyChanged
+            ? Steinberg::kResultTrue : Steinberg::kNotImplemented;
+    }
+
+    Steinberg::uint32 PLUGIN_API addRef() override
+    {
+        return ++referenceCount;
+    }
+
+    Steinberg::uint32 PLUGIN_API release() override
+    {
+        const Steinberg::uint32 remaining = --referenceCount;
+        if (remaining == 0)
+            delete this;
+        return remaining;
+    }
+
+private:
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid,
+                                                  void** object) override
+    {
+        if (object == nullptr)
+            return Steinberg::kInvalidArgument;
+        *object = nullptr;
+        if (Steinberg::FUnknownPrivate::iidEqual(
+                iid, Steinberg::Vst::IComponentHandler::iid) ||
+            Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::FUnknown::iid))
+        {
+            *object = static_cast<Steinberg::Vst::IComponentHandler*>(this);
+            addRef();
+            return Steinberg::kResultTrue;
+        }
+        return Steinberg::kNoInterface;
+    }
+
+    std::atomic<Steinberg::uint32> referenceCount{1};
+    std::atomic<Steinberg::int32>& pendingRestartFlags;
 };
 
 constexpr std::uint32_t maximumVst3Parameters = 256;
@@ -334,6 +404,8 @@ struct Vst3AudioEffectInstance::Private
     Steinberg::IPtr<Vst3Component> component;
     Steinberg::IPtr<Vst3Controller> controller;
     Steinberg::IPtr<Vst3Processor> processor;
+    std::atomic<Steinberg::int32> pendingRestartFlags{0};
+    Steinberg::IPtr<AudioComponentHandler> componentHandler;
     Vst3PluginDescriptor descriptor;
     Steinberg::Vst::ParameterChanges parameterChanges;
     std::vector<float> controlValues;
@@ -359,10 +431,64 @@ struct Vst3AudioEffectInstance::Private
 
     ~Private()
     {
+        if (controller)
+            controller->setComponentHandler(nullptr);
         if (processing && processor)
             processor->setProcessing(false);
         if (active && component)
             component->setActive(false);
+    }
+
+    bool serviceLatencyRestart()
+    {
+        const Steinberg::int32 flags = pendingRestartFlags.exchange(
+            0, std::memory_order_acq_rel);
+        if ((flags & Steinberg::Vst::kLatencyChanged) == 0 || !component || !processor)
+            return false;
+
+        const qint64 previousLatency = active
+            ? static_cast<qint64>(vst3BlockFrames) + reportedLatencyFrames : 0;
+        if (processing)
+        {
+            if (processor->setProcessing(false) != Steinberg::kResultTrue)
+            {
+                pendingRestartFlags.fetch_or(Steinberg::Vst::kLatencyChanged,
+                                             std::memory_order_release);
+                return false;
+            }
+            processing = false;
+        }
+        if (active && component->setActive(false) != Steinberg::kResultTrue)
+        {
+            if (processor->setProcessing(true) == Steinberg::kResultTrue)
+                processing = true;
+            pendingRestartFlags.fetch_or(Steinberg::Vst::kLatencyChanged,
+                                         std::memory_order_release);
+            return false;
+        }
+        active = false;
+        if (component->setActive(true) != Steinberg::kResultTrue)
+        {
+            pendingRestartFlags.fetch_or(Steinberg::Vst::kLatencyChanged,
+                                         std::memory_order_release);
+            return previousLatency != 0;
+        }
+        active = true;
+        reportedLatencyFrames = processor->getLatencySamples();
+        bufferedFrames = 0;
+        outputRead = 0;
+        outputReady = false;
+        inputLeft.fill(0.0f);
+        inputRight.fill(0.0f);
+        monoInput.fill(0.0f);
+        outputLeft.fill(0.0f);
+        outputRight.fill(0.0f);
+        monoOutput.fill(0.0f);
+        dryLeft.fill(0.0f);
+        dryRight.fill(0.0f);
+        std::fill(lastSentValues.begin(), lastSentValues.end(),
+                  std::numeric_limits<double>::quiet_NaN());
+        return true;
     }
 
     void restoreState(const QString& state)
@@ -544,6 +670,12 @@ Vst3AudioEffectInstance::Vst3AudioEffectInstance(const QString& id, double sampl
         return;
     d->component = d->provider->getComponentPtr();
     d->controller = d->provider->getControllerPtr();
+    if (d->controller)
+    {
+        d->componentHandler = Steinberg::owned(
+            new AudioComponentHandler(d->pendingRestartFlags));
+        d->controller->setComponentHandler(d->componentHandler);
+    }
     d->processor = Steinberg::FUnknownPtr<Vst3Processor>(d->component);
     if (!d->component || !d->processor ||
         d->component->activateBus(Steinberg::Vst::kAudio, Steinberg::Vst::kInput, 0, true) !=
@@ -602,6 +734,18 @@ Vst3AudioEffectInstance::~Vst3AudioEffectInstance() = default;
 bool Vst3AudioEffectInstance::isValid() const
 {
     return d != nullptr && d->active && d->processor;
+}
+
+bool Vst3AudioEffectInstance::hasPendingLatencyRestart() const
+{
+    return d != nullptr &&
+        (d->pendingRestartFlags.load(std::memory_order_acquire) &
+         Steinberg::Vst::kLatencyChanged) != 0;
+}
+
+bool Vst3AudioEffectInstance::serviceLatencyRestart()
+{
+    return d != nullptr && d->serviceLatencyRestart();
 }
 
 qint64 Vst3AudioEffectInstance::processingLatencyFrames() const
@@ -786,6 +930,8 @@ struct Vst3AudioInstrumentInstance::Private
     Steinberg::IPtr<Vst3Component> component;
     Steinberg::IPtr<Vst3Controller> controller;
     Steinberg::IPtr<Vst3Processor> processor;
+    std::atomic<Steinberg::int32> pendingRestartFlags{0};
+    Steinberg::IPtr<AudioComponentHandler> componentHandler;
     Vst3PluginDescriptor descriptor;
     Steinberg::Vst::ParameterChanges parameterChanges;
     Steinberg::Vst::EventList inputEvents{1024};
@@ -811,10 +957,61 @@ struct Vst3AudioInstrumentInstance::Private
 
     ~Private()
     {
+        if (controller)
+            controller->setComponentHandler(nullptr);
         if (processing && processor)
             processor->setProcessing(false);
         if (active && component)
             component->setActive(false);
+    }
+
+    bool serviceLatencyRestart()
+    {
+        const Steinberg::int32 flags = pendingRestartFlags.exchange(
+            0, std::memory_order_acq_rel);
+        if ((flags & Steinberg::Vst::kLatencyChanged) == 0 || !component || !processor)
+            return false;
+
+        const qint64 previousLatency = active
+            ? static_cast<qint64>(vst3BlockFrames) + reportedLatencyFrames : 0;
+        if (processing)
+        {
+            if (processor->setProcessing(false) != Steinberg::kResultTrue)
+            {
+                pendingRestartFlags.fetch_or(Steinberg::Vst::kLatencyChanged,
+                                             std::memory_order_release);
+                return false;
+            }
+            processing = false;
+        }
+        if (active && component->setActive(false) != Steinberg::kResultTrue)
+        {
+            if (processor->setProcessing(true) == Steinberg::kResultTrue)
+                processing = true;
+            pendingRestartFlags.fetch_or(Steinberg::Vst::kLatencyChanged,
+                                         std::memory_order_release);
+            return false;
+        }
+        active = false;
+        if (component->setActive(true) != Steinberg::kResultTrue)
+        {
+            pendingRestartFlags.fetch_or(Steinberg::Vst::kLatencyChanged,
+                                         std::memory_order_release);
+            return previousLatency != 0;
+        }
+        active = true;
+        reportedLatencyFrames = processor->getLatencySamples();
+        bufferedFrames = 0;
+        outputRead = 0;
+        outputReady = false;
+        outputLeft.fill(0.0f);
+        outputRight.fill(0.0f);
+        monoOutput.fill(0.0f);
+        inputEvents.clear();
+        activeNotes.fill(ActiveNote{});
+        std::fill(lastSentValues.begin(), lastSentValues.end(),
+                  std::numeric_limits<double>::quiet_NaN());
+        return true;
     }
 
     void restoreState(const QString& state)
@@ -963,6 +1160,12 @@ Vst3AudioInstrumentInstance::Vst3AudioInstrumentInstance(
         return;
     d->component = d->provider->getComponentPtr();
     d->controller = d->provider->getControllerPtr();
+    if (d->controller)
+    {
+        d->componentHandler = Steinberg::owned(
+            new AudioComponentHandler(d->pendingRestartFlags));
+        d->controller->setComponentHandler(d->componentHandler);
+    }
     d->processor = Steinberg::FUnknownPtr<Vst3Processor>(d->component);
     if (!d->component || !d->processor ||
         d->component->getBusCount(Steinberg::Vst::kAudio, Steinberg::Vst::kInput) != 0 ||
@@ -1043,6 +1246,18 @@ Vst3AudioInstrumentInstance::~Vst3AudioInstrumentInstance() = default;
 bool Vst3AudioInstrumentInstance::isValid() const
 {
     return d != nullptr && d->active && d->processor;
+}
+
+bool Vst3AudioInstrumentInstance::hasPendingLatencyRestart() const
+{
+    return d != nullptr &&
+        (d->pendingRestartFlags.load(std::memory_order_acquire) &
+         Steinberg::Vst::kLatencyChanged) != 0;
+}
+
+bool Vst3AudioInstrumentInstance::serviceLatencyRestart()
+{
+    return d != nullptr && d->serviceLatencyRestart();
 }
 
 qint64 Vst3AudioInstrumentInstance::processingLatencyFrames() const

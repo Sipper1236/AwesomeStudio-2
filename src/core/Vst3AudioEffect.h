@@ -61,6 +61,8 @@ public:
     Vst3AudioEffectInstance& operator=(const Vst3AudioEffectInstance&) = delete;
 
     bool isValid() const;
+    bool hasPendingLatencyRestart() const;
+    bool serviceLatencyRestart();
     qint64 processingLatencyFrames() const;
     qsizetype parameterCount() const;
     float parameterValue(qsizetype index) const;
@@ -91,6 +93,8 @@ public:
     Vst3AudioInstrumentInstance& operator=(const Vst3AudioInstrumentInstance&) = delete;
 
     bool isValid() const;
+    bool hasPendingLatencyRestart() const;
+    bool serviceLatencyRestart();
     qint64 processingLatencyFrames() const;
     qsizetype parameterCount() const;
     float parameterValue(qsizetype index) const;

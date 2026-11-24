@@ -46,7 +46,9 @@ public:
     void setLiveVst3InstrumentParameterOverride(size_t trackIndex,
                                                qsizetype parameterIndex, float value);
     void capturePluginStates(ProjectData& target) const;
+    bool hasPendingVst3LatencyRestart() const;
     void servicePluginCallbacks();
+    void serviceVst3LatencyRestarts();
     void stopPluginProcessing();
     void resetTrackPeakLevels();
     void resetBusPeakLevels();
@@ -271,6 +273,7 @@ private:
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
     void resetTrackEqualizers();
     void resetLatencyCompensation();
+    void recomputeLatencyCompensation();
     static ParametricEqCoefficients makeParametricEqCoefficients(
         const ParametricEqBand& band, double sampleRate);
     void prepareEffectChain(const QVector<MixerEffect>& settings, std::vector<EffectState>& states);

@@ -495,8 +495,35 @@ void AudioEngine::servicePluginCallbacks()
 {
     const auto renderState = std::atomic_load_explicit(&preparedRenderState,
                                                         std::memory_order_acquire);
-    if (renderState != nullptr && renderState->renderer != nullptr)
-        renderState->renderer->servicePluginCallbacks();
+    if (renderState == nullptr || renderState->renderer == nullptr)
+        return;
+
+    const std::shared_ptr<SynthRenderer>& renderer = renderState->renderer;
+    renderer->servicePluginCallbacks();
+    if (!renderer->hasPendingVst3LatencyRestart())
+        return;
+
+    if (pluginStateCaptureInProgress.exchange(true, std::memory_order_acq_rel))
+        return;
+    const bool resumeSink = sink != nullptr && sink->state() == QAudio::ActiveState;
+    struct PluginRestartExit
+    {
+        std::atomic<bool>& active;
+        QAudioSink* sink = nullptr;
+        bool resumeSink = false;
+
+        ~PluginRestartExit()
+        {
+            active.store(false, std::memory_order_release);
+            if (resumeSink && sink != nullptr)
+                sink->resume();
+        }
+    } restartExit{pluginStateCaptureInProgress, sink.get(), resumeSink};
+    if (resumeSink)
+        sink->suspend();
+    while (activeRenderCallbacks.load(std::memory_order_acquire) != 0)
+        std::this_thread::yield();
+    renderer->serviceVst3LatencyRestarts();
 }
 
 void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity,
