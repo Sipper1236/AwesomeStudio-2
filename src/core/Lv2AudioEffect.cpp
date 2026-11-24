@@ -2,9 +2,11 @@
 #include "Project.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -43,7 +45,10 @@ struct LilvWorldState
         controlPort = lilv_new_uri(world, LV2_CORE__ControlPort);
         inputPort = lilv_new_uri(world, LV2_CORE__InputPort);
         outputPort = lilv_new_uri(world, LV2_CORE__OutputPort);
+        designationProperty = lilv_new_uri(world, LV2_CORE__designation);
+        latencyDesignation = lilv_new_uri(world, LV2_CORE__latency);
         integerProperty = lilv_new_uri(world, LV2_CORE__integer);
+        reportsLatencyProperty = lilv_new_uri(world, LV2_CORE__reportsLatency);
         toggledProperty = lilv_new_uri(world, LV2_CORE__toggled);
     }
 
@@ -53,7 +58,10 @@ struct LilvWorldState
         lilv_node_free(controlPort);
         lilv_node_free(inputPort);
         lilv_node_free(outputPort);
+        lilv_node_free(designationProperty);
+        lilv_node_free(latencyDesignation);
         lilv_node_free(integerProperty);
+        lilv_node_free(reportsLatencyProperty);
         lilv_node_free(toggledProperty);
         lilv_world_free(world);
     }
@@ -64,7 +72,10 @@ struct LilvWorldState
     LilvNode* controlPort = nullptr;
     LilvNode* inputPort = nullptr;
     LilvNode* outputPort = nullptr;
+    LilvNode* designationProperty = nullptr;
+    LilvNode* latencyDesignation = nullptr;
     LilvNode* integerProperty = nullptr;
+    LilvNode* reportsLatencyProperty = nullptr;
     LilvNode* toggledProperty = nullptr;
     LV2_URID_Map uridMap{};
     LV2_URID_Unmap uridUnmap{};
@@ -168,6 +179,22 @@ bool describePlugin(const LilvPlugin* plugin, Lv2EffectDescriptor& descriptor)
         {
             if (isOutput)
             {
+                LilvNodes* designationValues = state.designationProperty == nullptr
+                    ? nullptr : lilv_port_get_value(plugin, port, state.designationProperty);
+                const bool designatedLatency = designationValues != nullptr &&
+                    state.latencyDesignation != nullptr &&
+                    lilv_nodes_contains(designationValues, state.latencyDesignation);
+                if (designationValues != nullptr)
+                    lilv_nodes_free(designationValues);
+                const bool reportsLatency = state.reportsLatencyProperty != nullptr &&
+                    lilv_port_has_property(plugin, port, state.reportsLatencyProperty);
+                if (designatedLatency || reportsLatency)
+                {
+                    if (descriptor.latencyOutputPort !=
+                        std::numeric_limits<std::uint32_t>::max())
+                        return false;
+                    descriptor.latencyOutputPort = portIndex;
+                }
                 descriptor.controlOutputs.push_back(portIndex);
                 continue;
             }
@@ -236,6 +263,11 @@ struct Lv2AudioEffectInstance::Private
     float monoOutput = 0.0f;
     std::vector<float> controlInputs;
     std::vector<float> controlOutputs;
+    size_t latencyOutputIndex = std::numeric_limits<size_t>::max();
+    std::atomic<qint64> reportedLatencyFrames{0};
+    std::atomic<qint64> observedLatencyFrames{-1};
+    std::atomic<qint64> pendingLatencyFrames{0};
+    std::atomic<bool> latencyChangePending{false};
 #endif
 };
 
@@ -340,8 +372,12 @@ Lv2AudioEffectInstance::Lv2AudioEffectInstance(const QString& uri, double sample
     }
     d->controlOutputs.assign(d->descriptor.controlOutputs.size(), 0.0f);
     for (size_t index = 0; index < d->descriptor.controlOutputs.size(); ++index)
+    {
         lilv_instance_connect_port(d->instance, d->descriptor.controlOutputs[index],
                                    &d->controlOutputs[index]);
+        if (d->descriptor.controlOutputs[index] == d->descriptor.latencyOutputPort)
+            d->latencyOutputIndex = index;
+    }
 
     if (!pluginState.isEmpty())
     {
@@ -386,6 +422,39 @@ bool Lv2AudioEffectInstance::isValid() const
 {
 #if defined(AWESOME_STUDIO_HAS_LILV)
     return d != nullptr && d->instance != nullptr;
+#else
+    return false;
+#endif
+}
+
+qint64 Lv2AudioEffectInstance::processingLatencyFrames() const
+{
+#if defined(AWESOME_STUDIO_HAS_LILV)
+    return d == nullptr ? 0 : d->reportedLatencyFrames.load(std::memory_order_acquire);
+#else
+    return 0;
+#endif
+}
+
+bool Lv2AudioEffectInstance::hasPendingLatencyChange() const
+{
+#if defined(AWESOME_STUDIO_HAS_LILV)
+    return d != nullptr && d->latencyChangePending.load(std::memory_order_acquire);
+#else
+    return false;
+#endif
+}
+
+bool Lv2AudioEffectInstance::serviceLatencyChange()
+{
+#if defined(AWESOME_STUDIO_HAS_LILV)
+    if (d == nullptr || !d->latencyChangePending.exchange(false, std::memory_order_acq_rel))
+        return false;
+    const qint64 pendingLatency = std::max<qint64>(
+        0, d->pendingLatencyFrames.load(std::memory_order_acquire));
+    const qint64 previousLatency = d->reportedLatencyFrames.exchange(
+        pendingLatency, std::memory_order_acq_rel);
+    return previousLatency != pendingLatency;
 #else
     return false;
 #endif
@@ -471,6 +540,22 @@ void Lv2AudioEffectInstance::process(float& left, float& right)
     d->outputRight = 0.0f;
     d->monoOutput = 0.0f;
     lilv_instance_run(d->instance, 1);
+    if (d->latencyOutputIndex < d->controlOutputs.size())
+    {
+        const float reported = d->controlOutputs[d->latencyOutputIndex];
+        if (std::isfinite(reported) && reported >= 0.0f)
+        {
+            const qint64 latency = static_cast<qint64>(std::llround(std::min<double>(
+                reported, static_cast<double>(std::numeric_limits<std::uint32_t>::max()))));
+            const qint64 previousLatency = d->observedLatencyFrames.exchange(
+                latency, std::memory_order_relaxed);
+            if (latency != previousLatency)
+            {
+                d->pendingLatencyFrames.store(latency, std::memory_order_relaxed);
+                d->latencyChangePending.store(true, std::memory_order_release);
+            }
+        }
+    }
     if (d->descriptor.audioOutputs.size() == 1)
         left = right = d->monoOutput;
     else

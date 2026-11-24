@@ -786,6 +786,8 @@ void SynthRenderer::recomputeLatencyCompensation()
         qint64 frames = 0;
         for (const EffectState& effect : effects)
         {
+            if (effect.lv2Effect != nullptr)
+                frames += effect.lv2Effect->processingLatencyFrames();
             if (effect.clapEffect != nullptr)
                 frames += effect.clapEffect->processingLatencyFrames();
             if (effect.vst3Effect != nullptr)
@@ -2107,6 +2109,25 @@ bool SynthRenderer::hasPendingVst3LatencyRestart() const
     return hasPendingInEffects(masterEffectStates);
 }
 
+bool SynthRenderer::hasPendingLv2LatencyChange() const
+{
+    const auto hasPendingInEffects = [](const std::vector<EffectState>& states)
+    {
+        return std::any_of(states.cbegin(), states.cend(), [](const EffectState& state)
+        {
+            return state.lv2Effect != nullptr &&
+                   state.lv2Effect->hasPendingLatencyChange();
+        });
+    };
+    for (const std::vector<EffectState>& states : trackEffectStates)
+        if (hasPendingInEffects(states))
+            return true;
+    for (const std::vector<EffectState>& states : busEffectStates)
+        if (hasPendingInEffects(states))
+            return true;
+    return hasPendingInEffects(masterEffectStates);
+}
+
 bool SynthRenderer::hasPendingClapRestart() const
 {
     for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
@@ -2160,6 +2181,26 @@ void SynthRenderer::serviceVst3LatencyRestarts()
     serviceInEffects(masterEffectStates);
     if (rebuildCompensation)
         recomputeLatencyCompensation();
+}
+
+bool SynthRenderer::serviceLv2LatencyChanges()
+{
+    bool rebuildCompensation = false;
+    const auto serviceInEffects = [&rebuildCompensation](std::vector<EffectState>& states)
+    {
+        for (EffectState& state : states)
+            if (state.lv2Effect != nullptr)
+                rebuildCompensation = state.lv2Effect->serviceLatencyChange() ||
+                    rebuildCompensation;
+    };
+    for (std::vector<EffectState>& states : trackEffectStates)
+        serviceInEffects(states);
+    for (std::vector<EffectState>& states : busEffectStates)
+        serviceInEffects(states);
+    serviceInEffects(masterEffectStates);
+    if (rebuildCompensation)
+        recomputeLatencyCompensation();
+    return rebuildCompensation;
 }
 
 bool SynthRenderer::serviceClapRestarts()

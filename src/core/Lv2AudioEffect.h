@@ -4,6 +4,7 @@
 #include <QVector>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -30,6 +31,7 @@ struct Lv2EffectDescriptor
     std::vector<std::uint32_t> audioInputs;
     std::vector<std::uint32_t> audioOutputs;
     std::vector<std::uint32_t> controlOutputs;
+    std::uint32_t latencyOutputPort = std::numeric_limits<std::uint32_t>::max();
 };
 
 class Lv2AudioEffectInstance
@@ -47,6 +49,9 @@ public:
     Lv2AudioEffectInstance& operator=(const Lv2AudioEffectInstance&) = delete;
 
     bool isValid() const;
+    qint64 processingLatencyFrames() const;
+    bool hasPendingLatencyChange() const;
+    bool serviceLatencyChange();
     qsizetype parameterCount() const;
     void setParameter(qsizetype index, float value);
     bool saveState(QString& pluginState) const;

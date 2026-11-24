@@ -558,6 +558,7 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
                     writeIntegerSample(destination, bounded, formatInfo.bytesPerSample);
             }
         }
+        renderer.serviceLv2LatencyChanges();
 
         const qint64 bytes = static_cast<qint64>(frames) * bytesPerSampleFrame;
         if (flacContainer)
