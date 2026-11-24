@@ -3,6 +3,7 @@
 #include "AudioFile.h"
 
 #include <QAudioSource>
+#include <QFileInfo>
 #include <QIODevice>
 #include <QSaveFile>
 
@@ -60,8 +61,8 @@ AudioRecorder::~AudioRecorder()
 {
     if (source)
         source->stop();
-    if (file)
-        file->cancelWriting();
+    if (file && !monitorOnly)
+        checkpointRecoveryFile();
 }
 
 bool AudioRecorder::start(const QAudioDevice& device, const QString& path,
@@ -91,8 +92,16 @@ bool AudioRecorder::start(const QAudioDevice& device, const QString& path,
     }
 
     outputPath = path;
-    file = std::make_unique<QSaveFile>(path);
-    if (!file->open(QIODevice::WriteOnly))
+    recoveryOutputPath = path + QStringLiteral(".recording-recovery");
+    if (QFileInfo::exists(recoveryOutputPath))
+    {
+        if (error != nullptr)
+            *error = QStringLiteral("An interrupted recording already exists at %1.")
+                         .arg(recoveryOutputPath);
+        return false;
+    }
+    file = std::make_unique<QFile>(recoveryOutputPath);
+    if (!file->open(QIODevice::ReadWrite | QIODevice::NewOnly))
     {
         if (error != nullptr)
             *error = file->errorString();
@@ -103,7 +112,15 @@ bool AudioRecorder::start(const QAudioDevice& device, const QString& path,
     {
         if (error != nullptr)
             *error = file->errorString();
-        file->cancelWriting();
+        file->remove();
+        file.reset();
+        return false;
+    }
+    if (!file->flush())
+    {
+        if (error != nullptr)
+            *error = file->errorString();
+        file->remove();
         file.reset();
         return false;
     }
@@ -119,7 +136,7 @@ bool AudioRecorder::start(const QAudioDevice& device, const QString& path,
                                     .arg(static_cast<int>(source->error()));
         source->stop();
         source.reset();
-        file->cancelWriting();
+        file->remove();
         file.reset();
         if (error != nullptr)
             *error = message;
@@ -129,6 +146,7 @@ bool AudioRecorder::start(const QAudioDevice& device, const QString& path,
     QObject::connect(input, &QIODevice::readyRead, source.get(), [this] { consumeAvailable(); });
     failure.clear();
     framesWritten = 0;
+    framesAtLastRecoveryFlush = 0;
     minimumInputLatencyUs = -1;
     reachedLimit = false;
     pendingBytes.clear();
@@ -240,25 +258,93 @@ bool AudioRecorder::finish(QString* error)
     {
         const QString message = !failure.isEmpty()
             ? failure : QStringLiteral("No audio frames were captured.");
-        file->cancelWriting();
+        if (framesWritten == 0)
+            file->remove();
+        else
+            checkpointRecoveryFile();
         file.reset();
         if (error != nullptr)
             *error = message;
         return false;
     }
 
-    const quint64 dataBytes = framesWritten * static_cast<quint64>(outputChannels * 2);
-    if (!file->seek(0) || !writeHeader(static_cast<quint32>(dataBytes)) || !file->commit())
+    if (!checkpointRecoveryFile())
     {
         const QString message = file->errorString();
-        file->cancelWriting();
         file.reset();
         if (error != nullptr)
             *error = message;
         return false;
     }
     file.reset();
+    if (!commitRecordedFile(error))
+    {
+        return false;
+    }
+    QFile::remove(recoveryOutputPath);
+    recoveryOutputPath.clear();
     return true;
+}
+
+bool AudioRecorder::commitRecordedFile(QString* error)
+{
+    QFile source(recoveryOutputPath);
+    if (!source.open(QIODevice::ReadOnly))
+    {
+        if (error != nullptr)
+            *error = source.errorString();
+        return false;
+    }
+    QSaveFile destination(outputPath);
+    if (!destination.open(QIODevice::WriteOnly))
+    {
+        if (error != nullptr)
+            *error = destination.errorString();
+        return false;
+    }
+    QByteArray buffer(64 * 1024, '\0');
+    while (!source.atEnd())
+    {
+        const qint64 bytesRead = source.read(buffer.data(), buffer.size());
+        if (bytesRead < 0)
+        {
+            if (error != nullptr)
+                *error = source.errorString();
+            destination.cancelWriting();
+            return false;
+        }
+        if (bytesRead == 0)
+            break;
+        if (destination.write(buffer.constData(), bytesRead) != bytesRead)
+        {
+            if (error != nullptr)
+                *error = destination.errorString();
+            destination.cancelWriting();
+            return false;
+        }
+    }
+    if (!destination.commit())
+    {
+        if (error != nullptr)
+            *error = destination.errorString();
+        return false;
+    }
+    return true;
+}
+
+bool AudioRecorder::checkpointRecoveryFile(bool flush)
+{
+    if (!file || !file->isOpen())
+        return false;
+    const quint64 dataBytes = framesWritten * static_cast<quint64>(outputChannels * 2);
+    const qint64 dataEnd = static_cast<qint64>(wavHeaderBytes + dataBytes);
+    return file->seek(0) && writeHeader(static_cast<quint32>(dataBytes)) &&
+           (!flush || file->flush()) && file->seek(dataEnd);
+}
+
+QString AudioRecorder::recoveryPath() const
+{
+    return recoveryOutputPath;
 }
 
 bool AudioRecorder::isActive() const
@@ -423,6 +509,20 @@ void AudioRecorder::consumeAvailable()
     }
     framesWritten += frames;
     pendingBytes.remove(0, static_cast<qsizetype>(frames * inputBytesPerFrame));
+    if (!monitorOnly)
+    {
+        const bool flushCheckpoint =
+            framesWritten - framesAtLastRecoveryFlush >=
+            static_cast<quint64>(inputFormat.sampleRate());
+        if (!checkpointRecoveryFile(flushCheckpoint))
+        {
+            setError(file == nullptr ? QStringLiteral("The interrupted recording could not be checkpointed.")
+                                     : file->errorString());
+            return;
+        }
+        if (flushCheckpoint)
+            framesAtLastRecoveryFlush = framesWritten;
+    }
     if (monitor)
         monitor(monitorSamples.constData(), static_cast<qsizetype>(frames), outputChannels,
                 inputFormat.sampleRate());

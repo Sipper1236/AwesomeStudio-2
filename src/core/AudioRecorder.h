@@ -3,6 +3,7 @@
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QString>
+#include <QFile>
 
 #include <functional>
 #include <memory>
@@ -10,7 +11,6 @@
 
 class QAudioSource;
 class QIODevice;
-class QSaveFile;
 
 class AudioRecorder
 {
@@ -29,6 +29,7 @@ public:
     bool maximumReached() const;
     QString errorMessage() const;
     QString path() const;
+    QString recoveryPath() const;
     quint64 frameCount() const;
     int sampleRate() const;
     int channelCount() const;
@@ -40,17 +41,21 @@ private:
     void sampleInputLatency();
     void consumeAvailable();
     bool writeHeader(quint32 dataBytes);
+    bool checkpointRecoveryFile(bool flush = true);
+    bool commitRecordedFile(QString* error);
     void setError(const QString& error);
 
     std::unique_ptr<QAudioSource> source;
-    std::unique_ptr<QSaveFile> file;
+    std::unique_ptr<QFile> file;
     QIODevice* input = nullptr;
     QAudioFormat inputFormat;
     QString outputPath;
+    QString recoveryOutputPath;
     QString failure;
     QByteArray pendingBytes;
     quint64 maximumFrames = 0;
     quint64 framesWritten = 0;
+    quint64 framesAtLastRecoveryFlush = 0;
     qint64 minimumInputLatencyUs = -1;
     int outputChannels = 0;
     bool reachedLimit = false;

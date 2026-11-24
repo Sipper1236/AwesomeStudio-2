@@ -104,7 +104,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Linux VST3 live MIDI polyphonic and channel aftertouch forwarded as note-ID-specific poly-pressure events
 - [ ] Physical validation of MIDI clock synchronization and hardware-referenced output timestamps
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
-- [x] Autosave, rotating backups, project recovery, and versioned migrations
+- [x] Autosave, rotating backups, project recovery, versioned migrations, and checkpointed interrupted-recording WAV recovery
 - [x] Optional multi-format export, stems, cancellable batch rendering, and progress reporting
 - [x] Block-based CLAP processing with a 64-frame host buffering delay
 - [x] Linux Debian, RPM, and AppImage packages with executable/archive artifacts in GitHub Actions

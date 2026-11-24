@@ -22,6 +22,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDateTime>
 #include <QDoubleSpinBox>
 #include <QDockWidget>
 #include <QDir>
@@ -1573,6 +1574,42 @@ QString unsavedSessionAutosavePath()
         directory = QDir::home().filePath(QStringLiteral(".awesome-studio"));
     QDir().mkpath(directory);
     return QDir(directory).filePath(QStringLiteral("unsaved-session.autosave"));
+}
+
+QString activeAudioRecordingRecoveryManifestPath()
+{
+    QString directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (directory.isEmpty())
+        directory = QDir::home().filePath(QStringLiteral(".awesome-studio"));
+    QDir().mkpath(directory);
+    return QDir(directory).filePath(QStringLiteral("active-recording-recovery.json"));
+}
+
+bool saveActiveAudioRecordingRecoveryManifest(const QString& originalPath,
+                                              const QString& recoveryPath,
+                                              QString* error)
+{
+    QSaveFile file(activeAudioRecordingRecoveryManifestPath());
+    if (!file.open(QIODevice::WriteOnly))
+    {
+        if (error != nullptr)
+            *error = file.errorString();
+        return false;
+    }
+    const QJsonObject manifest{
+        {QStringLiteral("version"), 1},
+        {QStringLiteral("originalPath"), QFileInfo(originalPath).absoluteFilePath()},
+        {QStringLiteral("recoveryPath"), QFileInfo(recoveryPath).absoluteFilePath()},
+        {QStringLiteral("startedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}
+    };
+    const QByteArray bytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
+    if (file.write(bytes) != bytes.size() || !file.commit())
+    {
+        if (error != nullptr)
+            *error = file.errorString();
+        return false;
+    }
+    return true;
 }
 
 QString projectBackupPath(const QString& projectPath, int generation)
@@ -3193,6 +3230,7 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     }
     refreshProjectUi();
     offerUnsavedSessionRecovery();
+    offerInterruptedAudioRecordingRecovery();
 
     if (audioEngine.initialize())
     {
@@ -10751,6 +10789,138 @@ void MainWindow::offerUnsavedSessionRecovery()
     statusBar()->showMessage(tr("Recovered unsaved session; save it to keep the project."), 7000);
 }
 
+void MainWindow::offerInterruptedAudioRecordingRecovery()
+{
+    const QString manifestPath = activeAudioRecordingRecoveryManifestPath();
+    QFile manifestFile(manifestPath);
+    if (!manifestFile.open(QIODevice::ReadOnly))
+        return;
+
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(manifestFile.readAll(), &parseError);
+    manifestFile.close();
+    if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
+        document.object().value(QStringLiteral("version")).toInt() != 1)
+    {
+        statusBar()->showMessage(tr("An interrupted recording recovery journal is damaged."), 7000);
+        QFile::remove(manifestPath);
+        return;
+    }
+    const QJsonObject manifest = document.object();
+    const QString originalPath = manifest.value(QStringLiteral("originalPath")).toString();
+    const QString recoveryPath = manifest.value(QStringLiteral("recoveryPath")).toString();
+    if (originalPath.isEmpty() || recoveryPath.isEmpty() ||
+        !recoveryPath.endsWith(QStringLiteral(".recording-recovery")))
+    {
+        statusBar()->showMessage(tr("The interrupted recording recovery journal is invalid."), 7000);
+        QFile::remove(manifestPath);
+        return;
+    }
+    if (!QFileInfo::exists(recoveryPath))
+    {
+        QFile::remove(manifestPath);
+        return;
+    }
+
+    std::shared_ptr<const AudioAsset> recoveredAsset;
+    QString error;
+    if (!AudioFile::loadWav(recoveryPath, recoveredAsset, &error))
+    {
+        QMessageBox prompt(QMessageBox::Warning,
+            tr("Interrupted recording could not be recovered"),
+            tr("The partial WAV file is invalid: %1\nDiscard this damaged recovery file?").arg(error),
+            QMessageBox::NoButton, this);
+        QPushButton* discardButton = prompt.addButton(tr("Discard damaged file"),
+                                                       QMessageBox::DestructiveRole);
+        prompt.addButton(tr("Keep for later"), QMessageBox::RejectRole);
+        prompt.exec();
+        if (prompt.clickedButton() == discardButton)
+        {
+            QFile::remove(recoveryPath);
+            QFile::remove(manifestPath);
+        }
+        return;
+    }
+
+    QMessageBox prompt(QMessageBox::Warning, tr("Recover interrupted recording"),
+        tr("An interrupted recording contains about %1 seconds of audio. Save it as a separate recovered WAV file?")
+            .arg(recoveredAsset->sampleRate > 0
+                ? static_cast<double>(recoveredAsset->frameCount()) / recoveredAsset->sampleRate : 0.0,
+                 0, 'f', 1),
+        QMessageBox::NoButton, this);
+    QPushButton* saveButton = prompt.addButton(tr("Save recovered WAV"), QMessageBox::AcceptRole);
+    QPushButton* discardButton = prompt.addButton(tr("Discard recording"), QMessageBox::DestructiveRole);
+    prompt.addButton(tr("Decide later"), QMessageBox::RejectRole);
+    prompt.setDefaultButton(saveButton);
+    prompt.exec();
+
+    if (prompt.clickedButton() == discardButton)
+    {
+        QFile::remove(recoveryPath);
+        QFile::remove(manifestPath);
+        statusBar()->showMessage(tr("Interrupted recording discarded"), 4000);
+        return;
+    }
+    if (prompt.clickedButton() != saveButton)
+        return;
+
+    const QFileInfo originalInfo(originalPath);
+    QString recoveryDirectory = originalInfo.absolutePath();
+    if (!QFileInfo(recoveryDirectory).isDir() || !QFileInfo(recoveryDirectory).isWritable())
+    {
+        recoveryDirectory = QDir(
+            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            .filePath(QStringLiteral("recovered-recordings"));
+        if (!QDir().mkpath(recoveryDirectory))
+        {
+            QMessageBox::warning(this, tr("Could not save recovered recording"),
+                                 tr("A recovery folder could not be created."));
+            return;
+        }
+    }
+
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    const QString baseName = originalInfo.completeBaseName().isEmpty()
+        ? QStringLiteral("Recording") : originalInfo.completeBaseName();
+    QString recoveredPath = QDir(recoveryDirectory).filePath(
+        QStringLiteral("%1-recovered-%2.wav").arg(baseName, timestamp));
+    for (int suffix = 2; QFileInfo::exists(recoveredPath); ++suffix)
+        recoveredPath = QDir(recoveryDirectory).filePath(
+            QStringLiteral("%1-recovered-%2-%3.wav").arg(baseName, timestamp).arg(suffix));
+
+    QFile source(recoveryPath);
+    QSaveFile destination(recoveredPath);
+    if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::WriteOnly))
+    {
+        const QString saveError = !source.isOpen() ? source.errorString() : destination.errorString();
+        QMessageBox::warning(this, tr("Could not save recovered recording"), saveError);
+        return;
+    }
+    QByteArray buffer(64 * 1024, '\0');
+    while (!source.atEnd())
+    {
+        const qint64 bytesRead = source.read(buffer.data(), buffer.size());
+        if (bytesRead < 0 || destination.write(buffer.constData(), bytesRead) != bytesRead)
+        {
+            const QString saveError = bytesRead < 0 ? source.errorString() : destination.errorString();
+            destination.cancelWriting();
+            QMessageBox::warning(this, tr("Could not save recovered recording"), saveError);
+            return;
+        }
+    }
+    if (!destination.commit())
+    {
+        QMessageBox::warning(this, tr("Could not save recovered recording"),
+                             destination.errorString());
+        return;
+    }
+
+    QFile::remove(recoveryPath);
+    QFile::remove(manifestPath);
+    QMessageBox::information(this, tr("Recording recovered"),
+                             tr("The recovered WAV file was saved to:\n%1").arg(recoveredPath));
+}
+
 void MainWindow::autosaveProject()
 {
     if (audioRecorder || recordingPending || midiRecordingActive || midiRecordingPending ||
@@ -13157,11 +13327,30 @@ bool MainWindow::startPendingAudioRecording(double playheadBeat)
         return false;
     }
 
+    const QString partialRecordingPath =
+        pendingRecordingPath + QStringLiteral(".recording-recovery");
+    if (QFileInfo::exists(activeAudioRecordingRecoveryManifestPath()) ||
+        QFileInfo::exists(partialRecordingPath))
+    {
+        statusBar()->showMessage(
+            tr("Resolve the interrupted recording recovery before starting another take."), 6000);
+        return false;
+    }
+    QString manifestError;
+    if (!saveActiveAudioRecordingRecoveryManifest(
+            pendingRecordingPath, partialRecordingPath, &manifestError))
+    {
+        statusBar()->showMessage(
+            tr("Could not prepare recording recovery: %1").arg(manifestError), 6000);
+        return false;
+    }
+
     audioRecorder = std::make_unique<AudioRecorder>();
     QString error;
     if (!audioRecorder->start(selectedDevice, pendingRecordingPath, recordingDecodedByteLimit, &error))
     {
         audioRecorder.reset();
+        QFile::remove(activeAudioRecordingRecoveryManifestPath());
         statusBar()->showMessage(tr("Could not start recording: %1").arg(error), 6000);
         return false;
     }
@@ -13209,6 +13398,8 @@ void MainWindow::finishAudioRecording(bool keepTake)
         finished = audioRecorder->finish(&error);
         inputLatencyEstimateMs = audioRecorder->estimatedInputLatencyMs();
     }
+    if (finished)
+        QFile::remove(activeAudioRecordingRecoveryManifestPath());
     audioRecorder.reset();
     recordingPending = false;
     recordingTransportActive = false;
@@ -13251,7 +13442,15 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
     if (!finished)
     {
-        statusBar()->showMessage(tr("Recording was not saved: %1").arg(error), 6000);
+        const QString partialPath = path + QStringLiteral(".recording-recovery");
+        if (QFileInfo::exists(partialPath))
+        {
+            statusBar()->showMessage(
+                tr("Recording was not saved: %1 Captured audio is available for recovery from %2.")
+                    .arg(error, partialPath), 10000);
+        }
+        else
+            statusBar()->showMessage(tr("Recording was not saved: %1").arg(error), 6000);
         return;
     }
 
