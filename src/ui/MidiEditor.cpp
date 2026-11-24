@@ -858,13 +858,19 @@ protected:
             const double rawDeltaBeat = (point.x() - dragStart.x()) / static_cast<double>(pixelsPerBeat);
             const int deltaPitch = static_cast<int>(std::round((dragStart.y() - point.y()) / static_cast<double>(rowHeight)));
             notes = originalNotes;
+            double snappedDeltaBeat = std::round(rawDeltaBeat / snap) * snap;
+            if (snapToBar)
+            {
+                const auto anchor = std::find_if(originalNotes.cbegin(), originalNotes.cend(),
+                    [this](const MidiNote& note) { return note.id == draggedNoteId; });
+                if (anchor != originalNotes.cend())
+                    snappedDeltaBeat = snapNearest(anchor->startBeat + rawDeltaBeat) - anchor->startBeat;
+            }
             for (MidiNote& note : notes)
             {
                 if (!selected.contains(note.id))
                     continue;
-                const double targetBeat = snapToBar ? snapNearest(note.startBeat + rawDeltaBeat)
-                    : note.startBeat + std::round(rawDeltaBeat / snap) * snap;
-                note.startBeat = std::clamp(targetBeat, 0.0,
+                note.startBeat = std::clamp(note.startBeat + snappedDeltaBeat, 0.0,
                                             std::max(0.0, patternLength - note.lengthBeats));
                 note.pitch = std::clamp(note.pitch + deltaPitch, 0, 127);
             }
