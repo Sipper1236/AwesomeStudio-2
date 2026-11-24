@@ -117,6 +117,15 @@ struct MidiInput::Impl
             event.noteOn = messageType == 0x90 && data2 > 0;
             platformMidiEvents.push_back(event);
         }
+        else if (messageType == 0xa0)
+        {
+            MidiInputEvent pressure;
+            pressure.channel = channel;
+            pressure.pitch = data1;
+            pressure.value = data2;
+            pressure.polyphonicPressure = true;
+            platformMidiEvents.push_back(pressure);
+        }
         else if (messageType == 0xb0)
         {
             MidiInputEvent control;
@@ -727,6 +736,15 @@ QVector<MidiInputEvent> MidiInput::readAvailable()
                               event->data.note.note,
                               event->data.note.velocity,
                               noteOn});
+        }
+        else if (event->type == SND_SEQ_EVENT_KEYPRESS)
+        {
+            MidiInputEvent pressure;
+            pressure.channel = std::clamp(static_cast<int>(event->data.note.channel), 0, 15);
+            pressure.pitch = std::clamp(static_cast<int>(event->data.note.note), 0, 127);
+            pressure.value = std::clamp(static_cast<int>(event->data.note.velocity), 0, 127);
+            pressure.polyphonicPressure = true;
+            events.push_back(pressure);
         }
         else if (event->type == SND_SEQ_EVENT_CONTROLLER)
         {

@@ -64,6 +64,7 @@ public:
     void noteOff(std::int32_t noteId, int channel, int key, float velocity = 0.0f);
     void allNotesOff();
     void pitchBend(int channel, int value);
+    void notePressure(std::int32_t noteId, int channel, int key, float value);
     bool saveState(QString& pluginState) const;
     void serviceMainThread();
     void stopProcessing();

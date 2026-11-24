@@ -13658,6 +13658,14 @@ void MainWindow::pollMidiInput()
             continue;
         }
 
+        if (event.polyphonicPressure)
+        {
+            if (midiMonitorAction->isChecked())
+                audioEngine.triggerLiveMidiNotePressure(event.channel, event.pitch, event.value,
+                                                        selectedTrack());
+            continue;
+        }
+
         if (event.pitchBend)
         {
             if (midiMonitorAction->isChecked())

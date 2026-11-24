@@ -459,11 +459,12 @@ struct ClapAudioPluginInstance::Private
 #if defined(AWESOME_STUDIO_HAS_CLAP)
     struct PendingEvent
     {
-        enum class Kind { Note, Midi, Parameter } kind = Kind::Note;
+        enum class Kind { Note, Midi, Expression, Parameter } kind = Kind::Note;
         union Payload
         {
             clap_event_note_t note;
             clap_event_midi_t midi;
+            clap_event_note_expression_t expression;
             clap_event_param_value_t parameter;
             Payload() : note{} {}
         } payload;
@@ -474,6 +475,7 @@ struct ClapAudioPluginInstance::Private
             {
             case Kind::Note: return &payload.note.header;
             case Kind::Midi: return &payload.midi.header;
+            case Kind::Expression: return &payload.expression.header;
             case Kind::Parameter: return &payload.parameter.header;
             }
             return nullptr;
@@ -588,6 +590,29 @@ struct ClapAudioPluginInstance::Private
         pending.payload.midi.header.flags = CLAP_EVENT_IS_LIVE;
         pending.payload.midi.port_index = portIndex;
         std::copy(data.cbegin(), data.cend(), pending.payload.midi.data);
+    }
+
+    void queueNotePressure(std::int32_t noteId, int channel, int key, float value)
+    {
+        if (kind != ClapPluginKind::Instrument ||
+            pendingInstrumentEventCount >= 512 ||
+            pendingEvents.size() >= pendingEvents.capacity())
+            return;
+        ++pendingInstrumentEventCount;
+        PendingEvent& pending = pendingEvents.emplace_back();
+        pending.kind = PendingEvent::Kind::Expression;
+        pending.payload.expression = {};
+        pending.payload.expression.header.size = sizeof(clap_event_note_expression_t);
+        pending.payload.expression.header.time = bufferedFrames;
+        pending.payload.expression.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+        pending.payload.expression.header.type = CLAP_EVENT_NOTE_EXPRESSION;
+        pending.payload.expression.header.flags = CLAP_EVENT_IS_LIVE;
+        pending.payload.expression.expression_id = CLAP_NOTE_EXPRESSION_PRESSURE;
+        pending.payload.expression.note_id = noteId;
+        pending.payload.expression.port_index = 0;
+        pending.payload.expression.channel = static_cast<int16_t>(channel);
+        pending.payload.expression.key = static_cast<int16_t>(key);
+        pending.payload.expression.value = std::clamp(static_cast<double>(value), 0.0, 1.0);
     }
 
     static bool CLAP_ABI outputEventPush(const clap_output_events_t* events,
@@ -958,6 +983,21 @@ void ClapAudioPluginInstance::pitchBend(int channel, int value)
                           static_cast<uint8_t>((safeValue >> 7) & 0x7F)});
 #else
     Q_UNUSED(channel)
+    Q_UNUSED(value)
+#endif
+}
+
+void ClapAudioPluginInstance::notePressure(std::int32_t noteId, int channel, int key, float value)
+{
+#if defined(AWESOME_STUDIO_HAS_CLAP)
+    if (d == nullptr || !isValid() || !std::isfinite(value))
+        return;
+    d->queueNotePressure(noteId, std::clamp(channel, 0, 15),
+                         std::clamp(key, 0, 127), value);
+#else
+    Q_UNUSED(noteId)
+    Q_UNUSED(channel)
+    Q_UNUSED(key)
     Q_UNUSED(value)
 #endif
 }

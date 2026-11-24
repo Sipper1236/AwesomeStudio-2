@@ -944,6 +944,38 @@ void AudioEngine::triggerLiveMidiPitchBend(int channel, int value,
     enqueueLiveMidiEvent(event);
 }
 
+void AudioEngine::triggerLiveMidiNotePressure(int channel, int midiPitch, int value,
+                                              const InstrumentTrack* track)
+{
+    LiveMidiEvent event;
+    event.notePressure = true;
+    event.channel = std::clamp(channel, 0, 15);
+    event.pitch = std::clamp(midiPitch, 0, 127);
+    event.noteExpressionValue = std::clamp(static_cast<float>(value) / 127.0f, 0.0f, 1.0f);
+    if (track != nullptr && track->instrumentType == InstrumentType::ClapInstrument)
+    {
+        const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
+        const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
+        if (project != nullptr)
+        {
+            for (size_t index = 0; index < static_cast<size_t>(project->tracks.size()) &&
+                                    index < maximumTrackCount; ++index)
+            {
+                if (project->tracks[static_cast<qsizetype>(index)].id == track->id)
+                {
+                    event.trackIndex = index;
+                    break;
+                }
+            }
+        }
+    }
+    else
+    {
+        return;
+    }
+    enqueueLiveMidiEvent(event);
+}
+
 void AudioEngine::triggerPluginInstrumentPreview(int midiPitch, int velocity,
                                                const InstrumentTrack& track)
 {
@@ -1049,6 +1081,20 @@ void AudioEngine::clearLiveMidiVoices()
 void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
                                      SynthRenderer& renderer)
 {
+    if (event.notePressure)
+    {
+        for (const LiveMidiVoice& voice : liveMidiVoices)
+        {
+            if (!voice.active || !voice.held || !voice.pluginInstrument ||
+                voice.channel != event.channel || voice.pitch != event.pitch ||
+                voice.trackIndex != event.trackIndex)
+                continue;
+            renderer.pluginInstrumentNotePressure(voice.trackIndex, voice.pluginNoteId,
+                                                   voice.channel, voice.pitch,
+                                                   event.noteExpressionValue);
+        }
+        return;
+    }
     if (event.pitchBend)
     {
         const float bendSemitones = (static_cast<float>(event.pitchBendValue) - 8192.0f) /

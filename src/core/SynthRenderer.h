@@ -35,6 +35,8 @@ public:
                                  int channel, int key, float velocity = 0.0f);
     void pluginInstrumentAllNotesOff(size_t trackIndex);
     void pluginInstrumentPitchBend(size_t trackIndex, int channel, int value);
+    void pluginInstrumentNotePressure(size_t trackIndex, std::int32_t noteId,
+                                     int channel, int key, float value);
     void pluginInstrumentsAllNotesOff();
     StereoSample finishMixerFrame();
     StereoSample processMasterEffects(StereoSample input);

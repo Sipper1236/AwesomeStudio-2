@@ -1153,6 +1153,13 @@ void SynthRenderer::pluginInstrumentPitchBend(size_t trackIndex, int channel, in
         vst3Instruments[trackIndex]->pitchBend(channel, value);
 }
 
+void SynthRenderer::pluginInstrumentNotePressure(size_t trackIndex, std::int32_t noteId,
+                                                 int channel, int key, float value)
+{
+    if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
+        clapInstruments[trackIndex]->notePressure(noteId, channel, key, value);
+}
+
 void SynthRenderer::pluginInstrumentsAllNotesOff()
 {
     for (const std::unique_ptr<ClapAudioPluginInstance>& instrument : clapInstruments)
