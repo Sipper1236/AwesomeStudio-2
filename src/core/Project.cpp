@@ -384,6 +384,33 @@ double ProjectData::snapBeatToBarDivision(double beat, int divisions) const
     return std::clamp(snapped, 0.0, 16384.0);
 }
 
+int ProjectData::barNumberAtBeat(double beat) const
+{
+    beat = std::max(0.0, beat);
+    int bar = 1;
+    double barStart = 0.0;
+    while (barStart < beat - 1.0e-9 && bar < 65536)
+    {
+        double next = barStart + quarterNotesPerBarAtBeat(barStart);
+        for (const TimeSignatureChange& change : timeSignatureChanges)
+        {
+            if (change.beat <= barStart + 1.0e-9)
+                continue;
+            if (change.beat >= next)
+                break;
+            next = change.beat;
+            break;
+        }
+        if (next <= barStart + 1.0e-9)
+            break;
+        if (next > beat + 1.0e-9)
+            break;
+        barStart = next;
+        ++bar;
+    }
+    return bar;
+}
+
 double ProjectData::quarterNotesPerBar() const
 {
     return static_cast<double>(beatsPerBar) * 4.0 / beatUnit;

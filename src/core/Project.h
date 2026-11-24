@@ -502,6 +502,7 @@ struct ProjectData
     double barBoundaryAtOrAfter(double beat) const;
     double barBoundaryAtOrBefore(double beat) const;
     double snapBeatToBarDivision(double beat, int divisions) const;
+    int barNumberAtBeat(double beat) const;
     double quarterNotesPerBar() const;
     double quarterNotesPerBarAtBeat(double beat) const;
     TimeSignatureChange timeSignatureAtBeat(double beat) const;

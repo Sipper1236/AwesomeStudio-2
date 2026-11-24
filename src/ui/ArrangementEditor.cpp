@@ -1002,9 +1002,16 @@ protected:
         if (resizingAudioRegion)
         {
             const double rawDelta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
-            const double snap = std::max(0.25,
-                project.quarterNotesPerBarAtBeat(initialClipStart) / 4.0);
-            const double snappedDelta = std::round(rawDelta / snap) * snap;
+            const double edgeBeat = resizeLeftEdge ? initialClipStart + rawDelta
+                : initialClipStart + initialClipLength + rawDelta;
+            const double edgeBarLength = project.quarterNotesPerBarAtBeat(std::max(0.0, edgeBeat));
+            const int snapDivisions = std::clamp(
+                static_cast<int>(std::floor(edgeBarLength / 0.25)), 1, 4);
+            const double snappedEdgeBeat = std::abs(rawDelta) < 1.0e-9 ? edgeBeat
+                : project.snapBeatToBarDivision(edgeBeat, snapDivisions);
+            const double snappedDelta = resizeLeftEdge
+                ? snappedEdgeBeat - initialClipStart
+                : snappedEdgeBeat - initialClipStart - initialClipLength;
             const MidiClip* originalClip = project.findClip(sourceTrackId, draggedClipId);
             if (originalClip == nullptr)
                 return;
@@ -1062,7 +1069,10 @@ protected:
         }
 
         const double delta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
-        const double startBeat = project.snapBeatToBarDivision(initialClipStart + delta, 4);
+        const double targetBeat = std::max(0.0, initialClipStart + delta);
+        const double barLength = project.quarterNotesPerBarAtBeat(targetBeat);
+        const int snapDivisions = std::clamp(static_cast<int>(std::floor(barLength / 0.25)), 1, 4);
+        const double startBeat = project.snapBeatToBarDivision(targetBeat, snapDivisions);
         const int row = std::clamp((point.y() - rulerHeight) / currentRowHeight(), 0,
                                    static_cast<int>(project.tracks.size()) - 1);
         const quint64 targetTrackId = project.tracks[row].id;

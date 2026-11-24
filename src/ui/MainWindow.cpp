@@ -3190,10 +3190,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
         }
         else
         {
-            const double quarterNotesPerBar = project.quarterNotesPerBar();
-            const double denominatorUnit = 4.0 / project.beatUnit;
-            const int bar = static_cast<int>(beat / quarterNotesPerBar) + 1;
-            const double beatInBar = std::fmod(beat, quarterNotesPerBar) / denominatorUnit + 1.0;
+            const TimeSignatureChange activeMeter = project.timeSignatureAtBeat(beat);
+            const double denominatorUnit = 4.0 / activeMeter.beatUnit;
+            const int bar = project.barNumberAtBeat(beat);
+            const double beatInBar = (beat - project.barBoundaryAtOrBefore(beat)) /
+                denominatorUnit + 1.0;
             playheadLabel->setText(tr("BAR %1  ·  BEAT %2")
                                        .arg(bar, 2, 10, QLatin1Char('0'))
                                        .arg(beatInBar, 0, 'f', 2));
