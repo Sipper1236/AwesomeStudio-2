@@ -888,7 +888,7 @@ protected:
 
         selectedClipId = 0;
         const double beat = std::max(0.0, (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat));
-        const double barLength = project.quarterNotesPerBar();
+        const double barLength = project.quarterNotesPerBarAtBeat(beat);
         const double startBeat = std::floor(beat / barLength) * barLength;
         emit owner->clipAdded(track.id, startBeat);
         update();
@@ -1003,7 +1003,8 @@ protected:
         if (resizingAudioRegion)
         {
             const double rawDelta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
-            const double snap = std::max(0.25, project.quarterNotesPerBar() / 4.0);
+            const double snap = std::max(0.25,
+                project.quarterNotesPerBarAtBeat(initialClipStart) / 4.0);
             const double snappedDelta = std::round(rawDelta / snap) * snap;
             const MidiClip* originalClip = project.findClip(sourceTrackId, draggedClipId);
             if (originalClip == nullptr)
@@ -1062,7 +1063,8 @@ protected:
         }
 
         const double delta = (point.x() - dragStartX) / static_cast<double>(pixelsPerBeat);
-        const double snap = std::max(0.25, project.quarterNotesPerBar() / 4.0);
+            const double snap = std::max(0.25,
+                project.quarterNotesPerBarAtBeat(initialClipStart) / 4.0);
         const double startBeat = std::max(0.0, std::round((initialClipStart + delta) / snap) * snap);
         const int row = std::clamp((point.y() - rulerHeight) / currentRowHeight(), 0,
                                    static_cast<int>(project.tracks.size()) - 1);
