@@ -29,6 +29,7 @@
 #include <clap/factory/plugin-factory.h>
 #include <clap/plugin.h>
 #include <clap/ext/audio-ports.h>
+#include <clap/ext/latency.h>
 #include <clap/ext/log.h>
 #include <clap/ext/note-ports.h>
 #include <clap/ext/params.h>
@@ -64,12 +65,14 @@ struct ClapHostContext
         params.request_flush = &requestFlush;
         log.log = &writeLog;
         state.mark_dirty = &markStateDirty;
+        latency.changed = &latencyChanged;
     }
 
     clap_host_t host{};
     clap_host_params_t params{};
     clap_host_log_t log{};
     clap_host_state_t state{};
+    clap_host_latency_t latency{};
     std::atomic<bool> callbackRequested{false};
     std::atomic<bool> restartRequested{false};
     std::atomic<bool> processRequested{false};
@@ -92,6 +95,8 @@ struct ClapHostContext
             return &self->log;
         if (std::strcmp(id, CLAP_EXT_STATE) == 0)
             return &self->state;
+        if (std::strcmp(id, CLAP_EXT_LATENCY) == 0)
+            return &self->latency;
         return nullptr;
     }
 
@@ -129,6 +134,8 @@ struct ClapHostContext
         if (ClapHostContext* self = context(host))
             self->stateDirty.store(true, std::memory_order_release);
     }
+
+    static void CLAP_ABI latencyChanged(const clap_host_t*) {}
 };
 
 struct ClapLibrary
@@ -478,6 +485,7 @@ struct ClapAudioPluginInstance::Private
     const clap_plugin_t* plugin = nullptr;
     const clap_plugin_params_t* params = nullptr;
     const clap_plugin_state_t* state = nullptr;
+    const clap_plugin_latency_t* latency = nullptr;
     ClapPluginKind kind = ClapPluginKind::AudioEffect;
     ClapPluginDescriptor descriptor;
     std::vector<float> controlValues;
@@ -502,6 +510,7 @@ struct ClapAudioPluginInstance::Private
     uint32_t outputRead = 0;
     bool outputReady = false;
     int64_t steadyTime = 0;
+    uint32_t reportedLatencyFrames = 0;
     std::thread::id processingThread;
     bool activated = false;
     bool processing = false;
@@ -709,6 +718,8 @@ ClapAudioPluginInstance::ClapAudioPluginInstance(const QString& id, ClapPluginKi
         d->plugin->get_extension(d->plugin, CLAP_EXT_PARAMS));
     d->state = static_cast<const clap_plugin_state_t*>(
         d->plugin->get_extension(d->plugin, CLAP_EXT_STATE));
+    d->latency = static_cast<const clap_plugin_latency_t*>(
+        d->plugin->get_extension(d->plugin, CLAP_EXT_LATENCY));
     if (d->state != nullptr)
         d->loadState(pluginState);
 
@@ -749,6 +760,8 @@ ClapAudioPluginInstance::ClapAudioPluginInstance(const QString& id, ClapPluginKi
         !d->plugin->activate(d->plugin, sampleRate, 1, clapBlockFrames))
         return;
     d->activated = true;
+    if (d->latency != nullptr && d->latency->get != nullptr)
+        d->reportedLatencyFrames = d->latency->get(d->plugin);
     d->inputEvents.ctx = d.get();
     d->inputEvents.size = &Private::inputEventCount;
     d->inputEvents.get = &Private::inputEventAt;
@@ -777,10 +790,10 @@ bool ClapAudioPluginInstance::isValid() const
 #endif
 }
 
-int ClapAudioPluginInstance::hostBufferingLatencyFrames() const
+qint64 ClapAudioPluginInstance::processingLatencyFrames() const
 {
 #if defined(AWESOME_STUDIO_HAS_CLAP)
-    return isValid() ? static_cast<int>(clapBlockFrames) : 0;
+    return isValid() ? static_cast<qint64>(clapBlockFrames) + d->reportedLatencyFrames : 0;
 #else
     return 0;
 #endif

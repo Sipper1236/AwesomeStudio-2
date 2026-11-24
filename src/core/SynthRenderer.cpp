@@ -731,7 +731,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         qint64 frames = 0;
         for (const EffectState& effect : effects)
             if (effect.clapEffect != nullptr)
-                frames += effect.clapEffect->hostBufferingLatencyFrames();
+                frames += effect.clapEffect->processingLatencyFrames();
         return frames;
     };
     std::vector<qint64> trackSignalLatencies(trackEffectStates.size(), 0);
@@ -742,7 +742,7 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
         {
             const qint64 instrumentLatency =
-                clapInstruments[trackIndex]->hostBufferingLatencyFrames();
+                clapInstruments[trackIndex]->processingLatencyFrames();
             trackInstrumentSourceLatencyDelays[trackIndex].configure(instrumentLatency);
             trackSignalLatencies[trackIndex] += instrumentLatency;
         }
