@@ -298,13 +298,6 @@ bool AudioEngine::setAudioOutputDevice(const QByteArray& deviceId)
 
 void AudioEngine::handleAudioOutputsChanged()
 {
-    if (playing.load(std::memory_order_acquire))
-    {
-        stopPlayback();
-        initializationError = QStringLiteral(
-            "The audio output device changed while playing. Playback was stopped; select an available output and restart.");
-    }
-
     if (activeOutputDeviceId.isEmpty())
     {
         if (sink == nullptr)
@@ -317,6 +310,13 @@ void AudioEngine::handleAudioOutputsChanged()
         [this](const QAudioDevice& device) { return device.id() == activeOutputDeviceId; });
     if (activeDeviceAvailable)
         return;
+
+    if (playing.load(std::memory_order_acquire))
+    {
+        stopPlayback();
+        initializationError = QStringLiteral(
+            "The audio output device disconnected while playing. Playback was stopped; select an available output and restart.");
+    }
 
     if (sink != nullptr)
     {
