@@ -174,6 +174,23 @@ const SynthRenderer::TrackMixValue& SynthRenderer::trackMixAt(size_t trackIndex,
             rendered.equalizerGains[bandIndex] = static_cast<float>(
                 std::pow(10.0, static_cast<double>(gainDb) / 20.0));
         }
+        const double maximumCrossoverHz = std::max(20.0, sampleRate * 0.49);
+        const float lowCrossoverMaximum = static_cast<float>(
+            std::max(20.0, std::min(2000.0, maximumCrossoverHz)));
+        const float lowCrossoverHz = std::clamp(
+            automationValue(automation.equalizerCrossover[0], beat,
+                            automation.baseEqualizerCrossoverHz[0]),
+            20.0f, lowCrossoverMaximum);
+        const float highCrossoverMinimum = static_cast<float>(std::min(
+            maximumCrossoverHz, std::max(500.0, static_cast<double>(lowCrossoverHz) + 1.0)));
+        const float highCrossoverHz = std::clamp(
+            automationValue(automation.equalizerCrossover[1], beat,
+                            automation.baseEqualizerCrossoverHz[1]),
+            highCrossoverMinimum, static_cast<float>(maximumCrossoverHz));
+        rendered.lowBandCoefficient = static_cast<float>(
+            1.0 - std::exp(-twoPi * lowCrossoverHz / sampleRate));
+        rendered.highBandCoefficient = static_cast<float>(
+            1.0 - std::exp(-twoPi * highCrossoverHz / sampleRate));
         const LiveTrackMixOverride& live = liveTrackMixOverrides[trackIndex];
         const float effectiveVolume = live.volume >= 0.0f ? std::clamp(live.volume, 0.0f, 1.0f) : volume;
         const float effectivePan = live.pan >= -1.0f && live.pan <= 1.0f
@@ -304,11 +321,15 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
         mixAutomation.baseVolume = track.gain;
         mixAutomation.basePan = track.pan;
         mixAutomation.baseEqualizerDb = {track.eqLowDb, track.eqMidDb, track.eqHighDb};
+        mixAutomation.baseEqualizerCrossoverHz = {track.eqLowCrossoverHz,
+                                                  track.eqHighCrossoverHz};
         mixAutomation.volume = track.volumeAutomation;
         mixAutomation.pan = track.panAutomation;
         mixAutomation.equalizerGain = {track.eqLowGainAutomation,
                                        track.eqMidGainAutomation,
                                        track.eqHighGainAutomation};
+        mixAutomation.equalizerCrossover = {track.eqLowCrossoverAutomation,
+                                            track.eqHighCrossoverAutomation};
         trackMixAutomations.push_back(std::move(mixAutomation));
         TrackEqualizerState& equalizerState = trackEqualizerStates[trackIndex];
         const double maximumCutoff = std::max(20.0, sampleRate * 0.49);
@@ -1364,6 +1385,8 @@ StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample 
     const TrackMixValue& mix = trackMixAt(trackIndex, currentProjectFrame, currentBeat);
     const std::array<float, 3>& gains = mix.equalizerGains;
     TrackEqualizerState& state = trackEqualizerStates[trackIndex];
+    state.lowBandCoefficient = mix.lowBandCoefficient;
+    state.highBandCoefficient = mix.highBandCoefficient;
     const bool legacyActive = std::abs(gains[0] - 1.0f) >= 1.0e-6f ||
                               std::abs(gains[1] - 1.0f) >= 1.0e-6f ||
                               std::abs(gains[2] - 1.0f) >= 1.0e-6f;

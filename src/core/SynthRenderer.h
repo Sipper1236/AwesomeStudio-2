@@ -148,9 +148,11 @@ private:
         float baseVolume = 1.0f;
         float basePan = 0.0f;
         std::array<float, 3> baseEqualizerDb{};
+        std::array<float, 2> baseEqualizerCrossoverHz{};
         QVector<AutomationPoint> volume;
         QVector<AutomationPoint> pan;
         std::array<QVector<AutomationPoint>, 3> equalizerGain;
+        std::array<QVector<AutomationPoint>, 2> equalizerCrossover;
     };
 
     struct TrackMixValue
@@ -159,6 +161,8 @@ private:
         float leftGain = 0.70710678f;
         float rightGain = 0.70710678f;
         std::array<float, 3> equalizerGains{1.0f, 1.0f, 1.0f};
+        float lowBandCoefficient = 0.0f;
+        float highBandCoefficient = 0.0f;
     };
 
     struct LiveTrackMixOverride

@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 58;
+constexpr int currentProjectVersion = 59;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -669,6 +669,10 @@ QJsonObject saveTrack(const InstrumentTrack& track)
         {QStringLiteral("eqLowGainAutomation"), saveAutomation(track.eqLowGainAutomation)},
         {QStringLiteral("eqMidGainAutomation"), saveAutomation(track.eqMidGainAutomation)},
         {QStringLiteral("eqHighGainAutomation"), saveAutomation(track.eqHighGainAutomation)},
+        {QStringLiteral("eqLowCrossoverAutomation"),
+         saveAutomation(track.eqLowCrossoverAutomation)},
+        {QStringLiteral("eqHighCrossoverAutomation"),
+         saveAutomation(track.eqHighCrossoverAutomation)},
         {QStringLiteral("synthFilterCutoffAutomation"),
          saveAutomation(track.synthFilterCutoffAutomation)},
         {QStringLiteral("synthFilterResonanceAutomation"),
@@ -1096,6 +1100,13 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                           track.eqMidGainAutomation, QStringLiteral("mid EQ gain"), version, error) ||
           !loadAutomation(object.value(QStringLiteral("eqHighGainAutomation")),
                           track.eqHighGainAutomation, QStringLiteral("high EQ gain"), version, error))) ||
+        (version >= 59 &&
+         (!loadAutomation(object.value(QStringLiteral("eqLowCrossoverAutomation")),
+                          track.eqLowCrossoverAutomation,
+                          QStringLiteral("low/mid EQ crossover"), version, error) ||
+          !loadAutomation(object.value(QStringLiteral("eqHighCrossoverAutomation")),
+                          track.eqHighCrossoverAutomation,
+                          QStringLiteral("mid/high EQ crossover"), version, error))) ||
         !loadAutomation(object.value(QStringLiteral("synthFilterCutoffAutomation")),
                         track.synthFilterCutoffAutomation,
                         QStringLiteral("synth filter cutoff"), version, error) ||

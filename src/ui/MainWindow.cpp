@@ -984,6 +984,8 @@ constexpr int pluginAutomationTargetBase = 4;
 constexpr int trackEqLowGainAutomationTarget = 10000;
 constexpr int trackEqMidGainAutomationTarget = 10001;
 constexpr int trackEqHighGainAutomationTarget = 10002;
+constexpr int trackEqLowCrossoverAutomationTarget = 10003;
+constexpr int trackEqHighCrossoverAutomationTarget = 10004;
 constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
 constexpr int clapInstrumentAutomationTargetBase =
@@ -1050,6 +1052,10 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
         return &track.eqMidGainAutomation;
     if (target == trackEqHighGainAutomationTarget)
         return &track.eqHighGainAutomation;
+    if (target == trackEqLowCrossoverAutomationTarget)
+        return &track.eqLowCrossoverAutomation;
+    if (target == trackEqHighCrossoverAutomationTarget)
+        return &track.eqHighCrossoverAutomation;
     if (target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget)
     {
@@ -1106,6 +1112,10 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         return &track.eqMidGainAutomation;
     if (target == trackEqHighGainAutomationTarget)
         return &track.eqHighGainAutomation;
+    if (target == trackEqLowCrossoverAutomationTarget)
+        return &track.eqLowCrossoverAutomation;
+    if (target == trackEqHighCrossoverAutomationTarget)
+        return &track.eqHighCrossoverAutomation;
     if (target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget)
     {
@@ -1176,6 +1186,12 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
                   -18.0f, 18.0f, track->eqMidDb, QString());
         addTarget(QObject::tr("High EQ gain"), trackEqHighGainAutomationTarget,
                   -18.0f, 18.0f, track->eqHighDb, QString());
+        addTarget(QObject::tr("Low/mid EQ crossover"),
+                  trackEqLowCrossoverAutomationTarget, 20.0f, 2000.0f,
+                  track->eqLowCrossoverHz, QString());
+        addTarget(QObject::tr("Mid/high EQ crossover"),
+                  trackEqHighCrossoverAutomationTarget, 500.0f, 20000.0f,
+                  track->eqHighCrossoverHz, QString());
         if (track->instrumentType == InstrumentType::Synth)
         {
             addTarget(QObject::tr("Synth filter cutoff"), synthFilterCutoffAutomationTarget,

@@ -751,6 +751,8 @@ void ProjectData::normalize()
         normalizeAutomation(track.eqLowGainAutomation, -18.0f, 18.0f);
         normalizeAutomation(track.eqMidGainAutomation, -18.0f, 18.0f);
         normalizeAutomation(track.eqHighGainAutomation, -18.0f, 18.0f);
+        normalizeAutomation(track.eqLowCrossoverAutomation, 20.0f, 2000.0f);
+        normalizeAutomation(track.eqHighCrossoverAutomation, 500.0f, 20000.0f);
         normalizeAutomation(track.synthFilterCutoffAutomation, 20.0f, 20000.0f);
         normalizeAutomation(track.synthFilterResonanceAutomation, 0.1f, 10.0f);
         track.waveform = static_cast<SynthWaveform>(std::clamp(static_cast<int>(track.waveform), 0, 3));

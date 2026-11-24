@@ -430,6 +430,8 @@ struct InstrumentTrack
     QVector<AutomationPoint> eqLowGainAutomation;
     QVector<AutomationPoint> eqMidGainAutomation;
     QVector<AutomationPoint> eqHighGainAutomation;
+    QVector<AutomationPoint> eqLowCrossoverAutomation;
+    QVector<AutomationPoint> eqHighCrossoverAutomation;
     QVector<AutomationPoint> synthFilterCutoffAutomation;
     QVector<AutomationPoint> synthFilterResonanceAutomation;
     bool muted = false;
