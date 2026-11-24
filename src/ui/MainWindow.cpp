@@ -3013,6 +3013,15 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             return;
         undoStack.push(new AutomationEditCommand(this, trackId, parameter, before, after, pluginUri));
     });
+    connect(arrangementEditor, &ArrangementEditor::busAutomationChanged, this,
+            [this](quint64 busId, bool pan, const QVector<AutomationPoint>& before,
+                   const QVector<AutomationPoint>& after)
+    {
+        const auto bus = std::find_if(project.buses.cbegin(), project.buses.cend(),
+            [busId](const MixerBus& candidate) { return candidate.id == busId; });
+        if (bus != project.buses.cend())
+            undoStack.push(new BusAutomationEditCommand(this, busId, pan, before, after));
+    });
     connect(arrangementEditor, &ArrangementEditor::automationPointLimitReached, this, [this]
     {
         statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
@@ -3515,6 +3524,14 @@ void MainWindow::createToolBars()
     automationLaneParameterControl = new QComboBox(arrangementBar);
     automationLaneParameterControl->addItem(tr("Volume"), 0);
     automationLaneParameterControl->addItem(tr("Pan"), 1);
+    automationLaneParameterControl->addItem(tr("Mixer bus level"), mixerBusGainAutomationTarget);
+    automationLaneParameterControl->addItem(tr("Mixer bus pan"), mixerBusPanAutomationTarget);
+    automationLaneParameterControl->setItemData(2, 0.0, Qt::UserRole + 1);
+    automationLaneParameterControl->setItemData(2, 2.0, Qt::UserRole + 2);
+    automationLaneParameterControl->setItemData(2, 1.0, Qt::UserRole + 3);
+    automationLaneParameterControl->setItemData(3, -1.0, Qt::UserRole + 1);
+    automationLaneParameterControl->setItemData(3, 1.0, Qt::UserRole + 2);
+    automationLaneParameterControl->setItemData(3, 0.0, Qt::UserRole + 3);
     automationLaneParameterControl->setMinimumWidth(190);
     automationLaneParameterControl->setEnabled(false);
     automationLaneParameterControl->setToolTip(tr("Choose the parameter shown in the Playlist lanes"));
@@ -9224,7 +9241,7 @@ void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float valu
     if (!upsertAutomationPoint(*points, beat, initialWriteValue))
     {
         automationWriteSession = {};
-        statusBar()->showMessage(tr("This track has reached the 10,000 keyframe limit for that parameter."), 4000);
+        statusBar()->showMessage(tr("This automation lane has reached the 10,000 keyframe limit."), 4000);
         return;
     }
     if (pluginUri.isEmpty() &&

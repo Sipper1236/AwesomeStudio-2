@@ -270,6 +270,8 @@ inline constexpr int trackEqMidGainAutomationTarget = 10001;
 inline constexpr int trackEqHighGainAutomationTarget = 10002;
 inline constexpr int trackEqLowCrossoverAutomationTarget = 10003;
 inline constexpr int trackEqHighCrossoverAutomationTarget = 10004;
+inline constexpr int mixerBusGainAutomationTarget = 11000;
+inline constexpr int mixerBusPanAutomationTarget = 11001;
 
 inline double automationCurveProgress(AutomationPoint::Curve curve, double position)
 {

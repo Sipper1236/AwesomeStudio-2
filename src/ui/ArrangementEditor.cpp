@@ -87,11 +87,24 @@ public:
         project = value;
         if (selectedAutomationPoint >= 0)
         {
+            if (selectedAutomationBusId != 0)
+            {
+                const auto bus = std::find_if(project.buses.cbegin(), project.buses.cend(),
+                    [this](const MixerBus& candidate) { return candidate.id == selectedAutomationBusId; });
+                if (bus == project.buses.cend() || selectedAutomationPoint >= busAutomationPoints(*bus).size())
+                {
+                    selectedAutomationBusId = 0;
+                    selectedAutomationPoint = -1;
+                }
+            }
+            else
+            {
             const InstrumentTrack* track = project.findTrack(selectedAutomationTrackId);
             if (track == nullptr || selectedAutomationPoint >= automationPoints(*track).size())
             {
                 selectedAutomationTrackId = 0;
                 selectedAutomationPoint = -1;
+            }
             }
         }
         updateCanvasSize();
@@ -151,6 +164,7 @@ public:
         automationDefaultCurve = defaultCurve;
         automationTargetLabel = targetLabel;
         selectedAutomationTrackId = 0;
+        selectedAutomationBusId = 0;
         selectedAutomationPoint = -1;
         updateCanvasSize();
     }
@@ -162,7 +176,8 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.fillRect(rect(), QColor(QStringLiteral("#131820")));
 
-        const int trackCount = std::max(1, static_cast<int>(project.tracks.size()));
+        const int trackCount = std::max(1, static_cast<int>(project.tracks.size()) +
+            ((automationViewEnabled && isBusAutomationTarget()) ? static_cast<int>(project.buses.size()) : 0));
         const int rowHeight = currentRowHeight();
         const double quarterNotesPerBar = project.quarterNotesPerBar();
         double visibleBeats = std::max(project.songLengthBeats() + quarterNotesPerBar * 4.0,
@@ -265,6 +280,31 @@ protected:
             {
                 const int rowY = rulerHeight + trackIndex * rowHeight;
                 drawAutomationLane(painter, project.tracks[trackIndex], trackIndex, rowY, gridWidth);
+            }
+            if (isBusAutomationTarget())
+            {
+                for (int busIndex = 0; busIndex < project.buses.size(); ++busIndex)
+                {
+                    const MixerBus& bus = project.buses[busIndex];
+                    const int row = static_cast<int>(project.tracks.size()) + busIndex;
+                    const int rowY = rulerHeight + row * rowHeight;
+                    const bool selected = bus.id == selectedAutomationBusId;
+                    painter.fillRect(QRect(trackHeaderWidth, rowY, gridWidth, rowHeight - 1),
+                                     row % 2 == 0 ? QColor(QStringLiteral("#191f27")) : QColor(QStringLiteral("#171d25")));
+                    painter.fillRect(QRect(0, rowY, trackHeaderWidth, rowHeight - 1),
+                                     selected ? QColor(QStringLiteral("#29343e")) : QColor(QStringLiteral("#222a33")));
+                    painter.setPen(QColor(QStringLiteral("#303944")));
+                    painter.drawLine(0, rowY + rowHeight - 1, width(), rowY + rowHeight - 1);
+                    painter.fillRect(QRect(0, rowY + 13, 3, trackHeight - 26), QColor(QStringLiteral("#c18c57")));
+                    painter.setPen(selected ? QColor(QStringLiteral("#f0f4f7")) : QColor(QStringLiteral("#c1cbd4")));
+                    painter.setFont(QFont(QStringLiteral("Sans Serif"), 9, selected ? QFont::DemiBold : QFont::Normal));
+                    painter.drawText(QRect(12, rowY + 8, trackHeaderWidth - 20, 22), Qt::AlignLeft | Qt::AlignVCenter, bus.name);
+                    painter.setPen(QColor(QStringLiteral("#85919d")));
+                    painter.setFont(QFont(QStringLiteral("Sans Serif"), 8));
+                    painter.drawText(QRect(12, rowY + 31, trackHeaderWidth - 20, 18), Qt::AlignLeft | Qt::AlignVCenter,
+                                     automationParameter == mixerBusGainAutomationTarget ? tr("MIXER BUS · LEVEL") : tr("MIXER BUS · PAN"));
+                    drawBusAutomationLane(painter, bus, rowY, gridWidth);
+                }
             }
         }
 
@@ -535,6 +575,64 @@ protected:
             }
         }
         const int row = (point.y() - rulerHeight) / currentRowHeight();
+        if (automationViewEnabled && isBusAutomationTarget() &&
+            row >= static_cast<int>(project.tracks.size()) && row < static_cast<int>(project.tracks.size()) + project.buses.size())
+        {
+            const int busIndex = row - static_cast<int>(project.tracks.size());
+            MixerBus& bus = project.buses[busIndex];
+            if (point.y() < rulerHeight + (row + 1) * currentRowHeight() - automationLaneHeight ||
+                point.x() < trackHeaderWidth)
+                return;
+            selectedAutomationBusId = bus.id;
+            selectedAutomationTrackId = 0;
+            QVector<AutomationPoint>& curve = busAutomationPoints(bus);
+            if (event->button() == Qt::RightButton)
+            {
+                const int hit = busAutomationPointAt(bus, row, point);
+                if (hit >= 0)
+                {
+                    const QVector<AutomationPoint> before = curve;
+                    curve.removeAt(hit);
+                    emit owner->busAutomationChanged(bus.id, automationParameter == mixerBusPanAutomationTarget,
+                                                     before, curve);
+                    selectedAutomationPoint = -1;
+                    update();
+                }
+                return;
+            }
+            if (event->button() != Qt::LeftButton)
+                return;
+            selectedAutomationPoint = busAutomationPointAt(bus, row, point);
+            automationDragBusId = bus.id;
+            automationDragTrackId = 0;
+            automationDragBefore = curve;
+            if (selectedAutomationPoint < 0)
+            {
+                if (curve.size() >= 10000)
+                {
+                    emit owner->automationPointLimitReached();
+                    return;
+                }
+                const double beat = std::clamp((point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+                const int laneY = rulerHeight + row * currentRowHeight() + trackHeight;
+                const float value = automationValueAtY(laneY, point.y());
+                auto insertAt = std::lower_bound(curve.begin(), curve.end(), beat,
+                    [](const AutomationPoint& current, double targetBeat) { return current.beat < targetBeat; });
+                if (insertAt != curve.end() && std::abs(insertAt->beat - beat) < 0.001)
+                {
+                    selectedAutomationPoint = static_cast<int>(insertAt - curve.begin());
+                    insertAt->value = value;
+                }
+                else
+                {
+                    selectedAutomationPoint = static_cast<int>(insertAt - curve.begin());
+                    curve.insert(insertAt, {beat, value, automationDefaultCurve});
+                }
+            }
+            draggingAutomationPoint = true;
+            update();
+            return;
+        }
         if (row < 0 || row >= project.tracks.size())
             return;
         InstrumentTrack& track = project.tracks[row];
@@ -781,6 +879,24 @@ protected:
         }
         if (draggingAutomationPoint)
         {
+            if (automationDragBusId != 0)
+            {
+                auto bus = std::find_if(project.buses.begin(), project.buses.end(),
+                    [this](const MixerBus& candidate) { return candidate.id == automationDragBusId; });
+                if (bus == project.buses.end()) return;
+                auto& points = busAutomationPoints(*bus);
+                if (selectedAutomationPoint < 0 || selectedAutomationPoint >= points.size()) return;
+                const int index = static_cast<int>(bus - project.buses.begin());
+                const int rowY = rulerHeight + (static_cast<int>(project.tracks.size()) + index) * currentRowHeight();
+                double beat = std::clamp((point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat), 0.0, 16384.0);
+                const double lo = selectedAutomationPoint > 0 ? points[selectedAutomationPoint - 1].beat + 0.001 : 0.0;
+                const double hi = selectedAutomationPoint + 1 < points.size() ? points[selectedAutomationPoint + 1].beat - 0.001 : 16384.0;
+                beat = lo <= hi ? std::clamp(beat, lo, hi) : points[selectedAutomationPoint].beat;
+                points[selectedAutomationPoint].beat = beat;
+                points[selectedAutomationPoint].value = automationValueAtY(rowY + trackHeight, point.y());
+                update();
+                return;
+            }
             const int trackIndex = trackIndexForId(automationDragTrackId);
             InstrumentTrack* track = project.findTrack(automationDragTrackId);
             if (track == nullptr || trackIndex < 0)
@@ -961,6 +1077,21 @@ protected:
         if (draggingAutomationPoint)
         {
             draggingAutomationPoint = false;
+            if (automationDragBusId != 0)
+            {
+                const quint64 busId = automationDragBusId;
+                automationDragBusId = 0;
+                const auto bus = std::find_if(project.buses.cbegin(), project.buses.cend(),
+                    [busId](const MixerBus& candidate) { return candidate.id == busId; });
+                const QVector<AutomationPoint> after = bus == project.buses.cend()
+                    ? automationDragBefore : busAutomationPoints(*bus);
+                if (!automationPointsEqual(automationDragBefore, after))
+                    emit owner->busAutomationChanged(busId, automationParameter == mixerBusPanAutomationTarget,
+                                                     automationDragBefore, after);
+                automationDragBefore.clear();
+                update();
+                return;
+            }
             const quint64 trackId = automationDragTrackId;
             const InstrumentTrack* track = project.findTrack(trackId);
             const QVector<AutomationPoint> after = track == nullptr
@@ -1018,6 +1149,22 @@ protected:
         {
             if (automationViewEnabled && selectedAutomationPoint >= 0)
             {
+                if (selectedAutomationBusId != 0)
+                {
+                    auto bus = std::find_if(project.buses.begin(), project.buses.end(),
+                        [this](const MixerBus& candidate) { return candidate.id == selectedAutomationBusId; });
+                    if (bus != project.buses.end() && selectedAutomationPoint < busAutomationPoints(*bus).size())
+                    {
+                        const bool pan = automationParameter == mixerBusPanAutomationTarget;
+                        const QVector<AutomationPoint> before = busAutomationPoints(*bus);
+                        auto after = before;
+                        after.removeAt(selectedAutomationPoint);
+                        emit owner->busAutomationChanged(bus->id, pan, before, after);
+                        selectedAutomationPoint = -1;
+                    }
+                    update();
+                    return;
+                }
                 const InstrumentTrack* track = project.findTrack(selectedAutomationTrackId);
                 if (track != nullptr && selectedAutomationPoint < automationPoints(*track).size())
                 {
@@ -1076,6 +1223,36 @@ private:
     int currentRowHeight() const
     {
         return trackHeight + (automationViewEnabled ? automationLaneHeight : 0);
+    }
+
+    bool isBusAutomationTarget() const
+    {
+        return automationParameter == mixerBusGainAutomationTarget ||
+            automationParameter == mixerBusPanAutomationTarget;
+    }
+
+    QVector<AutomationPoint>& busAutomationPoints(MixerBus& bus) const
+    {
+        return automationParameter == mixerBusPanAutomationTarget ? bus.panAutomation : bus.gainAutomation;
+    }
+
+    const QVector<AutomationPoint>& busAutomationPoints(const MixerBus& bus) const
+    {
+        return automationParameter == mixerBusPanAutomationTarget ? bus.panAutomation : bus.gainAutomation;
+    }
+
+    int busAutomationPointAt(const MixerBus& bus, int row, const QPoint& position) const
+    {
+        const int laneY = rulerHeight + row * currentRowHeight() + trackHeight;
+        const auto& points = busAutomationPoints(bus);
+        for (qsizetype index = 0; index < points.size(); ++index)
+        {
+            const QPoint center(trackHeaderWidth + static_cast<int>(std::round(points[index].beat * pixelsPerBeat)),
+                                automationY(laneY, points[index].value));
+            if ((center - position).manhattanLength() <= 12)
+                return static_cast<int>(index);
+        }
+        return -1;
     }
 
     const QVector<AutomationPoint>& automationPoints(const InstrumentTrack& track) const
@@ -1448,6 +1625,56 @@ private:
         }
     }
 
+    void drawBusAutomationLane(QPainter& painter, const MixerBus& bus, int rowY, int gridWidth) const
+    {
+        const int laneY = rowY + trackHeight;
+        const QRect laneRect(trackHeaderWidth, laneY, gridWidth, automationLaneHeight - 1);
+        painter.fillRect(laneRect, QColor(QStringLiteral("#141a21")));
+        painter.setPen(QPen(QColor(QStringLiteral("#333d48")), 1));
+        painter.drawLine(trackHeaderWidth, laneY + 7, trackHeaderWidth + gridWidth, laneY + 7);
+        painter.drawLine(trackHeaderWidth, laneY + automationLaneHeight - 7,
+                         trackHeaderWidth + gridWidth, laneY + automationLaneHeight - 7);
+        const auto& points = busAutomationPoints(bus);
+        const float base = automationParameter == mixerBusPanAutomationTarget ? bus.pan : bus.gain;
+        QPainterPath path;
+        if (points.isEmpty())
+        {
+            path.moveTo(trackHeaderWidth, automationY(laneY, base));
+            path.lineTo(trackHeaderWidth + gridWidth, automationY(laneY, base));
+        }
+        else
+        {
+            path.moveTo(trackHeaderWidth, automationY(laneY, points.first().value));
+            for (qsizetype index = 0; index + 1 < points.size(); ++index)
+            {
+                const auto& a = points[index];
+                const auto& b = points[index + 1];
+                const QPointF start(trackHeaderWidth + a.beat * pixelsPerBeat, automationY(laneY, a.value));
+                const QPointF end(trackHeaderWidth + b.beat * pixelsPerBeat, automationY(laneY, b.value));
+                if (a.curveToNext == AutomationPoint::Curve::Hold)
+                {
+                    path.lineTo(end.x(), start.y());
+                    path.lineTo(end);
+                }
+                else
+                    path.lineTo(end);
+            }
+            const auto& last = points.last();
+            path.lineTo(trackHeaderWidth + gridWidth, automationY(laneY, last.value));
+        }
+        painter.setPen(QPen(QColor(QStringLiteral("#e6b66f")), 2));
+        painter.drawPath(path);
+        for (qsizetype index = 0; index < points.size(); ++index)
+        {
+            const QPoint center(trackHeaderWidth + static_cast<int>(std::round(points[index].beat * pixelsPerBeat)),
+                                automationY(laneY, points[index].value));
+            painter.setPen(QPen(QColor(QStringLiteral("#172029")), 1.5));
+            painter.setBrush(bus.id == selectedAutomationBusId && index == selectedAutomationPoint
+                                 ? QColor(QStringLiteral("#fff0c2")) : QColor(QStringLiteral("#e6b66f")));
+            painter.drawEllipse(center, 4.5, 4.5);
+        }
+    }
+
     QRectF clipBounds(const MidiClip& clip, int trackIndex) const
     {
         return QRectF(trackHeaderWidth + clip.startBeat * pixelsPerBeat + 2,
@@ -1743,7 +1970,9 @@ private:
         if (punchRangeEnabled)
             visibleBeats = std::max(visibleBeats, punchOutBeat + quarterNotesPerBar);
         const int width = trackHeaderWidth + static_cast<int>(std::ceil(visibleBeats * pixelsPerBeat));
-        const int height = rulerHeight + std::max(1, static_cast<int>(project.tracks.size())) * currentRowHeight();
+        const int rows = static_cast<int>(project.tracks.size()) +
+            ((automationViewEnabled && isBusAutomationTarget()) ? static_cast<int>(project.buses.size()) : 0);
+        const int height = rulerHeight + std::max(1, rows) * currentRowHeight();
         setMinimumSize(width, height);
         resize(width, height);
         update();
@@ -1773,7 +2002,9 @@ private:
     QString automationTargetLabel;
     int selectedAutomationPoint = -1;
     quint64 selectedAutomationTrackId = 0;
+    quint64 selectedAutomationBusId = 0;
     quint64 automationDragTrackId = 0;
+    quint64 automationDragBusId = 0;
     QVector<AutomationPoint> automationDragBefore;
     bool automationViewEnabled = false;
     bool punchRangeEnabled = false;
