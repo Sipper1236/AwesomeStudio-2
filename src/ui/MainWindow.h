@@ -42,6 +42,7 @@ class MainWindow final : public QMainWindow
     friend class ParametricEqBandCommand;
     friend class PitchBendRangeCommand;
     friend class AutomationEditCommand;
+    friend class BusAutomationEditCommand;
     friend class MarkerEditCommand;
     friend class TempoMapEditCommand;
     friend class AudioFadeEditCommand;
@@ -190,6 +191,8 @@ private:
     void setSelectedAutomationCurve(int curve);
     void applyAutomationHistory(quint64 trackId, int parameter, const QString& pluginUri,
                                 const QVector<AutomationPoint>& points);
+    void applyBusAutomationHistory(quint64 busId, bool pan,
+                                   const QVector<AutomationPoint>& points);
     void addTimelineMarker(double beat);
     void renameTimelineMarker(double beat);
     void removeTimelineMarker(double beat);

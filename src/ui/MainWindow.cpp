@@ -2463,6 +2463,38 @@ private:
     QString pluginUri;
 };
 
+class BusAutomationEditCommand final : public QUndoCommand
+{
+public:
+    BusAutomationEditCommand(MainWindow* window, quint64 busId, bool pan,
+                             QVector<AutomationPoint> before,
+                             QVector<AutomationPoint> after)
+        : window(window), busId(busId), pan(pan),
+          before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Edit mixer bus automation"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyBusAutomationHistory(busId, pan, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyBusAutomationHistory(busId, pan, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 busId;
+    bool pan;
+    QVector<AutomationPoint> before;
+    QVector<AutomationPoint> after;
+};
+
 class MarkerEditCommand final : public QUndoCommand
 {
 public:
@@ -9321,6 +9353,21 @@ void MainWindow::applyAutomationHistory(quint64 trackId, int parameter, const QS
     arrangementEditor->setProject(project);
     arrangementEditor->setSelection(selectedTrackId, selectedClipId);
     refreshAutomationEditor();
+    refreshDirtyState();
+}
+
+void MainWindow::applyBusAutomationHistory(quint64 busId, bool pan,
+                                           const QVector<AutomationPoint>& points)
+{
+    auto bus = std::find_if(project.buses.begin(), project.buses.end(),
+        [busId](const MixerBus& candidate) { return candidate.id == busId; });
+    if (bus == project.buses.end())
+        return;
+    (pan ? bus->panAutomation : bus->gainAutomation) = points;
+    audioEngine.setProject(project);
+    arrangementEditor->setProject(project);
+    refreshMixer();
+    settingsDirty = true;
     refreshDirtyState();
 }
 
