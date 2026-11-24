@@ -41,7 +41,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Undoable per-track volume and pan keyframes with linear interpolation in live playback and WAV render
 - [x] Mono/stereo WAV input recording with count-in, optional beat-range punch recording, per-input manual placement compensation, monitoring through Master or an armed Audio track, and direct recording to the armed track
 - [x] Live MIDI monitoring and basic note recording from ALSA on Linux, WinMM on Windows, and CoreMIDI on macOS
-- [x] Learnable MIDI CC and NRPN mappings for master level, selected-track level/pan/mute/solo, synth waveform and oscillator 2 enable/waveform/detune/mix, synth-filter enable/type/cutoff/resonance, synth amplitude-envelope ADSR, filter-envelope amount/ADSR/enable, and tempo
+- [x] Learnable MIDI CC and NRPN mappings for master level, selected-track level/pan/mute/solo and output-bus level/pan/mute/solo, synth waveform and oscillator 2 enable/waveform/detune/mix, synth-filter enable/type/cutoff/resonance, synth amplitude-envelope ADSR, filter-envelope amount/ADSR/enable, and tempo
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
 - [ ] Broader controller target coverage
 

@@ -4449,7 +4449,7 @@ void MainWindow::createMenus()
     connect(midiControllerListenAction, &QAction::toggled,
             this, &MainWindow::setMidiControllerListening);
 
-    const std::array<QString, 25> controllerTargets = {
+    const std::array<QString, 29> controllerTargets = {
         tr("Master level"), tr("Selected track level"), tr("Selected track pan"), tr("Tempo"),
         tr("Selected track mute"), tr("Selected track solo"),
         tr("Selected synth filter cutoff"), tr("Selected synth filter resonance"),
@@ -4467,11 +4467,16 @@ void MainWindow::createMenus()
         tr("Selected synth oscillator 2 waveform"),
         tr("Selected synth oscillator 2 detune"),
         tr("Selected synth filter enable"),
-        tr("Selected synth filter type")
+        tr("Selected synth filter type"),
+        tr("Selected track output bus level"),
+        tr("Selected track output bus pan"),
+        tr("Selected track output bus mute"),
+        tr("Selected track output bus solo")
     };
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
-    for (int target = 0; target <= static_cast<int>(MidiControllerTarget::SelectedTrackFilterType); ++target)
+    for (int target = 0;
+         target <= static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo); ++target)
     {
         QAction* learnAction = learnControllerMenu->addAction(controllerTargets[static_cast<size_t>(target)]);
         connect(learnAction, &QAction::triggered, this,
@@ -5512,8 +5517,8 @@ void MainWindow::refreshMixer()
         stateLayout->setContentsMargins(0, 0, 0, 0);
         auto* mute = new QCheckBox(tr("Mute"), stateRow);
         auto* solo = new QCheckBox(tr("Solo"), stateRow);
-        mute->setObjectName(QStringLiteral("mixerTrackMute_%1").arg(item.id));
-        solo->setObjectName(QStringLiteral("mixerTrackSolo_%1").arg(item.id));
+        mute->setObjectName(QStringLiteral("mixerBusMute_%1").arg(item.id));
+        solo->setObjectName(QStringLiteral("mixerBusSolo_%1").arg(item.id));
         mute->setChecked(item.muted);
         solo->setChecked(item.solo);
         stateLayout->addWidget(mute);
@@ -5521,6 +5526,7 @@ void MainWindow::refreshMixer()
         form->addRow(stateRow);
 
         auto* volume = new QSlider(Qt::Horizontal, group);
+        volume->setObjectName(QStringLiteral("mixerBusVolume_%1").arg(item.id));
         volume->setRange(0, 200);
         volume->setValue(static_cast<int>(std::round(item.gain * 100.0f)));
         auto* volumeLabel = new QLabel(tr("%1%").arg(volume->value()), group);
@@ -5532,6 +5538,7 @@ void MainWindow::refreshMixer()
         form->addRow(tr("Level"), volumeRow);
 
         auto* pan = new QSlider(Qt::Horizontal, group);
+        pan->setObjectName(QStringLiteral("mixerBusPan_%1").arg(item.id));
         pan->setRange(-100, 100);
         pan->setValue(static_cast<int>(std::round(item.pan * 100.0f)));
         auto* panLabel = new QLabel(item.pan < -0.02f ? tr("L %1").arg(std::abs(pan->value())) :
@@ -5752,6 +5759,8 @@ void MainWindow::refreshMixer()
         stateLayout->setContentsMargins(0, 0, 0, 0);
         auto* mute = new QCheckBox(tr("Mute"), stateRow);
         auto* solo = new QCheckBox(tr("Solo"), stateRow);
+        mute->setObjectName(QStringLiteral("mixerTrackMute_%1").arg(item.id));
+        solo->setObjectName(QStringLiteral("mixerTrackSolo_%1").arg(item.id));
         mute->setChecked(item.muted);
         solo->setChecked(item.solo);
         stateLayout->addWidget(mute);
@@ -10323,10 +10332,13 @@ void MainWindow::setMidiControllerListening(bool enabled)
 
 void MainWindow::beginMidiControllerLearn(int target)
 {
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackFilterType) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo) + 1;
     if (target < 0 || target >= targetCount)
         return;
     const InstrumentTrack* track = selectedTrack();
+    const bool outputBusTarget = target >=
+            static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusLevel) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo);
     if ((target == static_cast<int>(MidiControllerTarget::SelectedTrackLevel) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackPan) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackMute) ||
@@ -10334,9 +10346,15 @@ void MainWindow::beginMidiControllerLearn(int target)
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) ||
          target == static_cast<int>(MidiControllerTarget::SelectedTrackFilterResonance) ||
          (target >= static_cast<int>(MidiControllerTarget::SelectedTrackSynthAttack) &&
-          target <= static_cast<int>(MidiControllerTarget::SelectedTrackFilterType))) && track == nullptr)
+          target <= static_cast<int>(MidiControllerTarget::SelectedTrackFilterType)) ||
+         outputBusTarget) && track == nullptr)
     {
         statusBar()->showMessage(tr("Select a track before learning its MIDI control"), 3000);
+        return;
+    }
+    if (outputBusTarget && track->outputBusId == 0)
+    {
+        statusBar()->showMessage(tr("Route the selected track to a mixer bus before learning its bus controls"), 3500);
         return;
     }
     if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackFilterCutoff) &&
@@ -10379,7 +10397,7 @@ void MainWindow::loadMidiControllerMappings()
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackFilterType) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const QString prefix = QString::number(target);
@@ -10399,7 +10417,7 @@ void MainWindow::saveMidiControllerMappings() const
 {
     QSettings settings;
     settings.beginGroup(QStringLiteral("midiControllerMappings"));
-    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackFilterType) + 1;
+    const int targetCount = static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo) + 1;
     for (int target = 0; target < targetCount; ++target)
     {
         const MidiControllerMapping mapping = midiControllerMappings.value(target);
@@ -10455,6 +10473,43 @@ void MainWindow::applyMidiControllerTarget(int target, int value)
     const InstrumentTrack* track = selectedTrack();
     if (track == nullptr)
         return;
+    if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusLevel) &&
+        target <= static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo))
+    {
+        const QString busId = QString::number(track->outputBusId);
+        switch (static_cast<MidiControllerTarget>(target))
+        {
+            case MidiControllerTarget::SelectedTrackOutputBusLevel:
+                if (QSlider* control = mixerDock->findChild<QSlider*>(
+                        QStringLiteral("mixerBusVolume_%1").arg(busId)))
+                    control->setValue(static_cast<int>(std::lround(value * 200.0 / 127.0)));
+                return;
+            case MidiControllerTarget::SelectedTrackOutputBusPan:
+                if (QSlider* control = mixerDock->findChild<QSlider*>(
+                        QStringLiteral("mixerBusPan_%1").arg(busId)))
+                {
+                    const int pan = value <= 64
+                        ? static_cast<int>(std::lround((value - 64) * 100.0 / 64.0))
+                        : static_cast<int>(std::lround((value - 64) * 100.0 / 63.0));
+                    control->setValue(pan);
+                }
+                return;
+            case MidiControllerTarget::SelectedTrackOutputBusMute:
+            case MidiControllerTarget::SelectedTrackOutputBusSolo:
+            {
+                const bool muteTarget = target ==
+                    static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusMute);
+                const QString controlName = muteTarget
+                    ? QStringLiteral("mixerBusMute_%1").arg(busId)
+                    : QStringLiteral("mixerBusSolo_%1").arg(busId);
+                if (QCheckBox* control = mixerDock->findChild<QCheckBox*>(controlName))
+                    control->setChecked(value >= 64);
+                return;
+            }
+            default:
+                return;
+        }
+    }
     if (target >= static_cast<int>(MidiControllerTarget::SelectedTrackOscillatorWaveform) &&
         target <= static_cast<int>(MidiControllerTarget::SelectedTrackFilterType))
     {

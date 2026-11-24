@@ -272,7 +272,11 @@ private:
         SelectedTrackSecondOscillatorWaveform = 21,
         SelectedTrackSecondOscillatorDetune = 22,
         SelectedTrackFilterEnabled = 23,
-        SelectedTrackFilterType = 24
+        SelectedTrackFilterType = 24,
+        SelectedTrackOutputBusLevel = 25,
+        SelectedTrackOutputBusPan = 26,
+        SelectedTrackOutputBusMute = 27,
+        SelectedTrackOutputBusSolo = 28
     };
     struct MidiControllerMapping
     {
