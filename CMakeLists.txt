@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
 project(AwesomeStudio VERSION 0.2.0 LANGUAGES CXX)
 
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -74,7 +78,6 @@ if(WIN32)
         ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_win32.cpp
     )
 elseif(APPLE)
-    enable_language(OBJCXX)
     target_sources(AwesomeStudio PRIVATE
         ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/module_mac.mm
     )
