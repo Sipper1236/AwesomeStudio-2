@@ -96,7 +96,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Autosave, rotating backups, project recovery, and versioned migrations
 - [x] Optional multi-format export, stems, cancellable batch rendering, and progress reporting
 - [x] Block-based CLAP processing with a 64-frame host buffering delay
-- [ ] Linux package formats, signed installers, and a focused automated test suite
+- [x] Linux Debian and RPM packages with executable/archive artifacts in GitHub Actions
+- [ ] AppImage packaging, signed installers, and a focused automated test suite
 
 ## Build requirements
 

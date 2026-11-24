@@ -34,7 +34,8 @@ jobs:
             liblilv-dev \
             libflac-dev \
             libsndfile1-dev \
-            libmp3lame-dev
+            libmp3lame-dev \
+            rpm
 
       - name: Configure Release build
         run: >-
@@ -46,6 +47,9 @@ jobs:
 
       - name: Build Debian package
         run: cpack --config build/CPackConfig.cmake -G DEB --verbose
+
+      - name: Build RPM package
+        run: cpack --config build/CPackConfig.cmake -G RPM --verbose
 
       - name: Package Linux build archive
         run: |
@@ -73,5 +77,6 @@ jobs:
             build/AwesomeStudio
             AwesomeStudio-Linux-x86_64.tar.gz
             awesome-studio_0.2.0_amd64.deb
+            awesome-studio-0.2.0-1.x86_64.rpm
           if-no-files-found: error
           retention-days: 30
