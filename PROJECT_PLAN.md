@@ -91,4 +91,4 @@ Configure with `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`, then build with
 
 ## Ownership and release note
 
-The project plan currently identifies GPL-3.0, but the repository does not contain a `LICENSE` file. Include the official license text before publishing a release. The current build intentionally excludes older JUCE-oriented drafts until they are integrated and can be validated.
+The repository includes the official GPL-3.0 text in `LICENSE`. The current build intentionally excludes older JUCE-oriented drafts until they are integrated and can be validated.
