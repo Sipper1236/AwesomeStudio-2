@@ -6,7 +6,7 @@ Build a pattern-first digital audio workstation with a fast MIDI workflow and a 
 
 ## Shipped foundation
 
-The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, standalone or during-recording live audio input monitoring to Master or through an armed Audio track's mixer path, with per-device manual placement compensation, Linux ALSA MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, seven factory synth presets plus reusable user patches saved in app data with import/export and removal, and selectable resonant filters with bipolar cutoff-envelope modulation, three-band EQ with adjustable crossovers, seven parametric bands with a draggable response graph, and volume/pan and synth filter cutoff/resonance keyframe automation, Delay/Reverb/Compressor/Low-pass Filter inserts on tracks, buses, and Master, mixer submix buses with nested/group routing and multiple track and bus auxiliary sends, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming with selectable linear, smooth, equal-power, custom-power, drawn, and draggable cubic Bezier fade curves, a 16-step drum sequencer with four assignable sample pads, five velocity layers per pad, per-pad waveform start editing, and independent per-layer tuning, loop, and ADSR overrides, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, WAV export, and optional FLAC export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
+The current Qt 6 executable provides a multi-track Playlist with movable MIDI and imported or recorded WAV audio clips, standalone or during-recording live audio input monitoring to Master or through an armed Audio track's mixer path, with per-device manual placement compensation, Linux ALSA and Windows WinMM MIDI input monitoring and recording with per-note channel preservation, per-track Synth ADSR envelopes, seven factory synth presets plus reusable user patches saved in app data with import/export and removal, and selectable resonant filters with bipolar cutoff-envelope modulation, three-band EQ with adjustable crossovers, seven parametric bands with a draggable response graph, and volume/pan and synth filter cutoff/resonance keyframe automation, Delay/Reverb/Compressor/Low-pass Filter inserts on tracks, buses, and Master, mixer submix buses with nested/group routing and multiple track and bus auxiliary sends, per-bus controls and peak meters, per-clip piano rolls, waveform display, audio edge trimming with selectable linear, smooth, equal-power, custom-power, drawn, and draggable cubic Bezier fade curves, a 16-step drum sequencer with four assignable sample pads, five velocity layers per pad, per-pad waveform start editing, and independent per-layer tuning, loop, and ADSR overrides, editable MIDI clip lengths and common time signatures, MIDI import/export, project save/open, WAV export, and optional FLAC export. Audio media is loaded into memory and referenced by path. See [FEATURE_PARITY_TRACKER.md](FEATURE_PARITY_TRACKER.md) for exact boundaries.
 
 ## Roadmap
 
@@ -40,9 +40,9 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Per-track Synth ADSR envelope controls in live playback and render
 - [x] Undoable per-track volume and pan keyframes with linear interpolation in live playback and WAV render
 - [x] Mono/stereo WAV input recording with count-in, optional beat-range punch recording, per-input manual placement compensation, monitoring through Master or an armed Audio track, and direct recording to the armed track
-- [x] Live MIDI monitoring and basic note recording from ALSA input on Linux
+- [x] Live MIDI monitoring and basic note recording from ALSA input on Linux and WinMM input on Windows
 - [x] Learnable MIDI CC and NRPN mappings for master level, selected-track level/pan/mute/solo, synth waveform and oscillator 2 enable/waveform/detune/mix, synth-filter enable/type/cutoff/resonance, synth amplitude-envelope ADSR, filter-envelope amount/ADSR/enable, and tempo
-- [ ] Native MIDI input backends for other platforms and broader controller targets
+- [ ] Native MIDI input backend for macOS and broader controller targets
 
 ### 2. Arrangement and mixing
 
@@ -75,7 +75,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Compensate the fixed CLAP host buffering delay and activation-reported plug-in latency across Mixer routes
 - [ ] VST3 hosting and native plug-in editors
 - [ ] Dynamic plug-in latency changes and transport output timing compensation
-- [ ] Native MIDI input backends for other platforms and broader controller targets
+- [ ] Native MIDI input backend for macOS and broader controller targets
 - [x] Autosave, rotating backups, project recovery, and versioned migrations
 - [x] Optional multi-format export, stems, cancellable batch rendering, and progress reporting
 - [x] Block-based CLAP processing with a 64-frame host buffering delay

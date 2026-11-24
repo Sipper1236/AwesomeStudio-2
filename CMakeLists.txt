@@ -56,6 +56,9 @@ add_executable(AwesomeStudio
 target_include_directories(AwesomeStudio PRIVATE src third_party/clap/include)
 target_link_libraries(AwesomeStudio PRIVATE Qt6::Widgets Qt6::Multimedia)
 target_link_libraries(AwesomeStudio PRIVATE ${CMAKE_DL_LIBS})
+if(WIN32)
+    target_link_libraries(AwesomeStudio PRIVATE winmm)
+endif()
 target_compile_features(AwesomeStudio PRIVATE cxx_std_17)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

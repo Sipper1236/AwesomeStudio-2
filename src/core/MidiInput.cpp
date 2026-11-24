@@ -4,11 +4,21 @@
 
 #include <algorithm>
 #include <array>
+#include <mutex>
+#include <vector>
 
 #ifdef AWESOME_STUDIO_HAS_ALSA
 #include <alsa/asoundlib.h>
 
 #include <cstdio>
+#endif
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <mmsystem.h>
 #endif
 
 struct MidiInput::Impl
@@ -21,14 +31,119 @@ struct MidiInput::Impl
     std::array<int, 16> nrpnDataMsb{};
     std::array<int, 16> nrpnDataLsb{};
 
+#endif
+
+#ifdef _WIN32
+    HMIDIIN winMmHandle = nullptr;
+    std::mutex winMmMutex;
+    std::vector<MidiInputEvent> winMmEvents;
+    std::array<int, 16> nrpnMsb;
+    std::array<int, 16> nrpnLsb;
+    std::array<int, 16> nrpnDataMsb{};
+    std::array<int, 16> nrpnDataLsb{};
+#endif
+
     Impl()
     {
+#ifdef AWESOME_STUDIO_HAS_ALSA
         nrpnMsb.fill(-1);
         nrpnLsb.fill(-1);
         nrpnDataMsb.fill(0);
         nrpnDataLsb.fill(0);
+#endif
+#ifdef _WIN32
+        nrpnMsb.fill(-1);
+        nrpnLsb.fill(-1);
+        nrpnDataMsb.fill(0);
+        nrpnDataLsb.fill(0);
+#endif
+    }
+
+#ifdef _WIN32
+    static void CALLBACK midiInputCallback(HMIDIIN, UINT message, DWORD_PTR instance,
+                                           DWORD_PTR parameter1, DWORD_PTR)
+    {
+        if (message != MIM_DATA || instance == 0)
+            return;
+        static_cast<Impl*>(instance)->handleShortMessage(static_cast<DWORD>(parameter1));
+    }
+
+    void handleShortMessage(DWORD packedMessage)
+    {
+        const int status = static_cast<int>(packedMessage & 0xff);
+        const int messageType = status & 0xf0;
+        const int channel = status & 0x0f;
+        const int data1 = static_cast<int>((packedMessage >> 8) & 0x7f);
+        const int data2 = static_cast<int>((packedMessage >> 16) & 0x7f);
+
+        std::lock_guard<std::mutex> lock(winMmMutex);
+        if (messageType == 0x80 || messageType == 0x90)
+        {
+            MidiInputEvent event;
+            event.channel = channel;
+            event.pitch = data1;
+            event.velocity = data2;
+            event.noteOn = messageType == 0x90 && data2 > 0;
+            winMmEvents.push_back(event);
+        }
+        else if (messageType == 0xb0)
+        {
+            MidiInputEvent control;
+            control.channel = channel;
+            control.controller = data1;
+            control.value = data2;
+            const size_t channelIndex = static_cast<size_t>(channel);
+            if (control.controller == 101 || control.controller == 100)
+            {
+                nrpnMsb[channelIndex] = -1;
+                nrpnLsb[channelIndex] = -1;
+                nrpnDataMsb[channelIndex] = 0;
+                nrpnDataLsb[channelIndex] = 0;
+            }
+            else if (control.controller == 99)
+            {
+                nrpnMsb[channelIndex] = control.value;
+                nrpnLsb[channelIndex] = -1;
+                nrpnDataMsb[channelIndex] = 0;
+                nrpnDataLsb[channelIndex] = 0;
+            }
+            else if (control.controller == 98)
+            {
+                nrpnLsb[channelIndex] = control.value;
+                nrpnDataMsb[channelIndex] = 0;
+                nrpnDataLsb[channelIndex] = 0;
+            }
+            else if ((control.controller == 6 || control.controller == 38) &&
+                     nrpnMsb[channelIndex] >= 0 && nrpnLsb[channelIndex] >= 0)
+            {
+                if (control.controller == 6)
+                    nrpnDataMsb[channelIndex] = control.value;
+                else
+                    nrpnDataLsb[channelIndex] = control.value;
+                control.registeredParameter = true;
+                control.parameterNumber = (nrpnMsb[channelIndex] << 7) |
+                                          nrpnLsb[channelIndex];
+                control.parameterValue = (nrpnDataMsb[channelIndex] << 7) |
+                                         nrpnDataLsb[channelIndex];
+                winMmEvents.push_back(control);
+            }
+            else
+            {
+                control.controlChange = true;
+                winMmEvents.push_back(control);
+            }
+        }
+        else if (messageType == 0xe0)
+        {
+            MidiInputEvent bend;
+            bend.channel = channel;
+            bend.pitchBend = true;
+            bend.value = data1 | (data2 << 7);
+            winMmEvents.push_back(bend);
+        }
     }
 #endif
+
     QString error;
 };
 
@@ -44,6 +159,8 @@ MidiInput::~MidiInput()
 bool MidiInput::isSupported()
 {
 #ifdef AWESOME_STUDIO_HAS_ALSA
+    return true;
+#elif defined(_WIN32)
     return true;
 #else
     return false;
@@ -88,6 +205,18 @@ QList<MidiInputPort> MidiInput::availablePorts(QString* error)
         }
     }
     snd_seq_close(sequencer);
+#elif defined(_WIN32)
+    const UINT deviceCount = midiInGetNumDevs();
+    for (UINT device = 0; device < deviceCount; ++device)
+    {
+        MIDIINCAPSW capabilities{};
+        const MMRESULT result = midiInGetDevCapsW(
+            static_cast<UINT_PTR>(device), &capabilities, sizeof(capabilities));
+        if (result != MMSYSERR_NOERROR)
+            continue;
+        ports.push_back({QStringLiteral("winmm:%1").arg(device),
+                         QString::fromWCharArray(capabilities.szPname)});
+    }
 #else
     if (error != nullptr)
         *error = QStringLiteral("MIDI input is unavailable in this build.");
@@ -145,6 +274,63 @@ bool MidiInput::connectTo(const QString& portId, QString* error)
     }
     impl->error.clear();
     return true;
+#elif defined(_WIN32)
+    if (!portId.startsWith(QStringLiteral("winmm:")))
+    {
+        impl->error = QStringLiteral("The selected MIDI input port is invalid.");
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    bool deviceOk = false;
+    const uint device = portId.mid(6).toUInt(&deviceOk);
+    if (!deviceOk || device >= midiInGetNumDevs())
+    {
+        impl->error = QStringLiteral("The selected MIDI input device is no longer available.");
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    MMRESULT result = midiInOpen(
+        &impl->winMmHandle, static_cast<UINT>(device),
+        reinterpret_cast<DWORD_PTR>(&Impl::midiInputCallback),
+        reinterpret_cast<DWORD_PTR>(impl.get()), CALLBACK_FUNCTION);
+    if (result != MMSYSERR_NOERROR)
+    {
+        wchar_t message[MAXERRORLENGTH]{};
+        impl->winMmHandle = nullptr;
+        impl->error = midiInGetErrorTextW(result, message, MAXERRORLENGTH) == MMSYSERR_NOERROR
+            ? QString::fromWCharArray(message)
+            : QStringLiteral("WinMM error %1").arg(static_cast<uint>(result));
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(impl->winMmMutex);
+        impl->winMmEvents.clear();
+        impl->nrpnMsb.fill(-1);
+        impl->nrpnLsb.fill(-1);
+        impl->nrpnDataMsb.fill(0);
+        impl->nrpnDataLsb.fill(0);
+    }
+    result = midiInStart(impl->winMmHandle);
+    if (result != MMSYSERR_NOERROR)
+    {
+        wchar_t message[MAXERRORLENGTH]{};
+        impl->error = midiInGetErrorTextW(result, message, MAXERRORLENGTH) == MMSYSERR_NOERROR
+            ? QString::fromWCharArray(message)
+            : QStringLiteral("WinMM error %1").arg(static_cast<uint>(result));
+        disconnect();
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+    impl->error.clear();
+    return true;
 #else
     Q_UNUSED(portId)
     impl->error = QStringLiteral("MIDI input is unavailable in this build.");
@@ -168,12 +354,31 @@ void MidiInput::disconnect()
     impl->nrpnDataMsb.fill(0);
     impl->nrpnDataLsb.fill(0);
 #endif
+#ifdef _WIN32
+    if (impl->winMmHandle != nullptr)
+    {
+        midiInStop(impl->winMmHandle);
+        midiInReset(impl->winMmHandle);
+        midiInClose(impl->winMmHandle);
+        impl->winMmHandle = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(impl->winMmMutex);
+        impl->winMmEvents.clear();
+        impl->nrpnMsb.fill(-1);
+        impl->nrpnLsb.fill(-1);
+        impl->nrpnDataMsb.fill(0);
+        impl->nrpnDataLsb.fill(0);
+    }
+#endif
 }
 
 bool MidiInput::isConnected() const
 {
 #ifdef AWESOME_STUDIO_HAS_ALSA
     return impl->sequencer != nullptr;
+#elif defined(_WIN32)
+    return impl->winMmHandle != nullptr;
 #else
     return false;
 #endif
@@ -257,6 +462,15 @@ QVector<MidiInputEvent> MidiInput::readAvailable()
         }
         snd_seq_free_event(event);
     }
+#endif
+#ifdef _WIN32
+    std::vector<MidiInputEvent> pendingEvents;
+    {
+        std::lock_guard<std::mutex> lock(impl->winMmMutex);
+        pendingEvents.swap(impl->winMmEvents);
+    }
+    for (const MidiInputEvent& event : pendingEvents)
+        events.push_back(event);
 #endif
     return events;
 }

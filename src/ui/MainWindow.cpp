@@ -9868,7 +9868,7 @@ void MainWindow::setMidiControllerListening(bool enabled)
     {
         rejectEnable(MidiInput::isSupported()
             ? tr("No MIDI input devices are available. Connect a device and try again.")
-            : tr("MIDI controller mappings require an ALSA enabled Linux build."));
+            : tr("MIDI input is unavailable in this build."));
         return;
     }
     if (midiInput == nullptr)
@@ -10181,7 +10181,7 @@ void MainWindow::setMidiMonitorEnabled(bool enabled)
     {
         rejectEnable(MidiInput::isSupported()
             ? tr("No MIDI input devices are available. Connect a device and try again.")
-            : tr("MIDI monitoring requires an ALSA enabled Linux build."));
+            : tr("MIDI input is unavailable in this build."));
         return;
     }
     if (!audioEngine.isAudioAvailable() && !audioEngine.initialize())
@@ -10626,7 +10626,7 @@ void MainWindow::startMidiRecording()
     {
         statusBar()->showMessage(MidiInput::isSupported()
             ? tr("No MIDI input devices are available. Connect a device and try again.")
-            : tr("MIDI input requires an ALSA enabled Linux build."), 5000);
+            : tr("MIDI input is unavailable in this build."), 5000);
         QSignalBlocker blocker(midiRecordAction);
         midiRecordAction->setChecked(false);
         return;
