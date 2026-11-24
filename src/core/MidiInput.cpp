@@ -65,7 +65,7 @@ struct MidiInput::Impl
     {
         if (message != MIM_DATA || instance == 0)
             return;
-        static_cast<Impl*>(instance)->handleShortMessage(static_cast<DWORD>(parameter1));
+        reinterpret_cast<Impl*>(instance)->handleShortMessage(static_cast<DWORD>(parameter1));
     }
 
     void handleShortMessage(DWORD packedMessage)
