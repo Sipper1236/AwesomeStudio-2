@@ -90,6 +90,9 @@ class TrackEqResponseWidget final : public QWidget
 public:
     using ChangeHandler = std::function<void(int, float, float)>;
     using SelectionHandler = std::function<void(int)>;
+    using DrawHandler = std::function<void(
+        const std::array<float, parametricEqBandCount>&,
+        const std::array<bool, parametricEqBandCount>&)>;
 
     explicit TrackEqResponseWidget(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -99,7 +102,7 @@ public:
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setMouseTracking(true);
         setAccessibleName(tr("Parametric EQ response"));
-        setToolTip(tr("Drag a band point to change its frequency and gain"));
+        setToolTip(tr("Drag a band point to change its frequency and gain. Shift-drag to draw gains across the bands."));
     }
 
     void setBands(const std::array<ParametricEqBand, parametricEqBandCount>& bands)
@@ -124,6 +127,7 @@ public:
 
     void setChangeHandler(ChangeHandler handler) { changeHandler = std::move(handler); }
     void setSelectionHandler(SelectionHandler handler) { selectionHandler = std::move(handler); }
+    void setDrawHandler(DrawHandler handler) { drawHandler = std::move(handler); }
 
 protected:
     void paintEvent(QPaintEvent*) override
@@ -189,6 +193,16 @@ protected:
         painter.setPen(QPen(accent, 2.0));
         painter.drawPath(response);
 
+        if (drawingCurve && !drawPoints.isEmpty())
+        {
+            QPainterPath gesture;
+            gesture.moveTo(drawPoints.front());
+            for (qsizetype index = 1; index < drawPoints.size(); ++index)
+                gesture.lineTo(drawPoints[index]);
+            painter.setPen(QPen(foreground, 1.5, Qt::DashLine));
+            painter.drawPath(gesture);
+        }
+
         for (int bandIndex = 0; bandIndex < static_cast<int>(parametricBands.size()); ++bandIndex)
         {
             const ParametricEqBand& band = parametricBands[static_cast<size_t>(bandIndex)];
@@ -210,6 +224,15 @@ protected:
         if (event->button() != Qt::LeftButton || !plotRect().contains(event->position()))
             return;
         const QPointF position = event->position();
+        if (event->modifiers().testFlag(Qt::ShiftModifier))
+        {
+            drawingCurve = true;
+            dragging = false;
+            drawPoints = {position};
+            update();
+            event->accept();
+            return;
+        }
         int closestBand = selectedBand;
         double closestDistance = 14.0;
         const QRectF plot = plotRect();
@@ -236,6 +259,16 @@ protected:
 
     void mouseMoveEvent(QMouseEvent* event) override
     {
+        if (drawingCurve)
+        {
+            if (plotRect().contains(event->position()))
+            {
+                drawPoints.push_back(event->position());
+                update();
+            }
+            event->accept();
+            return;
+        }
         if (dragging)
         {
             updateFromPosition(event->position());
@@ -261,6 +294,15 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent* event) override
     {
+        if (event->button() == Qt::LeftButton && drawingCurve)
+        {
+            drawingCurve = false;
+            applyDrawnCurve();
+            drawPoints.clear();
+            update();
+            event->accept();
+            return;
+        }
         if (event->button() == Qt::LeftButton)
         {
             dragging = false;
@@ -272,6 +314,60 @@ protected:
     }
 
 private:
+    void applyDrawnCurve()
+    {
+        if (!drawHandler || drawPoints.size() < 2)
+            return;
+        double left = drawPoints.front().x();
+        double right = left;
+        for (const QPointF& point : drawPoints)
+        {
+            left = std::min(left, point.x());
+            right = std::max(right, point.x());
+        }
+        if (right - left < 2.0)
+            return;
+
+        std::array<float, parametricEqBandCount> gains{};
+        std::array<bool, parametricEqBandCount> changed{};
+        const QRectF plot = plotRect();
+        for (size_t bandIndex = 0; bandIndex < parametricBands.size(); ++bandIndex)
+        {
+            const double x = frequencyToX(parametricBands[bandIndex].frequencyHz, plot);
+            if (x < left || x > right)
+                continue;
+
+            double nearestDistance = std::numeric_limits<double>::max();
+            double sampledY = plot.center().y();
+            for (qsizetype pointIndex = 0; pointIndex < drawPoints.size(); ++pointIndex)
+            {
+                const QPointF& point = drawPoints[pointIndex];
+                const double distance = std::abs(point.x() - x);
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    sampledY = point.y();
+                }
+                if (pointIndex + 1 >= drawPoints.size())
+                    continue;
+                const QPointF& next = drawPoints[pointIndex + 1];
+                const double segmentLeft = std::min(point.x(), next.x());
+                const double segmentRight = std::max(point.x(), next.x());
+                if (x < segmentLeft || x > segmentRight ||
+                    std::abs(next.x() - point.x()) < 0.01)
+                    continue;
+                const double ratio = (x - point.x()) / (next.x() - point.x());
+                sampledY = point.y() + ratio * (next.y() - point.y());
+                nearestDistance = 0.0;
+                break;
+            }
+            gains[bandIndex] = static_cast<float>(std::clamp(
+                18.0 - (sampledY - plot.top()) / plot.height() * 36.0, -18.0, 18.0));
+            changed[bandIndex] = true;
+        }
+        drawHandler(gains, changed);
+    }
+
     QRectF plotRect() const
     {
         return QRectF(37.0, 7.0, std::max(1, width() - 46), std::max(1, height() - 32));
@@ -358,8 +454,11 @@ private:
     std::array<float, 2> legacyCrossovers{120.0f, 6000.0f};
     ChangeHandler changeHandler;
     SelectionHandler selectionHandler;
+    DrawHandler drawHandler;
+    QVector<QPointF> drawPoints;
     int selectedBand = 0;
     bool dragging = false;
+    bool drawingCurve = false;
 };
 
 class DrumSampleWaveformWidget final : public QWidget
@@ -4088,6 +4187,26 @@ void MainWindow::createDocks()
         settings.frequencyHz = frequencyHz;
         settings.gainDb = gainDb;
         setSelectedTrackParametricEqualizer(band, settings);
+    });
+    responseGraph->setDrawHandler([this](
+        const std::array<float, parametricEqBandCount>& gains,
+        const std::array<bool, parametricEqBandCount>& changed)
+    {
+        InstrumentTrack* track = selectedTrack();
+        if (track == nullptr ||
+            std::none_of(changed.begin(), changed.end(), [](bool value) { return value; }))
+            return;
+        undoStack.beginMacro(tr("Draw parametric EQ curve"));
+        for (int band = 0; band < parametricEqBandCount; ++band)
+        {
+            const size_t index = static_cast<size_t>(band);
+            if (!changed[index])
+                continue;
+            ParametricEqBand settings = track->eqParametricBands[index];
+            settings.gainDb = gains[index];
+            setSelectedTrackParametricEqualizer(band, settings, 1);
+        }
+        undoStack.endMacro();
     });
     browserLayout->addWidget(equalizerGroup);
 
