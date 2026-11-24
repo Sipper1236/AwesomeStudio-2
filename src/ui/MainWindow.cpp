@@ -75,6 +75,7 @@
 #include <cmath>
 #include <complex>
 #include <functional>
+#include <limits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -373,7 +374,7 @@ public:
         setMaximumHeight(96);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setAccessibleName(tr("Drum sample waveform and slice boundaries"));
-        setToolTip(tr("Drag the start or end marker to set the sample slice"));
+        setToolTip(tr("Drag a marker to set the sample slice. Right-click a waveform position to snap either marker to its nearest transient."));
     }
 
     void setSample(const std::shared_ptr<const AudioAsset>& asset, const QString& sourcePath,
@@ -472,6 +473,34 @@ protected:
 
     void mousePressEvent(QMouseEvent* event) override
     {
+        if (event->button() == Qt::RightButton && !peaks.isEmpty() &&
+            plotRect().contains(event->position()))
+        {
+            const double percent = std::clamp(
+                (event->position().x() - plotRect().left()) / plotRect().width() * 100.0,
+                0.0, 100.0);
+            QMenu menu(this);
+            QAction* snapStart = menu.addAction(tr("Set start at nearest transient"));
+            QAction* snapEnd = menu.addAction(tr("Set end at nearest transient"));
+            QAction* chosen = menu.exec(event->globalPosition().toPoint());
+            if (chosen != nullptr)
+            {
+                const double transient = nearestTransientPercent(percent);
+                const bool editingStart = chosen == snapStart;
+                if (editingStart)
+                    startPositionPercent = std::clamp(transient, 0.0,
+                        std::min(99.0, endPositionPercent - 0.1));
+                else
+                    endPositionPercent = std::clamp(transient,
+                        startPositionPercent + 0.1, 100.0);
+                update();
+                if (positionHandler)
+                    positionHandler(editingStart,
+                        editingStart ? startPositionPercent : endPositionPercent);
+            }
+            event->accept();
+            return;
+        }
         if (event->button() != Qt::LeftButton || peaks.isEmpty() || !plotRect().contains(event->position()))
         {
             QWidget::mousePressEvent(event);
@@ -526,6 +555,40 @@ protected:
     }
 
 private:
+    double nearestTransientPercent(double requestedPercent) const
+    {
+        if (peaks.isEmpty())
+            return requestedPercent;
+
+        float maximumPeak = 0.0f;
+        for (float peak : peaks)
+            maximumPeak = std::max(maximumPeak, std::abs(peak));
+        const float threshold = std::max(0.015f, maximumPeak * 0.12f);
+        const qsizetype requestedIndex = static_cast<qsizetype>(std::llround(
+            std::clamp(requestedPercent, 0.0, 100.0) * 0.01 * (peaks.size() - 1)));
+        qsizetype nearestIndex = -1;
+        qsizetype nearestDistance = std::numeric_limits<qsizetype>::max();
+        qsizetype lastTransient = -3;
+        for (qsizetype index = 0; index < peaks.size(); ++index)
+        {
+            const float current = std::abs(peaks[index]);
+            const float previous = index == 0 ? 0.0f : std::abs(peaks[index - 1]);
+            if (current < threshold || previous >= threshold || index - lastTransient < 3)
+                continue;
+            lastTransient = index;
+            const qsizetype distance = std::abs(index - requestedIndex);
+            if (distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearestIndex = index;
+            }
+        }
+        if (nearestIndex < 0 || peaks.size() <= 1)
+            return requestedPercent;
+        return static_cast<double>(nearestIndex) * 100.0 /
+               static_cast<double>(peaks.size() - 1);
+    }
+
     QRectF plotRect() const
     {
         return QRectF(8.0, 17.0, std::max(1, width() - 16), std::max(1, height() - 24));
