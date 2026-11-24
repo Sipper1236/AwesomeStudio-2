@@ -39,6 +39,7 @@ class MainWindow final : public QMainWindow
     Q_OBJECT
     friend class NoteEditCommand;
     friend class StepDivisionCommand;
+    friend class ParametricEqBandCommand;
     friend class PitchBendRangeCommand;
     friend class AutomationEditCommand;
     friend class MarkerEditCommand;
@@ -238,6 +239,8 @@ private:
                           const QVector<MidiPitchBend>* pitchBends = nullptr);
     void applyStepDivisionHistory(quint64 trackId, quint64 clipId, int stepsPerBar);
     void applyPitchBendRangeHistory(double semitones);
+    void applyParametricEqBandHistory(quint64 trackId, int band,
+                                      const ParametricEqBand& settings);
     void exportAudio();
     void exportAudioFlac();
     void exportAudioOgg();

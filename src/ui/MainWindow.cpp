@@ -2301,6 +2301,36 @@ private:
     double after;
 };
 
+class ParametricEqBandCommand final : public QUndoCommand
+{
+public:
+    ParametricEqBandCommand(MainWindow* window, quint64 trackId, int band,
+                            ParametricEqBand before, ParametricEqBand after)
+        : window(window), trackId(trackId), band(band), before(before), after(after)
+    {
+        setText(QObject::tr("Edit parametric EQ band"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyParametricEqBandHistory(trackId, band, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyParametricEqBandHistory(trackId, band, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    int band;
+    ParametricEqBand before;
+    ParametricEqBand after;
+};
+
 class AutomationEditCommand final : public QUndoCommand
 {
 public:
@@ -8728,10 +8758,25 @@ void MainWindow::setSelectedTrackParametricEqualizer(int band, const ParametricE
             }
         }
     }
-    ParametricEqBand& target = track->eqParametricBands[static_cast<size_t>(band)];
-    target.frequencyHz = std::clamp(settings.frequencyHz, 20.0f, 20000.0f);
-    target.gainDb = std::clamp(settings.gainDb, -18.0f, 18.0f);
-    target.q = std::clamp(settings.q, 0.1f, 10.0f);
+    ParametricEqBand after = settings;
+    after.frequencyHz = std::clamp(after.frequencyHz, 20.0f, 20000.0f);
+    after.gainDb = std::clamp(after.gainDb, -18.0f, 18.0f);
+    after.q = std::clamp(after.q, 0.1f, 10.0f);
+    const ParametricEqBand before = track->eqParametricBands[static_cast<size_t>(band)];
+    if (std::abs(before.frequencyHz - after.frequencyHz) < 1.0e-4f &&
+        std::abs(before.gainDb - after.gainDb) < 1.0e-4f &&
+        std::abs(before.q - after.q) < 1.0e-4f)
+        return;
+    undoStack.push(new ParametricEqBandCommand(this, track->id, band, before, after));
+}
+
+void MainWindow::applyParametricEqBandHistory(quint64 trackId, int band,
+                                              const ParametricEqBand& settings)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr || band < 0 || band >= static_cast<int>(track->eqParametricBands.size()))
+        return;
+    track->eqParametricBands[static_cast<size_t>(band)] = settings;
     audioEngine.setProject(project);
     refreshParametricEqualizerControls();
     settingsDirty = true;
