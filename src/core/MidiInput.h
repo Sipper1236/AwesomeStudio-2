@@ -23,6 +23,7 @@ struct MidiInputEvent
     int value = 0;
     bool pitchBend = false;
     bool polyphonicPressure = false;
+    bool channelPressure = false;
     bool registeredParameter = false;
     int parameterNumber = 0;
     int parameterValue = 0;

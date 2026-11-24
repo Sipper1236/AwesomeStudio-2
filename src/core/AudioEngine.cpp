@@ -950,7 +950,7 @@ void AudioEngine::triggerLiveMidiNotePressure(int channel, int midiPitch, int va
     LiveMidiEvent event;
     event.notePressure = true;
     event.channel = std::clamp(channel, 0, 15);
-    event.pitch = std::clamp(midiPitch, 0, 127);
+    event.pitch = midiPitch < 0 ? -1 : std::clamp(midiPitch, 0, 127);
     event.noteExpressionValue = std::clamp(static_cast<float>(value) / 127.0f, 0.0f, 1.0f);
     if (track != nullptr && track->instrumentType == InstrumentType::ClapInstrument)
     {
@@ -1086,7 +1086,8 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
         for (const LiveMidiVoice& voice : liveMidiVoices)
         {
             if (!voice.active || !voice.held || !voice.pluginInstrument ||
-                voice.channel != event.channel || voice.pitch != event.pitch ||
+                voice.channel != event.channel ||
+                (event.pitch >= 0 && voice.pitch != event.pitch) ||
                 voice.trackIndex != event.trackIndex)
                 continue;
             renderer.pluginInstrumentNotePressure(voice.trackIndex, voice.pluginNoteId,
