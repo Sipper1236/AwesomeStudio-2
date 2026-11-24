@@ -140,6 +140,7 @@ private:
     void addNewPattern();
     void duplicateSelectedClip();
     void duplicateClip(quint64 trackId, quint64 clipId);
+    void buildDrumPatternChain(quint64 trackId, quint64 clipId);
     quint64 applyClipListHistory(quint64 trackId, const MidiClip& clip, qsizetype insertIndex,
                                  bool present, quint64 selectionTrackId,
                                  quint64 selectionClipId);

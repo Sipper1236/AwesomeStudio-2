@@ -2649,6 +2649,8 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
             [this](quint64 trackId, double startBeat) { addClipAt(trackId, startBeat); });
     connect(arrangementEditor, &ArrangementEditor::clipDuplicateRequested, this,
             [this](quint64 trackId, quint64 clipId) { duplicateClip(trackId, clipId); });
+    connect(arrangementEditor, &ArrangementEditor::patternChainRequested, this,
+            [this](quint64 trackId, quint64 clipId) { buildDrumPatternChain(trackId, clipId); });
     connect(arrangementEditor, &ArrangementEditor::clipRemoved, this,
             [this](quint64 trackId, quint64 clipId) { removeClip(trackId, clipId); });
     connect(arrangementEditor, &ArrangementEditor::clipMoved, this,
@@ -7066,6 +7068,200 @@ void MainWindow::duplicateClip(quint64 trackId, quint64 clipId)
     statusBar()->showMessage(tr("Duplicated %1 immediately after the original")
                                  .arg(sourceName.isEmpty() ? tr("clip") : sourceName),
                              2200);
+}
+
+void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
+{
+    const InstrumentTrack* track = project.findTrack(trackId);
+    const MidiClip* selected = project.findClip(trackId, clipId);
+    if (track == nullptr || track->instrumentType != InstrumentType::DrumRack ||
+        selected == nullptr || selected->isAudioRegion())
+        return;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Build drum pattern chain"));
+    dialog.resize(760, 430);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* description = new QLabel(
+        tr("Choose patterns and arrange them in order. The chain is appended at the next free bar and can be undone in one step."),
+        &dialog);
+    description->setWordWrap(true);
+    layout->addWidget(description);
+
+    auto* lists = new QHBoxLayout;
+    auto* patternsColumn = new QVBoxLayout;
+    patternsColumn->addWidget(new QLabel(tr("Patterns on this drum track"), &dialog));
+    auto* patternsList = new QListWidget(&dialog);
+    patternsList->setAccessibleName(tr("Available drum patterns"));
+    patternsList->setMinimumWidth(280);
+    patternsColumn->addWidget(patternsList, 1);
+    lists->addLayout(patternsColumn, 1);
+
+    auto* chainButtons = new QVBoxLayout;
+    auto* addButton = new QPushButton(tr("Add →"), &dialog);
+    auto* removeButton = new QPushButton(tr("Remove"), &dialog);
+    auto* moveUpButton = new QPushButton(tr("Move up"), &dialog);
+    auto* moveDownButton = new QPushButton(tr("Move down"), &dialog);
+    chainButtons->addStretch(1);
+    chainButtons->addWidget(addButton);
+    chainButtons->addWidget(removeButton);
+    chainButtons->addWidget(moveUpButton);
+    chainButtons->addWidget(moveDownButton);
+    chainButtons->addStretch(1);
+    lists->addLayout(chainButtons);
+
+    auto* chainColumn = new QVBoxLayout;
+    chainColumn->addWidget(new QLabel(tr("Chain order (repeated patterns are allowed)"), &dialog));
+    auto* chainList = new QListWidget(&dialog);
+    chainList->setAccessibleName(tr("Drum pattern chain order"));
+    chainList->setMinimumWidth(280);
+    chainColumn->addWidget(chainList, 1);
+    lists->addLayout(chainColumn, 1);
+    layout->addLayout(lists, 1);
+
+    for (const MidiClip& pattern : track->clips)
+    {
+        if (pattern.isAudioRegion())
+            continue;
+        const QString patternName = pattern.name.isEmpty()
+            ? tr("Pattern %1").arg(pattern.id) : pattern.name;
+        auto* item = new QListWidgetItem(
+            tr("%1 · %2 beats · #%3").arg(patternName)
+                .arg(pattern.lengthBeats, 0, 'f', 2).arg(pattern.id), patternsList);
+        item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(pattern.id));
+        if (pattern.id == clipId)
+        {
+            patternsList->setCurrentItem(item);
+            auto* initialEntry = new QListWidgetItem(*item);
+            chainList->addItem(initialEntry);
+            chainList->setCurrentItem(initialEntry);
+        }
+    }
+
+    const auto appendSelectedPattern = [patternsList, chainList]
+    {
+        const QListWidgetItem* selectedPattern = patternsList->currentItem();
+        if (selectedPattern == nullptr)
+            return;
+        chainList->addItem(new QListWidgetItem(*selectedPattern));
+        chainList->setCurrentRow(chainList->count() - 1);
+    };
+    connect(addButton, &QPushButton::clicked, &dialog, appendSelectedPattern);
+    connect(patternsList, &QListWidget::itemDoubleClicked, &dialog,
+            [appendSelectedPattern](QListWidgetItem*) { appendSelectedPattern(); });
+    connect(removeButton, &QPushButton::clicked, &dialog, [chainList]
+    {
+        delete chainList->takeItem(chainList->currentRow());
+    });
+    connect(moveUpButton, &QPushButton::clicked, &dialog, [chainList]
+    {
+        const int row = chainList->currentRow();
+        if (row <= 0)
+            return;
+        QListWidgetItem* item = chainList->takeItem(row);
+        chainList->insertItem(row - 1, item);
+        chainList->setCurrentRow(row - 1);
+    });
+    connect(moveDownButton, &QPushButton::clicked, &dialog, [chainList]
+    {
+        const int row = chainList->currentRow();
+        if (row < 0 || row + 1 >= chainList->count())
+            return;
+        QListWidgetItem* item = chainList->takeItem(row);
+        chainList->insertItem(row + 1, item);
+        chainList->setCurrentRow(row + 1);
+    });
+    connect(chainList, &QListWidget::currentRowChanged, &dialog,
+            [chainList, removeButton, moveUpButton, moveDownButton](int row)
+    {
+        removeButton->setEnabled(row >= 0);
+        moveUpButton->setEnabled(row > 0);
+        moveDownButton->setEnabled(row >= 0 && row + 1 < chainList->count());
+    });
+    removeButton->setEnabled(chainList->count() > 0);
+    moveUpButton->setEnabled(false);
+    moveDownButton->setEnabled(chainList->count() > 1);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Create chain"));
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted || chainList->count() == 0)
+        return;
+
+    QVector<quint64> sourceIds;
+    sourceIds.reserve(chainList->count());
+    for (int row = 0; row < chainList->count(); ++row)
+        sourceIds.push_back(chainList->item(row)->data(Qt::UserRole).toULongLong());
+
+    track = project.findTrack(trackId);
+    if (track == nullptr || sourceIds.size() > 512 ||
+        track->clips.size() + sourceIds.size() > 10000)
+    {
+        statusBar()->showMessage(tr("This chain is too large for the selected drum track"), 3500);
+        return;
+    }
+    QVector<MidiClip> chain;
+    chain.reserve(sourceIds.size());
+    for (quint64 sourceId : sourceIds)
+    {
+        const MidiClip* pattern = project.findClip(trackId, sourceId);
+        if (pattern == nullptr || pattern->isAudioRegion())
+        {
+            statusBar()->showMessage(tr("A pattern in this chain is no longer available"), 3500);
+            return;
+        }
+        chain.push_back(*pattern);
+    }
+
+    double endBeat = 0.0;
+    for (const MidiClip& pattern : track->clips)
+        endBeat = std::max(endBeat, pattern.startBeat + pattern.lengthBeats);
+    const double barLength = project.quarterNotesPerBar();
+    if (!std::isfinite(barLength) || barLength <= 0.0)
+    {
+        statusBar()->showMessage(tr("The current time signature cannot place a pattern chain"), 3500);
+        return;
+    }
+    double startBeat = std::ceil(endBeat / barLength) * barLength;
+    if (!std::isfinite(startBeat))
+    {
+        statusBar()->showMessage(tr("The current time signature cannot place a pattern chain"), 3500);
+        return;
+    }
+    for (MidiClip& pattern : chain)
+    {
+        if (!std::isfinite(pattern.lengthBeats) || pattern.lengthBeats <= 0.0 ||
+            startBeat + pattern.lengthBeats > 16384.0)
+        {
+            statusBar()->showMessage(tr("There is not enough Playlist space for this pattern chain"), 3500);
+            return;
+        }
+        pattern.id = nextClipId();
+        pattern.audioTakeGroupId = 0;
+        pattern.audioTakeActive = true;
+        pattern.audioTakeEligible = false;
+        pattern.startBeat = startBeat;
+        startBeat += pattern.lengthBeats;
+    }
+
+    const quint64 previousTrackId = selectedTrackId;
+    const quint64 previousClipId = selectedClipId;
+    qsizetype insertIndex = track->clips.size();
+    const double firstBeat = chain.first().startBeat;
+    undoStack.beginMacro(tr("Build drum pattern chain"));
+    for (const MidiClip& pattern : chain)
+    {
+        undoStack.push(new ClipDuplicateCommand(this, trackId, pattern, insertIndex,
+                                                previousTrackId, previousClipId));
+        ++insertIndex;
+    }
+    undoStack.endMacro();
+    statusBar()->showMessage(
+        tr("Added %1 patterns to the Playlist chain at bar %2")
+            .arg(chain.size()).arg(static_cast<qulonglong>(std::floor(firstBeat / barLength) + 1)),
+        4000);
 }
 
 quint64 MainWindow::applyClipListHistory(quint64 trackId, const MidiClip& clip,

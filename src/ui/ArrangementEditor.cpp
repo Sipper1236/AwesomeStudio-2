@@ -692,11 +692,15 @@ protected:
                 {
                     QMenu menu(this);
                     QAction* duplicateAction = menu.addAction(tr("Duplicate pattern"));
+                    QAction* patternChainAction = track.instrumentType == InstrumentType::DrumRack
+                        ? menu.addAction(tr("Build pattern chain…")) : nullptr;
                     menu.addSeparator();
                     QAction* removeAction = menu.addAction(tr("Remove pattern"));
                     QAction* chosen = menu.exec(event->globalPosition().toPoint());
                     if (chosen == duplicateAction)
                         emit owner->clipDuplicateRequested(track.id, clip.id);
+                    else if (patternChainAction != nullptr && chosen == patternChainAction)
+                        emit owner->patternChainRequested(track.id, clip.id);
                     else if (chosen == removeAction)
                         emit owner->clipRemoved(track.id, clip.id);
                 }

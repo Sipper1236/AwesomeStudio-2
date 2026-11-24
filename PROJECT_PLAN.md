@@ -29,6 +29,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Optional FLAC full-arrangement and beat-range export at 16-bit or 24-bit PCM
 - [x] Playlist with multi-track MIDI clips and basic mixer controls
 - [x] 16-step sequencer and synthesized drum rack
+- [x] Ordered drum pattern-chain builder that appends selected pattern copies to the next free Playlist bar in one undoable action
 - [x] Editable clip length and common time signatures
 - [x] Standard MIDI File import (formats 0–2 with PPQN or SMPTE) and format 0/1 export; format 2 sequences are arranged consecutively with tempo maps
 - [x] Count-in and metronome
