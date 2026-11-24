@@ -5960,6 +5960,31 @@ void MainWindow::refreshMixer()
         mixerBusMeters.push_back({static_cast<size_t>(busIndex), peakMeter});
         form->addRow(tr("Peak"), peakMeter);
 
+        connect(volume, &QSlider::sliderPressed, this, [this, busId, volume]
+        {
+            beginBusAutomationWrite(busId, false, volume->value() / 100.0f);
+        });
+        connect(volume, &QSlider::sliderReleased, this, [this, busId]
+        {
+            if (automationWriteSession.active && automationWriteSession.bus &&
+                automationWriteSession.busId == busId &&
+                automationWriteSession.parameter == mixerBusGainAutomationTarget &&
+                automationWriteModeControl->currentData().toInt() != 1)
+                finishAutomationWrite();
+        });
+        connect(pan, &QSlider::sliderPressed, this, [this, busId, pan]
+        {
+            beginBusAutomationWrite(busId, true, pan->value() / 100.0f);
+        });
+        connect(pan, &QSlider::sliderReleased, this, [this, busId]
+        {
+            if (automationWriteSession.active && automationWriteSession.bus &&
+                automationWriteSession.busId == busId &&
+                automationWriteSession.parameter == mixerBusPanAutomationTarget &&
+                automationWriteModeControl->currentData().toInt() != 1)
+                finishAutomationWrite();
+        });
+
         auto* sendsGroup = new QGroupBox(tr("Aux sends"), group);
         auto* sendsLayout = new QVBoxLayout(sendsGroup);
         sendsLayout->setContentsMargins(6, 6, 6, 6);
@@ -6122,27 +6147,83 @@ void MainWindow::refreshMixer()
                 return;
             }
         });
-        connect(volume, &QSlider::valueChanged, this, [this, busId, volumeLabel](int value)
+        connect(volume, &QSlider::valueChanged, this, [this, busId, volume, volumeLabel](int value)
         {
             for (MixerBus& bus : project.buses)
             {
                 if (bus.id != busId) continue;
-                bus.gain = value / 100.0f;
+                const float level = value / 100.0f;
                 volumeLabel->setText(tr("%1%").arg(value));
+                if (automationWriteSession.active && automationWriteSession.bus &&
+                    automationWriteSession.busId == busId &&
+                    automationWriteSession.parameter == mixerBusGainAutomationTarget)
+                {
+                    recordBusAutomationValue(busId, false, level);
+                    if (!volume->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                        automationWriteIdleTimer->start(250);
+                    settingsDirty = true;
+                    refreshDirtyState();
+                    return;
+                }
+                if (automationWriteAction->isChecked() &&
+                    automationLaneParameterControl->currentData().toInt() == mixerBusGainAutomationTarget &&
+                    audioEngine.isPlaying())
+                {
+                    beginBusAutomationWrite(busId, false, bus.gain);
+                    if (automationWriteSession.active && automationWriteSession.bus &&
+                        automationWriteSession.busId == busId)
+                    {
+                        recordBusAutomationValue(busId, false, level);
+                        if (!volume->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                            automationWriteIdleTimer->start(250);
+                        settingsDirty = true;
+                        refreshDirtyState();
+                        return;
+                    }
+                }
+                bus.gain = level;
                 audioEngine.setProject(project);
                 settingsDirty = true;
                 refreshDirtyState();
                 return;
             }
         });
-        connect(pan, &QSlider::valueChanged, this, [this, busId, panLabel](int value)
+        connect(pan, &QSlider::valueChanged, this, [this, busId, pan, panLabel](int value)
         {
             for (MixerBus& bus : project.buses)
             {
                 if (bus.id != busId) continue;
-                bus.pan = value / 100.0f;
+                const float balance = value / 100.0f;
                 panLabel->setText(value < -2 ? tr("L %1").arg(-value) :
                                   value > 2 ? tr("R %1").arg(value) : tr("Center"));
+                if (automationWriteSession.active && automationWriteSession.bus &&
+                    automationWriteSession.busId == busId &&
+                    automationWriteSession.parameter == mixerBusPanAutomationTarget)
+                {
+                    recordBusAutomationValue(busId, true, balance);
+                    if (!pan->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                        automationWriteIdleTimer->start(250);
+                    settingsDirty = true;
+                    refreshDirtyState();
+                    return;
+                }
+                if (automationWriteAction->isChecked() &&
+                    automationLaneParameterControl->currentData().toInt() == mixerBusPanAutomationTarget &&
+                    audioEngine.isPlaying())
+                {
+                    beginBusAutomationWrite(busId, true, bus.pan);
+                    if (automationWriteSession.active && automationWriteSession.bus &&
+                        automationWriteSession.busId == busId)
+                    {
+                        recordBusAutomationValue(busId, true, balance);
+                        if (!pan->isSliderDown() && automationWriteModeControl->currentData().toInt() != 1)
+                            automationWriteIdleTimer->start(250);
+                        settingsDirty = true;
+                        refreshDirtyState();
+                        return;
+                    }
+                }
+                bus.pan = balance;
                 audioEngine.setProject(project);
                 settingsDirty = true;
                 refreshDirtyState();
@@ -9070,6 +9151,7 @@ void MainWindow::refreshArrangementAutomationView()
     const float defaultValue = automationLaneParameterControl->itemData(index, Qt::UserRole + 3).toFloat();
     const QString pluginUri = automationLaneParameterControl->itemData(index, Qt::UserRole + 4).toString();
     const bool writeAutomationTarget = target == 0 || target == 1 ||
+        target == mixerBusGainAutomationTarget || target == mixerBusPanAutomationTarget ||
         (target >= trackEqLowGainAutomationTarget &&
          target <= trackEqHighCrossoverAutomationTarget) ||
         (target >= trackEqParametricAutomationTargetBase &&
@@ -9255,6 +9337,89 @@ void MainWindow::beginAutomationWrite(quint64 trackId, int parameter, float valu
         audioEngine.setLivePluginParameterOverride(trackId, effectIndex, parameterIndex, initialWriteValue);
 }
 
+void MainWindow::beginBusAutomationWrite(quint64 busId, bool pan, float value)
+{
+    const int target = pan ? mixerBusPanAutomationTarget : mixerBusGainAutomationTarget;
+    if (automationWriteSession.active || automationWriteAction == nullptr ||
+        !automationWriteAction->isChecked() || !audioEngine.isPlaying() ||
+        automationLaneParameterControl->currentData().toInt() != target)
+        return;
+    auto bus = std::find_if(project.buses.begin(), project.buses.end(),
+        [busId](const MixerBus& candidate) { return candidate.id == busId; });
+    const double beat = audioEngine.positionBeats();
+    if (bus == project.buses.end() || beat < 0.0)
+        return;
+
+    automationWriteSession.active = true;
+    automationWriteSession.changed = false;
+    automationWriteSession.bus = true;
+    automationWriteSession.busId = busId;
+    automationWriteSession.parameter = target;
+    automationWriteSession.minimum = pan ? -1.0f : 0.0f;
+    automationWriteSession.maximum = pan ? 1.0f : 2.0f;
+    automationWriteSession.parameterName = pan ? tr("mixer bus pan") : tr("mixer bus level");
+    automationWriteSession.initialValue = value;
+    automationWriteSession.baseValue = pan ? bus->pan : bus->gain;
+    automationWriteSession.lastValue = value;
+    automationWriteSession.lastSampleBeat = beat;
+    automationWriteSession.lastPointBeat = beat;
+    automationWriteSession.before = pan ? bus->panAutomation : bus->gainAutomation;
+    const float initialAutomationValue = automationValueAt(
+        automationWriteSession.before, beat, automationWriteSession.baseValue);
+    const bool trim = automationWriteModeControl->currentData().toInt() == 2;
+    if (!upsertAutomationPoint(pan ? bus->panAutomation : bus->gainAutomation, beat,
+                               trim ? initialAutomationValue : value))
+    {
+        automationWriteSession = {};
+        statusBar()->showMessage(tr("This automation lane has reached the 10,000 keyframe limit."), 4000);
+        return;
+    }
+    audioEngine.setProject(project);
+}
+
+void MainWindow::recordBusAutomationValue(quint64 busId, bool pan, float value)
+{
+    const int target = pan ? mixerBusPanAutomationTarget : mixerBusGainAutomationTarget;
+    if (!automationWriteSession.active || !automationWriteSession.bus ||
+        automationWriteSession.busId != busId || automationWriteSession.parameter != target)
+        return;
+    const double beat = audioEngine.positionBeats();
+    if (beat < 0.0)
+        return;
+    auto bus = std::find_if(project.buses.begin(), project.buses.end(),
+        [busId](const MixerBus& candidate) { return candidate.id == busId; });
+    if (bus == project.buses.end())
+        return;
+    QVector<AutomationPoint>& points = pan ? bus->panAutomation : bus->gainAutomation;
+    const bool trim = automationWriteModeControl->currentData().toInt() == 2;
+    const float base = automationValueAt(automationWriteSession.before, beat,
+                                         automationWriteSession.baseValue);
+    const float output = trim
+        ? std::clamp(base + value - automationWriteSession.initialValue,
+                     automationWriteSession.minimum, automationWriteSession.maximum)
+        : value;
+    if (beat + 1.0e-6 < automationWriteSession.lastSampleBeat)
+    {
+        automationWriteSession.lastPointBeat = -1.0;
+        automationWriteSession.lastSampleBeat = -1.0;
+    }
+    double writeBeat = beat;
+    const bool coalesce = automationWriteSession.lastPointBeat >= 0.0 &&
+        beat >= automationWriteSession.lastPointBeat &&
+        beat - automationWriteSession.lastPointBeat < automationWritePointSpacingBeats;
+    if (coalesce)
+        writeBeat = automationWriteSession.lastPointBeat;
+    if (!upsertAutomationPoint(points, writeBeat, output))
+        statusBar()->showMessage(tr("This automation lane has reached the 10,000 keyframe limit."), 4000);
+    else if (!coalesce)
+        automationWriteSession.lastPointBeat = writeBeat;
+    automationWriteSession.lastSampleBeat = beat;
+    automationWriteSession.changed = automationWriteSession.changed ||
+        (trim ? std::abs(output - base) : std::abs(value - automationWriteSession.initialValue)) > 1.0e-6f;
+    automationWriteSession.lastValue = value;
+    audioEngine.setProject(project);
+}
+
 void MainWindow::recordAutomationValue(quint64 trackId, int parameter, float value)
 {
     if (!automationWriteSession.active || automationWriteSession.trackId != trackId ||
@@ -9319,6 +9484,27 @@ void MainWindow::finishAutomationWrite()
     automationWriteIdleTimer->stop();
     AutomationWriteSession session = automationWriteSession;
     automationWriteSession = {};
+    if (session.bus)
+    {
+        auto bus = std::find_if(project.buses.begin(), project.buses.end(),
+            [&session](const MixerBus& candidate) { return candidate.id == session.busId; });
+        if (bus == project.buses.end())
+            return;
+        QVector<AutomationPoint>& current = session.parameter == mixerBusPanAutomationTarget
+            ? bus->panAutomation : bus->gainAutomation;
+        if (!session.changed || sameAutomationPoints(session.before, current))
+        {
+            current = session.before;
+            audioEngine.setProject(project);
+            return;
+        }
+        const QVector<AutomationPoint> after = current;
+        undoStack.push(new BusAutomationEditCommand(this, session.busId,
+            session.parameter == mixerBusPanAutomationTarget, session.before, after));
+        statusBar()->showMessage(tr("Recorded %1 automation for %2")
+            .arg(session.parameterName, bus->name), 2500);
+        return;
+    }
     if (session.pluginUri.isEmpty() &&
         (session.parameter == synthFilterCutoffAutomationTarget ||
          session.parameter == synthFilterResonanceAutomationTarget))

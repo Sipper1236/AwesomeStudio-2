@@ -208,6 +208,8 @@ private:
                               float minimum = 0.0f, float maximum = 1.0f,
                               const QString& parameterName = QString());
     void recordAutomationValue(quint64 trackId, int parameter, float value);
+    void beginBusAutomationWrite(quint64 busId, bool pan, float value);
+    void recordBusAutomationValue(quint64 busId, bool pan, float value);
     void finishAutomationWrite();
     void importDrumSample(int pad);
     void clearDrumSample(int pad);
@@ -504,7 +506,9 @@ private:
     {
         bool active = false;
         bool changed = false;
+        bool bus = false;
         quint64 trackId = 0;
+        quint64 busId = 0;
         int parameter = 0;
         QString pluginUri;
         qsizetype effectIndex = -1;
