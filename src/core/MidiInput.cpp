@@ -1,9 +1,11 @@
 #include "MidiInput.h"
 
+#include <QByteArray>
 #include <QStringList>
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 
@@ -21,6 +23,29 @@
 #include <mmsystem.h>
 #endif
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreMIDI/CoreMIDI.h>
+
+namespace
+{
+QString coreMidiStringProperty(MIDIObjectRef object, CFStringRef property)
+{
+    CFStringRef value = nullptr;
+    if (MIDIObjectGetStringProperty(object, property, &value) != noErr || value == nullptr)
+        return {};
+
+    const CFIndex maximumLength =
+        CFStringGetMaximumSizeForEncoding(CFStringGetLength(value), kCFStringEncodingUTF8) + 1;
+    QByteArray utf8(static_cast<qsizetype>(maximumLength), '\0');
+    const bool converted = CFStringGetCString(
+        value, utf8.data(), static_cast<CFIndex>(utf8.size()), kCFStringEncodingUTF8);
+    CFRelease(value);
+    return converted ? QString::fromUtf8(utf8.constData()) : QString();
+}
+}
+#endif
+
 struct MidiInput::Impl
 {
 #ifdef AWESOME_STUDIO_HAS_ALSA
@@ -35,8 +60,23 @@ struct MidiInput::Impl
 
 #ifdef _WIN32
     HMIDIIN winMmHandle = nullptr;
-    std::mutex winMmMutex;
-    std::vector<MidiInputEvent> winMmEvents;
+#endif
+
+#ifdef __APPLE__
+    MIDIClientRef coreMidiClient = 0;
+    MIDIPortRef coreMidiInputPort = 0;
+    MIDIEndpointRef coreMidiSource = 0;
+    Byte coreMidiRunningStatus = 0;
+    Byte coreMidiPendingStatus = 0;
+    Byte coreMidiExpectedData = 0;
+    Byte coreMidiReceivedData = 0;
+    Byte coreMidiFirstData = 0;
+    bool coreMidiInSysEx = false;
+#endif
+
+#if defined(_WIN32) || defined(__APPLE__)
+    std::mutex platformMidiMutex;
+    std::vector<MidiInputEvent> platformMidiEvents;
     std::array<int, 16> nrpnMsb;
     std::array<int, 16> nrpnLsb;
     std::array<int, 16> nrpnDataMsb{};
@@ -51,7 +91,7 @@ struct MidiInput::Impl
         nrpnDataMsb.fill(0);
         nrpnDataLsb.fill(0);
 #endif
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
         nrpnMsb.fill(-1);
         nrpnLsb.fill(-1);
         nrpnDataMsb.fill(0);
@@ -59,16 +99,8 @@ struct MidiInput::Impl
 #endif
     }
 
-#ifdef _WIN32
-    static void CALLBACK midiInputCallback(HMIDIIN, UINT message, DWORD_PTR instance,
-                                           DWORD_PTR parameter1, DWORD_PTR)
-    {
-        if (message != MIM_DATA || instance == 0)
-            return;
-        reinterpret_cast<Impl*>(instance)->handleShortMessage(static_cast<DWORD>(parameter1));
-    }
-
-    void handleShortMessage(DWORD packedMessage)
+#if defined(_WIN32) || defined(__APPLE__)
+    void queuePackedMessage(std::uint32_t packedMessage)
     {
         const int status = static_cast<int>(packedMessage & 0xff);
         const int messageType = status & 0xf0;
@@ -76,7 +108,6 @@ struct MidiInput::Impl
         const int data1 = static_cast<int>((packedMessage >> 8) & 0x7f);
         const int data2 = static_cast<int>((packedMessage >> 16) & 0x7f);
 
-        std::lock_guard<std::mutex> lock(winMmMutex);
         if (messageType == 0x80 || messageType == 0x90)
         {
             MidiInputEvent event;
@@ -84,7 +115,7 @@ struct MidiInput::Impl
             event.pitch = data1;
             event.velocity = data2;
             event.noteOn = messageType == 0x90 && data2 > 0;
-            winMmEvents.push_back(event);
+            platformMidiEvents.push_back(event);
         }
         else if (messageType == 0xb0)
         {
@@ -125,12 +156,12 @@ struct MidiInput::Impl
                                           nrpnLsb[channelIndex];
                 control.parameterValue = (nrpnDataMsb[channelIndex] << 7) |
                                          nrpnDataLsb[channelIndex];
-                winMmEvents.push_back(control);
+                platformMidiEvents.push_back(control);
             }
             else
             {
                 control.controlChange = true;
-                winMmEvents.push_back(control);
+                platformMidiEvents.push_back(control);
             }
         }
         else if (messageType == 0xe0)
@@ -139,7 +170,125 @@ struct MidiInput::Impl
             bend.channel = channel;
             bend.pitchBend = true;
             bend.value = data1 | (data2 << 7);
-            winMmEvents.push_back(bend);
+            platformMidiEvents.push_back(bend);
+        }
+    }
+
+    void handleShortMessage(std::uint32_t packedMessage)
+    {
+        std::lock_guard<std::mutex> lock(platformMidiMutex);
+        queuePackedMessage(packedMessage);
+    }
+#endif
+
+#ifdef _WIN32
+    static void CALLBACK midiInputCallback(HMIDIIN, UINT message, DWORD_PTR instance,
+                                           DWORD_PTR parameter1, DWORD_PTR)
+    {
+        if (message != MIM_DATA || instance == 0)
+            return;
+        reinterpret_cast<Impl*>(instance)->handleShortMessage(static_cast<std::uint32_t>(parameter1));
+    }
+#endif
+
+#ifdef __APPLE__
+    static void coreMidiReadCallback(const MIDIPacketList* packetList, void* readProcRefCon,
+                                     void*)
+    {
+        if (packetList == nullptr || readProcRefCon == nullptr)
+            return;
+
+        auto* self = static_cast<Impl*>(readProcRefCon);
+        const MIDIPacket* packet = &packetList->packet[0];
+        for (UInt32 packetIndex = 0; packetIndex < packetList->numPackets; ++packetIndex)
+        {
+            self->handleMidiBytes(packet->data, packet->length);
+            packet = MIDIPacketNext(packet);
+        }
+    }
+
+    void handleMidiBytes(const Byte* bytes, UInt16 length)
+    {
+        std::lock_guard<std::mutex> lock(platformMidiMutex);
+        for (UInt16 index = 0; index < length; ++index)
+        {
+            const Byte value = bytes[index];
+            if (value >= 0xf8)
+                continue;
+
+            if ((value & 0x80) != 0)
+            {
+                if (coreMidiInSysEx)
+                {
+                    if (value == 0xf7)
+                    {
+                        coreMidiInSysEx = false;
+                        continue;
+                    }
+                    coreMidiInSysEx = false;
+                }
+
+                coreMidiReceivedData = 0;
+                if (value == 0xf0)
+                {
+                    coreMidiInSysEx = true;
+                    coreMidiRunningStatus = 0;
+                    coreMidiPendingStatus = 0;
+                    coreMidiExpectedData = 0;
+                }
+                else if (value >= 0xf0)
+                {
+                    coreMidiRunningStatus = 0;
+                    coreMidiPendingStatus = value;
+                    coreMidiExpectedData = value == 0xf1 || value == 0xf3 ? 1
+                        : value == 0xf2 ? 2 : 0;
+                    if (coreMidiExpectedData == 0)
+                        coreMidiPendingStatus = 0;
+                }
+                else
+                {
+                    coreMidiRunningStatus = value;
+                    coreMidiPendingStatus = value;
+                    const int messageType = value & 0xf0;
+                    coreMidiExpectedData = messageType == 0xc0 || messageType == 0xd0 ? 1 : 2;
+                }
+                continue;
+            }
+
+            if (coreMidiInSysEx)
+                continue;
+            if (coreMidiPendingStatus == 0)
+            {
+                if (coreMidiRunningStatus == 0)
+                    continue;
+                coreMidiPendingStatus = coreMidiRunningStatus;
+                const int messageType = coreMidiRunningStatus & 0xf0;
+                coreMidiExpectedData = messageType == 0xc0 || messageType == 0xd0 ? 1 : 2;
+                coreMidiReceivedData = 0;
+            }
+
+            if (coreMidiReceivedData == 0)
+            {
+                coreMidiFirstData = value;
+                coreMidiReceivedData = 1;
+                if (coreMidiExpectedData == 1)
+                {
+                    queuePackedMessage(static_cast<std::uint32_t>(coreMidiPendingStatus) |
+                                       (static_cast<std::uint32_t>(coreMidiFirstData) << 8));
+                    coreMidiPendingStatus = coreMidiPendingStatus < 0xf0
+                        ? coreMidiRunningStatus : 0;
+                    coreMidiReceivedData = 0;
+                }
+            }
+            else
+            {
+                queuePackedMessage(static_cast<std::uint32_t>(coreMidiPendingStatus) |
+                                   (static_cast<std::uint32_t>(coreMidiFirstData) << 8) |
+                                   (static_cast<std::uint32_t>(value) << 16));
+                coreMidiPendingStatus = coreMidiPendingStatus < 0xf0
+                    ? coreMidiRunningStatus : 0;
+                coreMidiReceivedData = 0;
+            }
         }
     }
 #endif
@@ -161,6 +310,8 @@ bool MidiInput::isSupported()
 #ifdef AWESOME_STUDIO_HAS_ALSA
     return true;
 #elif defined(_WIN32)
+    return true;
+#elif defined(__APPLE__)
     return true;
 #else
     return false;
@@ -216,6 +367,24 @@ QList<MidiInputPort> MidiInput::availablePorts(QString* error)
             continue;
         ports.push_back({QStringLiteral("winmm:%1").arg(device),
                          QString::fromWCharArray(capabilities.szPname)});
+    }
+#elif defined(__APPLE__)
+    const ItemCount sourceCount = MIDIGetNumberOfSources();
+    for (ItemCount index = 0; index < sourceCount; ++index)
+    {
+        const MIDIEndpointRef source = MIDIGetSource(index);
+        if (source == 0)
+            continue;
+
+        MIDIUniqueID uniqueId = 0;
+        if (MIDIObjectGetIntegerProperty(source, kMIDIPropertyUniqueID, &uniqueId) != noErr)
+            continue;
+        QString name = coreMidiStringProperty(source, kMIDIPropertyDisplayName);
+        if (name.isEmpty())
+            name = coreMidiStringProperty(source, kMIDIPropertyName);
+        if (name.isEmpty())
+            name = QStringLiteral("MIDI input %1").arg(uniqueId);
+        ports.push_back({QStringLiteral("coremidi:%1").arg(uniqueId), name});
     }
 #else
     if (error != nullptr)
@@ -310,8 +479,8 @@ bool MidiInput::connectTo(const QString& portId, QString* error)
     }
 
     {
-        std::lock_guard<std::mutex> lock(impl->winMmMutex);
-        impl->winMmEvents.clear();
+        std::lock_guard<std::mutex> lock(impl->platformMidiMutex);
+        impl->platformMidiEvents.clear();
         impl->nrpnMsb.fill(-1);
         impl->nrpnLsb.fill(-1);
         impl->nrpnDataMsb.fill(0);
@@ -328,6 +497,96 @@ bool MidiInput::connectTo(const QString& portId, QString* error)
         if (error != nullptr)
             *error = impl->error;
         return false;
+    }
+    impl->error.clear();
+    return true;
+#elif defined(__APPLE__)
+    if (!portId.startsWith(QStringLiteral("coremidi:")))
+    {
+        impl->error = QStringLiteral("The selected MIDI input port is invalid.");
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    bool uniqueIdOk = false;
+    const qlonglong requestedId = portId.mid(9).toLongLong(&uniqueIdOk);
+    if (!uniqueIdOk)
+    {
+        impl->error = QStringLiteral("The selected MIDI input port is invalid.");
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    const ItemCount sourceCount = MIDIGetNumberOfSources();
+    for (ItemCount index = 0; index < sourceCount; ++index)
+    {
+        const MIDIEndpointRef source = MIDIGetSource(index);
+        MIDIUniqueID uniqueId = 0;
+        if (source != 0 &&
+            MIDIObjectGetIntegerProperty(source, kMIDIPropertyUniqueID, &uniqueId) == noErr &&
+            static_cast<qlonglong>(uniqueId) == requestedId)
+        {
+            impl->coreMidiSource = source;
+            break;
+        }
+    }
+    if (impl->coreMidiSource == 0)
+    {
+        impl->error = QStringLiteral("The selected CoreMIDI source is no longer available.");
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    OSStatus result = MIDIClientCreate(CFSTR("Awesome Studio"), nullptr, nullptr,
+                                       &impl->coreMidiClient);
+    if (result != noErr)
+    {
+        impl->coreMidiSource = 0;
+        impl->error = QStringLiteral("Could not create a CoreMIDI client (error %1).")
+                          .arg(static_cast<int>(result));
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    result = MIDIInputPortCreate(impl->coreMidiClient, CFSTR("MIDI Input"),
+                                 &Impl::coreMidiReadCallback, impl.get(),
+                                 &impl->coreMidiInputPort);
+    if (result != noErr)
+    {
+        impl->error = QStringLiteral("Could not create a CoreMIDI input port (error %1).")
+                          .arg(static_cast<int>(result));
+        disconnect();
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+
+    result = MIDIPortConnectSource(impl->coreMidiInputPort, impl->coreMidiSource, nullptr);
+    if (result != noErr)
+    {
+        impl->error = QStringLiteral("Could not connect to the CoreMIDI source (error %1).")
+                          .arg(static_cast<int>(result));
+        disconnect();
+        if (error != nullptr)
+            *error = impl->error;
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(impl->platformMidiMutex);
+        impl->platformMidiEvents.clear();
+        impl->nrpnMsb.fill(-1);
+        impl->nrpnLsb.fill(-1);
+        impl->nrpnDataMsb.fill(0);
+        impl->nrpnDataLsb.fill(0);
+        impl->coreMidiRunningStatus = 0;
+        impl->coreMidiPendingStatus = 0;
+        impl->coreMidiExpectedData = 0;
+        impl->coreMidiReceivedData = 0;
+        impl->coreMidiInSysEx = false;
     }
     impl->error.clear();
     return true;
@@ -363,12 +622,40 @@ void MidiInput::disconnect()
         impl->winMmHandle = nullptr;
     }
     {
-        std::lock_guard<std::mutex> lock(impl->winMmMutex);
-        impl->winMmEvents.clear();
+        std::lock_guard<std::mutex> lock(impl->platformMidiMutex);
+        impl->platformMidiEvents.clear();
         impl->nrpnMsb.fill(-1);
         impl->nrpnLsb.fill(-1);
         impl->nrpnDataMsb.fill(0);
         impl->nrpnDataLsb.fill(0);
+    }
+#endif
+#ifdef __APPLE__
+    if (impl->coreMidiInputPort != 0 && impl->coreMidiSource != 0)
+        MIDIPortDisconnectSource(impl->coreMidiInputPort, impl->coreMidiSource);
+    if (impl->coreMidiInputPort != 0)
+    {
+        MIDIPortDispose(impl->coreMidiInputPort);
+        impl->coreMidiInputPort = 0;
+    }
+    if (impl->coreMidiClient != 0)
+    {
+        MIDIClientDispose(impl->coreMidiClient);
+        impl->coreMidiClient = 0;
+    }
+    impl->coreMidiSource = 0;
+    {
+        std::lock_guard<std::mutex> lock(impl->platformMidiMutex);
+        impl->platformMidiEvents.clear();
+        impl->nrpnMsb.fill(-1);
+        impl->nrpnLsb.fill(-1);
+        impl->nrpnDataMsb.fill(0);
+        impl->nrpnDataLsb.fill(0);
+        impl->coreMidiRunningStatus = 0;
+        impl->coreMidiPendingStatus = 0;
+        impl->coreMidiExpectedData = 0;
+        impl->coreMidiReceivedData = 0;
+        impl->coreMidiInSysEx = false;
     }
 #endif
 }
@@ -379,6 +666,8 @@ bool MidiInput::isConnected() const
     return impl->sequencer != nullptr;
 #elif defined(_WIN32)
     return impl->winMmHandle != nullptr;
+#elif defined(__APPLE__)
+    return impl->coreMidiInputPort != 0 && impl->coreMidiSource != 0;
 #else
     return false;
 #endif
@@ -463,11 +752,11 @@ QVector<MidiInputEvent> MidiInput::readAvailable()
         snd_seq_free_event(event);
     }
 #endif
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
     std::vector<MidiInputEvent> pendingEvents;
     {
-        std::lock_guard<std::mutex> lock(impl->winMmMutex);
-        pendingEvents.swap(impl->winMmEvents);
+        std::lock_guard<std::mutex> lock(impl->platformMidiMutex);
+        pendingEvents.swap(impl->platformMidiEvents);
     }
     for (const MidiInputEvent& event : pendingEvents)
         events.push_back(event);

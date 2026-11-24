@@ -59,6 +59,18 @@ target_link_libraries(AwesomeStudio PRIVATE ${CMAKE_DL_LIBS})
 if(WIN32)
     target_link_libraries(AwesomeStudio PRIVATE winmm)
 endif()
+if(APPLE)
+    find_library(COREMIDI_FRAMEWORK CoreMIDI)
+    find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+    if(NOT COREMIDI_FRAMEWORK OR NOT COREFOUNDATION_FRAMEWORK)
+        message(FATAL_ERROR "CoreMIDI and CoreFoundation frameworks are required on macOS.")
+    endif()
+    target_link_libraries(AwesomeStudio PRIVATE
+        ${COREMIDI_FRAMEWORK}
+        ${COREFOUNDATION_FRAMEWORK}
+    )
+    set_target_properties(AwesomeStudio PROPERTIES MACOSX_BUNDLE TRUE)
+endif()
 target_compile_features(AwesomeStudio PRIVATE cxx_std_17)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
