@@ -278,7 +278,7 @@ bool parseTrack(const QByteArray& bytes, int start, int length, int ppqn,
                 {
                     const int denominator = 1 << exponent;
                     track.timeSignatureEvents.push_back({absoluteTick, numerator, denominator});
-                    if (!foundTimeSignature)
+                    if (absoluteTick == 0 && !foundTimeSignature)
                     {
                         beatsPerBar = numerator;
                         beatUnit = denominator;
