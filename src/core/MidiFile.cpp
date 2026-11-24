@@ -1155,9 +1155,11 @@ bool MidiFile::load(const QString& path, ProjectData& project, QString* error)
             trackEndBeat = std::max(trackEndBeat, bendBeat);
             longestBeat = std::max(longestBeat, trackStartBeat + bendBeat);
         }
-        const double barLength = loaded.quarterNotesPerBarAtBeat(trackStartBeat + trackEndBeat);
-        clip.lengthBeats = std::clamp(std::ceil(trackEndBeat / barLength) * barLength,
-                                      std::max(0.25, barLength), maximumSongBeats);
+        const double clipEndBeat = loaded.barBoundaryAtOrAfter(trackStartBeat + trackEndBeat) -
+                                   trackStartBeat;
+        const double firstBarLength = loaded.patternLengthBeatsAt(trackStartBeat, 1);
+        clip.lengthBeats = std::clamp(clipEndBeat,
+                                      std::max(0.25, firstBarLength), maximumSongBeats);
         instrument.clips.push_back(std::move(clip));
         loaded.tracks.push_back(std::move(instrument));
     }

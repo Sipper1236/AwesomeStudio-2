@@ -7169,7 +7169,7 @@ void MainWindow::addDrumTrack()
     MidiClip clip;
     clip.id = nextClipId();
     clip.name = tr("Beat %1").arg(clip.id);
-    clip.lengthBeats = project.patternLengthBeats();
+    clip.lengthBeats = project.patternLengthBeatsAt(clip.startBeat, project.bars);
     track.clips.push_back(std::move(clip));
     project.tracks.push_back(std::move(track));
     selectedTrackId = project.tracks.last().id;
@@ -7627,7 +7627,7 @@ void MainWindow::addClipAt(quint64 trackId, double startBeat)
     clip.id = nextClipId();
     clip.name = tr("Pattern %1").arg(clip.id);
     clip.startBeat = std::max(0.0, startBeat);
-    clip.lengthBeats = project.patternLengthBeats();
+    clip.lengthBeats = project.patternLengthBeatsAt(clip.startBeat, project.bars);
     track->clips.push_back(clip);
     selectedTrackId = trackId;
     selectedClipId = clip.id;
@@ -7655,8 +7655,7 @@ void MainWindow::addNewPattern()
     double startBeat = 0.0;
     for (const MidiClip& clip : track->clips)
         startBeat = std::max(startBeat, clip.startBeat + clip.lengthBeats);
-    const double barLength = project.quarterNotesPerBar();
-    startBeat = std::ceil(startBeat / barLength) * barLength;
+    startBeat = project.barBoundaryAtOrAfter(startBeat);
     addClipAt(track->id, startBeat);
 }
 
@@ -7861,13 +7860,7 @@ void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
     double endBeat = 0.0;
     for (const MidiClip& pattern : track->clips)
         endBeat = std::max(endBeat, pattern.startBeat + pattern.lengthBeats);
-    const double barLength = project.quarterNotesPerBar();
-    if (!std::isfinite(barLength) || barLength <= 0.0)
-    {
-        statusBar()->showMessage(tr("The current time signature cannot place a pattern chain"), 3500);
-        return;
-    }
-    double startBeat = std::ceil(endBeat / barLength) * barLength;
+    double startBeat = project.barBoundaryAtOrAfter(endBeat);
     if (!std::isfinite(startBeat))
     {
         statusBar()->showMessage(tr("The current time signature cannot place a pattern chain"), 3500);
@@ -7902,8 +7895,8 @@ void MainWindow::buildDrumPatternChain(quint64 trackId, quint64 clipId)
     }
     undoStack.endMacro();
     statusBar()->showMessage(
-        tr("Added %1 patterns to the Playlist chain at bar %2")
-            .arg(chain.size()).arg(static_cast<qulonglong>(std::floor(firstBeat / barLength) + 1)),
+        tr("Added %1 patterns to the Playlist chain at beat %2")
+            .arg(chain.size()).arg(firstBeat, 0, 'f', 2),
         4000);
 }
 
@@ -13188,7 +13181,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
         MidiClip newClip;
         newClip.id = nextClipId();
         newClip.name = tr("MIDI Take");
-        newClip.lengthBeats = project.patternLengthBeats();
+        newClip.lengthBeats = project.patternLengthBeatsAt(newClip.startBeat, project.bars);
         track->clips.push_back(std::move(newClip));
         clip = &track->clips.last();
         createdClip = true;
@@ -13253,8 +13246,7 @@ void MainWindow::finishMidiRecording(bool keepTake)
             return left.beat < right.beat;
         });
 
-    const double barLength = project.quarterNotesPerBar();
-    const double afterLength = std::clamp(std::ceil(maximumEndBeat / barLength) * barLength,
+    const double afterLength = std::clamp(project.barBoundaryAtOrAfter(maximumEndBeat),
                                           std::max(0.25, beforeLength), 16384.0);
     clip->lengthBeats = afterLength;
     const quint64 targetClipId = clip->id;

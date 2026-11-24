@@ -498,6 +498,8 @@ struct ProjectData
     QVector<InstrumentTrack> tracks;
 
     double patternLengthBeats() const;
+    double patternLengthBeatsAt(double startBeat, int barCount) const;
+    double barBoundaryAtOrAfter(double beat) const;
     double quarterNotesPerBar() const;
     double quarterNotesPerBarAtBeat(double beat) const;
     TimeSignatureChange timeSignatureAtBeat(double beat) const;

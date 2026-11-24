@@ -296,9 +296,14 @@ bool TimeSignatureChange::operator==(const TimeSignatureChange& other) const
 
 double ProjectData::patternLengthBeats() const
 {
-    double length = 0.0;
-    double beat = 0.0;
-    for (int bar = 0; bar < bars; ++bar)
+    return patternLengthBeatsAt(0.0, bars);
+}
+
+double ProjectData::patternLengthBeatsAt(double startBeat, int barCount) const
+{
+    double beat = std::max(0.0, startBeat);
+    const double start = beat;
+    for (int bar = 0; bar < std::max(0, barCount); ++bar)
     {
         double next = beat + quarterNotesPerBarAtBeat(beat);
         for (const TimeSignatureChange& change : timeSignatureChanges)
@@ -307,10 +312,37 @@ double ProjectData::patternLengthBeats() const
                 next = change.beat;
                 break;
             }
-        length += next - beat;
+        if (next <= beat + 1.0e-9)
+            break;
         beat = next;
     }
-    return length;
+    return beat - start;
+}
+
+double ProjectData::barBoundaryAtOrAfter(double beat) const
+{
+    beat = std::max(0.0, beat);
+    double segmentStart = 0.0;
+    double barLength = quarterNotesPerBarAtBeat(0.0);
+    for (const TimeSignatureChange& change : timeSignatureChanges)
+    {
+        if (change.beat <= 1.0e-9)
+            continue;
+        if (change.beat > beat + 1.0e-9)
+            break;
+        segmentStart = change.beat;
+        barLength = static_cast<double>(change.beatsPerBar) * 4.0 / change.beatUnit;
+    }
+    if (!std::isfinite(barLength) || barLength <= 0.0)
+        return beat;
+    double boundary = segmentStart +
+        std::ceil((beat - segmentStart) / barLength - 1.0e-9) * barLength;
+    for (const TimeSignatureChange& change : timeSignatureChanges)
+    {
+        if (change.beat > beat + 1.0e-9 && change.beat < boundary - 1.0e-9)
+            return change.beat;
+    }
+    return std::max(beat, boundary);
 }
 
 double ProjectData::quarterNotesPerBar() const
