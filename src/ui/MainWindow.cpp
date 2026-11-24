@@ -1587,6 +1587,14 @@ QString activeAudioRecordingRecoveryManifestPath()
 
 bool saveActiveAudioRecordingRecoveryManifest(const QString& originalPath,
                                               const QString& recoveryPath,
+                                              const QString& projectPath,
+                                              quint64 targetTrackId,
+                                              double startBeat,
+                                              double inputCompensationMs,
+                                              bool punchEnabled,
+                                              double punchInBeat,
+                                              double punchOutBeat,
+                                              const ProjectData& project,
                                               QString* error)
 {
     QSaveFile file(activeAudioRecordingRecoveryManifestPath());
@@ -1596,11 +1604,33 @@ bool saveActiveAudioRecordingRecoveryManifest(const QString& originalPath,
             *error = file.errorString();
         return false;
     }
+    QJsonArray tempoChanges;
+    for (const TempoChange& change : project.tempoChanges)
+        tempoChanges.append(QJsonObject{{QStringLiteral("beat"), change.beat},
+                                        {QStringLiteral("bpm"), change.bpm},
+                                        {QStringLiteral("rampFromPrevious"), change.rampFromPrevious}});
+    QJsonArray timeSignatureChanges;
+    for (const TimeSignatureChange& change : project.timeSignatureChanges)
+        timeSignatureChanges.append(QJsonObject{{QStringLiteral("beat"), change.beat},
+                                               {QStringLiteral("beatsPerBar"), change.beatsPerBar},
+                                               {QStringLiteral("beatUnit"), change.beatUnit}});
     const QJsonObject manifest{
-        {QStringLiteral("version"), 1},
+        {QStringLiteral("version"), 2},
         {QStringLiteral("originalPath"), QFileInfo(originalPath).absoluteFilePath()},
         {QStringLiteral("recoveryPath"), QFileInfo(recoveryPath).absoluteFilePath()},
-        {QStringLiteral("startedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}
+        {QStringLiteral("projectPath"), projectPath},
+        {QStringLiteral("startedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+        {QStringLiteral("targetTrackId"), QString::number(targetTrackId)},
+        {QStringLiteral("startBeat"), startBeat},
+        {QStringLiteral("inputCompensationMs"), inputCompensationMs},
+        {QStringLiteral("punchEnabled"), punchEnabled},
+        {QStringLiteral("punchInBeat"), punchInBeat},
+        {QStringLiteral("punchOutBeat"), punchOutBeat},
+        {QStringLiteral("projectTempoBpm"), project.tempoBpm},
+        {QStringLiteral("projectBeatsPerBar"), project.beatsPerBar},
+        {QStringLiteral("projectBeatUnit"), project.beatUnit},
+        {QStringLiteral("projectTempoChanges"), tempoChanges},
+        {QStringLiteral("projectTimeSignatureChanges"), timeSignatureChanges}
     };
     const QByteArray bytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
     if (file.write(bytes) != bytes.size() || !file.commit())
@@ -10799,8 +10829,10 @@ void MainWindow::offerInterruptedAudioRecordingRecovery()
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(manifestFile.readAll(), &parseError);
     manifestFile.close();
+    const int manifestVersion = document.isObject()
+        ? document.object().value(QStringLiteral("version")).toInt() : 0;
     if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
-        document.object().value(QStringLiteral("version")).toInt() != 1)
+        (manifestVersion != 1 && manifestVersion != 2))
     {
         statusBar()->showMessage(tr("An interrupted recording recovery journal is damaged."), 7000);
         QFile::remove(manifestPath);
@@ -10810,6 +10842,8 @@ void MainWindow::offerInterruptedAudioRecordingRecovery()
     const QString originalPath = manifest.value(QStringLiteral("originalPath")).toString();
     const QString recoveryPath = manifest.value(QStringLiteral("recoveryPath")).toString();
     if (originalPath.isEmpty() || recoveryPath.isEmpty() ||
+        QFileInfo(originalPath).absoluteFilePath() + QStringLiteral(".recording-recovery") !=
+            QFileInfo(recoveryPath).absoluteFilePath() ||
         !recoveryPath.endsWith(QStringLiteral(".recording-recovery")))
     {
         statusBar()->showMessage(tr("The interrupted recording recovery journal is invalid."), 7000);
@@ -10841,14 +10875,25 @@ void MainWindow::offerInterruptedAudioRecordingRecovery()
         }
         return;
     }
+    if (recoveredAsset->frameCount() <= 0)
+    {
+        QFile::remove(recoveryPath);
+        QFile::remove(manifestPath);
+        statusBar()->showMessage(tr("The interrupted recording contained no captured audio."), 5000);
+        return;
+    }
 
     QMessageBox prompt(QMessageBox::Warning, tr("Recover interrupted recording"),
-        tr("An interrupted recording contains about %1 seconds of audio. Save it as a separate recovered WAV file?")
+        manifestVersion == 1
+            ? tr("An interrupted recording contains about %1 seconds of audio. Save it as a recovered WAV file?")
+            : tr("An interrupted recording contains about %1 seconds of audio. Restore it to the Playlist using the recorded position and track when available?")
             .arg(recoveredAsset->sampleRate > 0
                 ? static_cast<double>(recoveredAsset->frameCount()) / recoveredAsset->sampleRate : 0.0,
                  0, 'f', 1),
         QMessageBox::NoButton, this);
-    QPushButton* saveButton = prompt.addButton(tr("Save recovered WAV"), QMessageBox::AcceptRole);
+    QPushButton* saveButton = prompt.addButton(
+        manifestVersion == 1 ? tr("Save recovered WAV") : tr("Restore to Playlist"),
+        QMessageBox::AcceptRole);
     QPushButton* discardButton = prompt.addButton(tr("Discard recording"), QMessageBox::DestructiveRole);
     prompt.addButton(tr("Decide later"), QMessageBox::RejectRole);
     prompt.setDefaultButton(saveButton);
@@ -10864,7 +10909,37 @@ void MainWindow::offerInterruptedAudioRecordingRecovery()
     if (prompt.clickedButton() != saveButton)
         return;
 
+    const QJsonObject originalManifest = document.object();
+    const bool punchEnabled = originalManifest.value(QStringLiteral("punchEnabled")).toBool();
+    const double startBeat = originalManifest.value(QStringLiteral("startBeat")).toDouble();
+    const double inputCompensationMs = originalManifest.value(QStringLiteral("inputCompensationMs")).toDouble();
+    const double punchInBeat = originalManifest.value(QStringLiteral("punchInBeat")).toDouble();
+    const double punchOutBeat = originalManifest.value(QStringLiteral("punchOutBeat")).toDouble();
+    const quint64 capturedTargetTrackId = originalManifest.value(QStringLiteral("targetTrackId")).toString().toULongLong();
+    ProjectData captureProject;
+    captureProject.tempoBpm = originalManifest.value(QStringLiteral("projectTempoBpm")).toDouble(120.0);
+    captureProject.beatsPerBar = originalManifest.value(QStringLiteral("projectBeatsPerBar")).toInt(4);
+    captureProject.beatUnit = originalManifest.value(QStringLiteral("projectBeatUnit")).toInt(4);
+    const QJsonArray savedTempo = originalManifest.value(QStringLiteral("projectTempoChanges")).toArray();
+    for (const QJsonValue& value : savedTempo)
+    {
+        const QJsonObject change = value.toObject();
+        captureProject.tempoChanges.push_back({change.value(QStringLiteral("beat")).toDouble(),
+            change.value(QStringLiteral("bpm")).toDouble(captureProject.tempoBpm),
+            change.value(QStringLiteral("rampFromPrevious")).toBool()});
+    }
+    const QJsonArray savedMeters = originalManifest.value(QStringLiteral("projectTimeSignatureChanges")).toArray();
+    for (const QJsonValue& value : savedMeters)
+    {
+        const QJsonObject change = value.toObject();
+        captureProject.timeSignatureChanges.push_back({change.value(QStringLiteral("beat")).toDouble(),
+            change.value(QStringLiteral("beatsPerBar")).toInt(captureProject.beatsPerBar),
+            change.value(QStringLiteral("beatUnit")).toInt(captureProject.beatUnit)});
+    }
+    captureProject.rebuildTempoCache();
+
     const QFileInfo originalInfo(originalPath);
+    const QFileInfo projectInfo(projectPath);
     QString recoveryDirectory = originalInfo.absolutePath();
     if (!QFileInfo(recoveryDirectory).isDir() || !QFileInfo(recoveryDirectory).isWritable())
     {
@@ -10917,8 +10992,202 @@ void MainWindow::offerInterruptedAudioRecordingRecovery()
 
     QFile::remove(recoveryPath);
     QFile::remove(manifestPath);
-    QMessageBox::information(this, tr("Recording recovered"),
-                             tr("The recovered WAV file was saved to:\n%1").arg(recoveredPath));
+
+    std::shared_ptr<const AudioAsset> savedAsset;
+    if (!AudioFile::loadWav(recoveredPath, savedAsset, &error))
+    {
+        QMessageBox::warning(this, tr("Recording recovered as WAV"),
+                             tr("The WAV was saved, but could not be reinserted into the Playlist: %1\n\n%2")
+                                 .arg(error, recoveredPath));
+        return;
+    }
+
+    const QString expectedProjectPath = originalManifest.value(QStringLiteral("projectPath")).toString();
+    if (expectedProjectPath.isEmpty() || QFileInfo(expectedProjectPath).absoluteFilePath() != projectInfo.absoluteFilePath() ||
+        projectPath.isEmpty())
+    {
+        QMessageBox::information(this, tr("Recording recovered as WAV"),
+            tr("The capture project is not currently open, so the recovered WAV was saved for manual import:\n%1")
+                .arg(recoveredPath));
+        return;
+    }
+
+    bool compatibleProject = true;
+    const QJsonArray currentTempo = [&] {
+        QJsonArray values;
+        for (const TempoChange& change : project.tempoChanges)
+            values.append(QJsonObject{{QStringLiteral("beat"), change.beat},
+                                      {QStringLiteral("bpm"), change.bpm},
+                                      {QStringLiteral("rampFromPrevious"), change.rampFromPrevious}});
+        return values;
+    }();
+    const QJsonArray currentMeters = [&] {
+        QJsonArray values;
+        for (const TimeSignatureChange& change : project.timeSignatureChanges)
+            values.append(QJsonObject{{QStringLiteral("beat"), change.beat},
+                                      {QStringLiteral("beatsPerBar"), change.beatsPerBar},
+                                      {QStringLiteral("beatUnit"), change.beatUnit}});
+        return values;
+    }();
+    if (project.tempoBpm != captureProject.tempoBpm || project.beatsPerBar != captureProject.beatsPerBar ||
+        project.beatUnit != captureProject.beatUnit || currentTempo != savedTempo || currentMeters != savedMeters)
+        compatibleProject = false;
+    if (!compatibleProject)
+    {
+        QMessageBox::information(this, tr("Recording recovered as WAV"),
+            tr("The project tempo or meter has changed since capture, so the WAV was saved for manual import:\n%1")
+                .arg(recoveredPath));
+        return;
+    }
+    const quint64 recoveredDecodedBytes = static_cast<quint64>(savedAsset->frameCount()) *
+                                           static_cast<quint64>(savedAsset->channelCount) *
+                                           sizeof(float);
+    const quint64 currentProjectAudioBytes = projectAudioBytes();
+    if (currentProjectAudioBytes > AudioFile::maximumProjectDecodedBytes ||
+        recoveredDecodedBytes > AudioFile::maximumProjectDecodedBytes - currentProjectAudioBytes)
+    {
+        QMessageBox::information(this, tr("Recording recovered as WAV"),
+            tr("The project has reached its decoded audio memory limit, so the recovered WAV was saved for manual import:\n%1")
+                .arg(recoveredPath));
+        return;
+    }
+
+    const InstrumentTrack* capturedTrack = capturedTargetTrackId == 0
+        ? nullptr : project.findTrack(capturedTargetTrackId);
+    const bool canUseCapturedTrack = capturedTrack != nullptr &&
+                                     capturedTrack->instrumentType == InstrumentType::Audio;
+
+    MidiClip recoveredClip;
+    recoveredClip.id = project.nextClipId();
+    recoveredClip.name = baseName;
+    recoveredClip.audioSourcePath = recoveredPath;
+    recoveredClip.audioSource = savedAsset;
+    const double durationSeconds = static_cast<double>(savedAsset->frameCount()) / savedAsset->sampleRate;
+    const double captureStartSeconds = captureProject.secondsAtBeat(startBeat) - inputCompensationMs / 1000.0;
+    const double captureEndSeconds = captureStartSeconds + durationSeconds;
+    if (punchEnabled)
+    {
+        const double punchStartSeconds = captureProject.secondsAtBeat(punchInBeat);
+        const double punchEndSeconds = captureProject.secondsAtBeat(punchOutBeat);
+        const double regionStartSeconds = std::max({0.0, captureStartSeconds, punchStartSeconds});
+        const double regionEndSeconds = std::min(captureEndSeconds, punchEndSeconds);
+        if (regionEndSeconds > regionStartSeconds && savedAsset->frameCount() > 0)
+        {
+            recoveredClip.startBeat = captureProject.beatAtSeconds(regionStartSeconds);
+            recoveredClip.audioStartFrame = std::clamp<qint64>(
+                static_cast<qint64>(std::llround((regionStartSeconds - captureStartSeconds) * savedAsset->sampleRate)),
+                0, savedAsset->frameCount() - 1);
+            recoveredClip.lengthBeats = std::max(0.25,
+                captureProject.beatAtSeconds(regionEndSeconds) - recoveredClip.startBeat);
+            recoveredClip.audioTakeEligible = capturedTargetTrackId != 0;
+            if (capturedTargetTrackId != 0)
+            {
+                quint64 groupId = 0;
+                if (canUseCapturedTrack)
+                {
+                    for (const MidiClip& existing : capturedTrack->clips)
+                    {
+                        if (!existing.isAudioRegion() || !existing.audioTakeEligible)
+                            continue;
+                        const quint64 existingGroup = existing.audioTakeGroupId != 0
+                            ? existing.audioTakeGroupId : existing.id;
+                        double rangeStart = existing.startBeat;
+                        double rangeEnd = audioRegionEndBeat(project, existing);
+                        for (const MidiClip& member : capturedTrack->clips)
+                        {
+                            const quint64 memberGroup = member.audioTakeGroupId != 0
+                                ? member.audioTakeGroupId : member.id;
+                            if (member.isAudioRegion() && member.audioTakeEligible && memberGroup == existingGroup)
+                            {
+                                rangeStart = std::min(rangeStart, member.startBeat);
+                                rangeEnd = std::max(rangeEnd, audioRegionEndBeat(project, member));
+                            }
+                        }
+                        if (std::abs(rangeStart - punchInBeat) <= 0.02 &&
+                            std::abs(rangeEnd - punchOutBeat) <= 0.02)
+                        {
+                            groupId = existingGroup;
+                            break;
+                        }
+                    }
+                }
+                if (groupId == 0)
+                {
+                    groupId = recoveredClip.id;
+                    recoveredClip.audioTakeActive = true;
+                }
+                else
+                {
+                    if (canUseCapturedTrack)
+                    {
+                        InstrumentTrack* groupTrack = project.findTrack(capturedTargetTrackId);
+                        if (groupTrack != nullptr)
+                        {
+                            for (MidiClip& existing : groupTrack->clips)
+                            {
+                                const quint64 existingGroup = existing.audioTakeGroupId != 0
+                                    ? existing.audioTakeGroupId : existing.id;
+                                if (existing.isAudioRegion() && existing.audioTakeEligible && existingGroup == groupId)
+                                {
+                                    existing.audioTakeGroupId = groupId;
+                                    existing.audioTakeActive = false;
+                                }
+                            }
+                        }
+                    }
+                    recoveredClip.audioTakeActive = true;
+                }
+                recoveredClip.audioTakeGroupId = groupId;
+            }
+        }
+        else
+        {
+            recoveredClip.startBeat = captureProject.beatAtSeconds(std::max(0.0, captureStartSeconds));
+            recoveredClip.lengthBeats = std::max(0.25,
+                captureProject.beatAtSeconds(std::max(0.0, captureEndSeconds)) - recoveredClip.startBeat);
+        }
+    }
+    else
+    {
+        const double visibleStartSeconds = std::max(0.0, captureStartSeconds);
+        recoveredClip.startBeat = captureProject.beatAtSeconds(visibleStartSeconds);
+        recoveredClip.audioStartFrame = std::clamp<qint64>(
+            static_cast<qint64>(std::llround((visibleStartSeconds - captureStartSeconds) * savedAsset->sampleRate)),
+            0, std::max<qint64>(0, savedAsset->frameCount() - 1));
+        recoveredClip.lengthBeats = std::max(0.25,
+            captureProject.beatAtSeconds(std::max(visibleStartSeconds, captureEndSeconds)) - recoveredClip.startBeat);
+    }
+    quint64 recoveredTrackId = canUseCapturedTrack ? capturedTargetTrackId : 0;
+    if (recoveredTrackId == 0)
+    {
+        InstrumentTrack newTrack;
+        newTrack.id = project.nextTrackId();
+        newTrack.name = tr("Recovered · %1").arg(baseName);
+        newTrack.instrumentType = InstrumentType::Audio;
+        recoveredTrackId = newTrack.id;
+        project.tracks.push_back(std::move(newTrack));
+    }
+    InstrumentTrack* recoveredTrack = project.findTrack(recoveredTrackId);
+    if (recoveredTrack == nullptr)
+        return;
+    const quint64 recoveredClipId = recoveredClip.id;
+    recoveredTrack->clips.push_back(std::move(recoveredClip));
+    project.normalize();
+    recoveredTrack = project.findTrack(recoveredTrackId);
+    const MidiClip* insertedClip = project.findClip(recoveredTrackId, recoveredClipId);
+    if (recoveredTrack == nullptr || insertedClip == nullptr)
+        return;
+    const QString recoveredTrackName = recoveredTrack->name;
+    const double recoveredClipStartBeat = insertedClip->startBeat;
+    selectedTrackId = recoveredTrackId;
+    selectedClipId = recoveredClipId;
+    settingsDirty = true;
+    refreshProjectUi();
+    editorTabs->setCurrentWidget(arrangementEditor);
+    refreshDirtyState();
+    QMessageBox::information(this, tr("Recording restored"),
+        tr("The recovered recording was restored to the Playlist on %1 at beat %2.\nSource WAV: %3")
+            .arg(recoveredTrackName).arg(recoveredClipStartBeat, 0, 'f', 2).arg(recoveredPath));
 }
 
 void MainWindow::autosaveProject()
@@ -13338,7 +13607,9 @@ bool MainWindow::startPendingAudioRecording(double playheadBeat)
     }
     QString manifestError;
     if (!saveActiveAudioRecordingRecoveryManifest(
-            pendingRecordingPath, partialRecordingPath, &manifestError))
+            pendingRecordingPath, partialRecordingPath, projectPath, recordingTargetTrackId, playheadBeat,
+            recordingInputCompensationMs, recordingPunchEnabled, recordingPunchInBeat,
+            recordingPunchOutBeat, project, &manifestError))
     {
         statusBar()->showMessage(
             tr("Could not prepare recording recovery: %1").arg(manifestError), 6000);
