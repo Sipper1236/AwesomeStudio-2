@@ -89,6 +89,7 @@ public:
                               float sustainLevel = 1.0f,
                               float releaseSeconds = 0.06f);
     void setMasterGain(float gain);
+    void setMasterPan(float pan);
     bool setAudioInputMonitoring(bool enabled);
     void setAudioInputMonitorTrack(quint64 trackId);
     void pushAudioInputMonitorFrames(const float* interleavedSamples, qsizetype frameCount,
@@ -254,6 +255,7 @@ private:
     std::atomic<qint64> publishedPositionFrames{0};
     std::atomic<qint64> audioClockFrames{0};
     std::atomic<float> masterGain{0.8f};
+    std::atomic<float> masterPan{0.0f};
     std::array<std::atomic<float>, maximumTrackCount> liveTrackVolumes;
     std::array<std::atomic<float>, maximumTrackCount> liveTrackPans;
     std::array<std::array<std::atomic<float>, 3>, maximumTrackCount> liveTrackEqGainDb;

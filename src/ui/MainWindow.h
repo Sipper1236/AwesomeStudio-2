@@ -343,7 +343,8 @@ private:
         SelectedDrumPadAttack = 105,
         SelectedDrumPadDecay = 106,
         SelectedDrumPadSustain = 107,
-        SelectedDrumPadRelease = 108
+        SelectedDrumPadRelease = 108,
+        MasterPan = 109
     };
     struct MidiControllerMapping
     {
@@ -383,6 +384,7 @@ private:
     QComboBox* snapControl = nullptr;
     QSlider* zoomControl = nullptr;
     QSlider* masterControl = nullptr;
+    QSlider* masterPanControl = nullptr;
     QWidget* audioRegionControls = nullptr;
     QWidget* oscillatorPanel = nullptr;
     QWidget* synthPresetPanel = nullptr;

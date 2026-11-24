@@ -699,6 +699,9 @@ void ProjectData::normalize()
     }
     rebuildTempoCache();
     masterGain = std::clamp(masterGain, 0.0f, 1.0f);
+    if (!std::isfinite(masterPan))
+        masterPan = 0.0f;
+    masterPan = std::clamp(masterPan, -1.0f, 1.0f);
     if (!std::isfinite(pitchBendRangeSemitones))
         pitchBendRangeSemitones = 2.0;
     pitchBendRangeSemitones = std::clamp(pitchBendRangeSemitones, 0.01, 48.0);

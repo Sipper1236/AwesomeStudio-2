@@ -5261,7 +5261,8 @@ void MainWindow::createMenus()
                       << tr("Selected drum pad attack")
                       << tr("Selected drum pad decay")
                       << tr("Selected drum pad sustain")
-                      << tr("Selected drum pad release");
+                      << tr("Selected drum pad release")
+                      << tr("Master pan");
     QMenu* learnControllerMenu = midiMenu->addMenu(tr("Learn controller for"));
     QMenu* clearControllerMenu = midiMenu->addMenu(tr("Clear controller mapping for"));
     for (int target = 0;
@@ -5794,6 +5795,7 @@ void MainWindow::refreshProjectUi()
     refreshMixer();
     audioEngine.setProject(project);
     audioEngine.setMasterGain(project.masterGain);
+    audioEngine.setMasterPan(project.masterPan);
 }
 
 void MainWindow::refreshMixer()
@@ -6184,6 +6186,12 @@ void MainWindow::refreshMixer()
     masterRowLayout->addWidget(masterControl, 1);
     masterRowLayout->addWidget(masterGainReadout);
     masterForm->addRow(tr("Level"), masterRow);
+    masterPanControl = new QSlider(Qt::Horizontal, masterBox);
+    masterPanControl->setRange(-100, 100);
+    masterPanControl->setValue(static_cast<int>(std::round(project.masterPan * 100.0f)));
+    masterPanControl->setToolTip(tr("Master stereo balance. Center preserves both channels; pan attenuates the opposite side."));
+    masterPanControl->setObjectName(QStringLiteral("masterPan"));
+    masterForm->addRow(tr("Pan"), masterPanControl);
     masterPeakMeter = createPeakMeter(masterBox);
     masterPeakMeter->setObjectName(QStringLiteral("masterPeakMeter"));
     masterPeakMeter->setToolTip(tr("Master output peak level"));
@@ -6251,6 +6259,14 @@ void MainWindow::refreshMixer()
         project.masterGain = value / 100.0f;
         masterGainReadout->setText(tr("%1%").arg(value));
         audioEngine.setMasterGain(project.masterGain);
+        audioEngine.setProject(project);
+        settingsDirty = true;
+        refreshDirtyState();
+    });
+    connect(masterPanControl, &QSlider::valueChanged, this, [this](int value)
+    {
+        project.masterPan = value / 100.0f;
+        audioEngine.setMasterPan(project.masterPan);
         audioEngine.setProject(project);
         settingsDirty = true;
         refreshDirtyState();
@@ -12932,7 +12948,8 @@ void MainWindow::beginMidiControllerLearn(int target)
     if (target < 0 || target >= targetCount)
         return;
     const InstrumentTrack* track = selectedTrack();
-    const bool drumTarget = target >= static_cast<int>(MidiControllerTarget::SelectedDrumSampleTuning);
+    const bool drumTarget = target >= static_cast<int>(MidiControllerTarget::SelectedDrumSampleTuning) &&
+                            target <= static_cast<int>(MidiControllerTarget::SelectedDrumPadRelease);
     const bool outputBusTarget = target >=
             static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusLevel) &&
         target <= static_cast<int>(MidiControllerTarget::SelectedTrackOutputBusSolo);
@@ -13118,6 +13135,15 @@ void MainWindow::applyMidiControllerTarget(int target, int value)
     if (target == static_cast<int>(MidiControllerTarget::MasterLevel))
     {
         masterControl->setValue(static_cast<int>(std::lround(value * 100.0 / 127.0)));
+        return;
+    }
+    if (target == static_cast<int>(MidiControllerTarget::MasterPan))
+    {
+        const int pan = value <= 64
+            ? static_cast<int>(std::lround((value - 64) * 100.0 / 64.0))
+            : static_cast<int>(std::lround((value - 64) * 100.0 / 63.0));
+        if (masterPanControl != nullptr)
+            masterPanControl->setValue(pan);
         return;
     }
     if (target == static_cast<int>(MidiControllerTarget::Tempo))

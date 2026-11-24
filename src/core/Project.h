@@ -489,6 +489,7 @@ struct ProjectData
     bool metronomeEnabled = false;
     int countInBars = 0;
     float masterGain = 0.8f;
+    float masterPan = 0.0f;
     double pitchBendRangeSemitones = 2.0;
     QVector<MixerEffect> masterEffects;
     QVector<TimelineMarker> markers;

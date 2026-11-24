@@ -1621,6 +1621,11 @@ void AudioEngine::setMasterGain(float gain)
     masterGain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_release);
 }
 
+void AudioEngine::setMasterPan(float pan)
+{
+    masterPan.store(std::clamp(pan, -1.0f, 1.0f), std::memory_order_release);
+}
+
 bool AudioEngine::setAudioInputMonitoring(bool enabled)
 {
     if (enabled && sink == nullptr)
@@ -2186,6 +2191,11 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         }
 
         mixed = renderer.processMasterEffects(mixed);
+        const float pan = masterPan.load(std::memory_order_relaxed);
+        const float leftBalance = pan > 0.0f ? 1.0f - pan : 1.0f;
+        const float rightBalance = pan < 0.0f ? 1.0f + pan : 1.0f;
+        mixed.left *= leftBalance;
+        mixed.right *= rightBalance;
         const float gain = masterGain.load(std::memory_order_relaxed);
         mixed.left = std::tanh(mixed.left * gain);
         mixed.right = std::tanh(mixed.right * gain);

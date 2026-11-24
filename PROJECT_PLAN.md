@@ -52,6 +52,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 
 ### 2. Arrangement and mixing
 
+- [x] Project-saved Master stereo pan in realtime playback and all full-mix exports, with MIDI CC/NRPN learn
 - [x] Basic left/right edge trimming for WAV audio regions
 - [x] Undoable equal-power crossfades between overlapping audio regions
 - [x] Automatic punch-pass comp groups plus undoable manual grouping/ungrouping of aligned WAV regions, per-section take selection, and clicked-beat group splitting

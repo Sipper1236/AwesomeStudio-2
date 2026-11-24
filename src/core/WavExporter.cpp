@@ -513,6 +513,12 @@ bool WavExporter::exportProject(const ProjectData& project, const QString& path,
             rendered.left += mixerOutput.left;
             rendered.right += mixerOutput.right;
             rendered = renderer.processMasterEffects(rendered);
+            const float leftBalance = safeProject.masterPan > 0.0f
+                ? 1.0f - safeProject.masterPan : 1.0f;
+            const float rightBalance = safeProject.masterPan < 0.0f
+                ? 1.0f + safeProject.masterPan : 1.0f;
+            rendered.left *= leftBalance;
+            rendered.right *= rightBalance;
             char* frame = wavContainer ? audio.data() + index * bytesPerSampleFrame : nullptr;
             const float output[2] = {
                 outputSample(rendered.left, safeProject.masterGain,
