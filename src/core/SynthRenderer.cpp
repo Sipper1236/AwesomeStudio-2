@@ -1366,9 +1366,15 @@ StereoSample SynthRenderer::finishMixerFrame()
             busFrameTouched[busIndex] = 0;
             continue;
         }
-        const BusMixState& mix = busMixStates[busIndex];
-        const StereoSample input{busFrameSamples[busIndex].left * mix.leftGain,
-                                 busFrameSamples[busIndex].right * mix.rightGain};
+        const MixerBus& bus = project->buses[static_cast<qsizetype>(busIndex)];
+        const float gain = std::clamp(automationValue(bus.gainAutomation, currentBeat,
+                                                      bus.gain), 0.0f, 2.0f);
+        const float pan = std::clamp(automationValue(bus.panAutomation, currentBeat,
+                                                      bus.pan), -1.0f, 1.0f);
+        const float leftBalance = pan > 0.0f ? 1.0f - pan : 1.0f;
+        const float rightBalance = pan < 0.0f ? 1.0f + pan : 1.0f;
+        const StereoSample input{busFrameSamples[busIndex].left * gain * leftBalance,
+                                 busFrameSamples[busIndex].right * gain * rightBalance};
         StereoSample output = processEffectChain(busEffectStates[busIndex], input);
         busEffectHasTail[busIndex] = effectChainHasTail(busEffectStates[busIndex]) ? 1 : 0;
         lastBusOutputSamples[busIndex] = output;
