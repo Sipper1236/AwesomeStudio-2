@@ -154,3 +154,24 @@ endif()
 
 install(TARGETS AwesomeStudio RUNTIME DESTINATION bin BUNDLE DESTINATION .)
 install(FILES third_party/VST3-SDK-LICENSE.txt DESTINATION share/AwesomeStudio)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(FILES packaging/linux/awesome-studio.desktop
+        DESTINATION share/applications)
+    install(FILES packaging/linux/awesome-studio.svg
+        DESTINATION share/icons/hicolor/scalable/apps)
+    install(FILES LICENSE README.md DESTINATION share/doc/awesome-studio)
+
+    set(CPACK_GENERATOR DEB)
+    set(CPACK_PACKAGE_NAME "awesome-studio")
+    set(CPACK_PACKAGE_VENDOR "Awesome Studio contributors")
+    set(CPACK_PACKAGE_CONTACT "https://github.com/Sipper1236/AwesomeStudio-2")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Digital audio workstation")
+    set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+    set(CPACK_PACKAGE_FILE_NAME "awesome-studio_${PROJECT_VERSION}_amd64")
+    set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE amd64)
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Awesome Studio contributors")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    include(CPack)
+endif()

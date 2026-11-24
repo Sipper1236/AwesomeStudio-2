@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Awesome Studio
+Comment=Digital audio workstation
+Exec=AwesomeStudio
+Icon=awesome-studio
+Categories=AudioVideo;Audio;Music;
+Terminal=false
+StartupNotify=true
