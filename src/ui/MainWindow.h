@@ -44,6 +44,8 @@ class MainWindow final : public QMainWindow
     friend class MarkerEditCommand;
     friend class TempoMapEditCommand;
     friend class AudioFadeEditCommand;
+    friend class AudioTakeSelectionCommand;
+    friend class AudioTakeSplitCommand;
     friend class AudioTrimCommand;
     friend class AudioRelinkCommand;
     friend class ClipDuplicateCommand;
@@ -79,8 +81,17 @@ private:
         double startBeat = 0.0;
         double lengthBeats = 0.0;
         qint64 audioStartFrame = 0;
+        quint64 takeGroupId = 0;
+        bool takeActive = true;
+        bool takeEligible = false;
         double fadeInBeats = 0.0;
         double fadeOutBeats = 0.0;
+    };
+
+    struct AudioTakeState
+    {
+        quint64 clipId = 0;
+        bool active = true;
     };
 
     struct AudioRelinkState
@@ -145,6 +156,11 @@ private:
     void setSelectedAudioFadeShape(bool fadeIn, double shape);
     void createSelectedAudioCrossfade();
     void applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades);
+    void selectAudioTake(quint64 trackId, quint64 clipId);
+    void splitAudioTakesAtBeat(quint64 trackId, quint64 clipId, double beat);
+    void applyAudioTakeSelectionHistory(quint64 trackId, const QVector<AudioTakeState>& states);
+    void applyAudioTakeSplitHistory(quint64 trackId, quint64 groupId,
+                                    const QVector<MidiClip>& clips);
     void setSelectedSynthEnvelope(int parameter, double value);
     void setSelectedSynthOscillator(int parameter, double value);
     void setSelectedSynthFilter(int parameter, double value);

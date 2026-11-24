@@ -98,6 +98,9 @@ struct MidiClip
     QString audioSourcePath;
     std::shared_ptr<const AudioAsset> audioSource;
     qint64 audioStartFrame = 0;
+    quint64 audioTakeGroupId = 0;
+    bool audioTakeActive = true;
+    bool audioTakeEligible = false;
     double audioFadeInBeats = 0.0;
     double audioFadeOutBeats = 0.0;
     AudioFadeCurve audioFadeInCurve = AudioFadeCurve::Linear;

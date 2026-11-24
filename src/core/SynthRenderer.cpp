@@ -515,6 +515,8 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
 
         for (const MidiClip& clip : track.clips)
         {
+            if (clip.isAudioRegion() && clip.audioTakeGroupId != 0 && !clip.audioTakeActive)
+                continue;
             if (clip.audioSource != nullptr && clip.audioSource->sampleRate > 0 &&
                 clip.audioSource->channelCount > 0 && clip.audioSource->frameCount() > clip.audioStartFrame)
             {

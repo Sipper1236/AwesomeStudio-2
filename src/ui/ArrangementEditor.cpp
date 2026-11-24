@@ -3,6 +3,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QFontMetrics>
+#include <QHash>
 #include <QLineF>
 #include <QMenu>
 #include <QPainter>
@@ -271,13 +272,33 @@ protected:
         {
             const InstrumentTrack& track = project.tracks[trackIndex];
             const int rowY = rulerHeight + trackIndex * rowHeight;
+            QVector<const MidiClip*> orderedClips;
+            orderedClips.reserve(track.clips.size());
             for (const MidiClip& clip : track.clips)
+                orderedClips.push_back(&clip);
+            std::stable_sort(orderedClips.begin(), orderedClips.end(), [](const MidiClip* left,
+                                                                          const MidiClip* right)
             {
+                const auto layer = [](const MidiClip& clip)
+                {
+                    if (clip.audioTakeGroupId == 0)
+                        return 1;
+                    return clip.audioTakeActive ? 2 : 0;
+                };
+                return layer(*left) < layer(*right);
+            });
+            for (const MidiClip* clipPointer : orderedClips)
+            {
+                const MidiClip& clip = *clipPointer;
                 const QRectF bounds = clipBounds(clip, trackIndex);
                 const bool selected = clip.id == selectedClipId && track.id == selectedTrackId;
+                const bool inactiveTake = clip.audioTakeGroupId != 0 && !clip.audioTakeActive;
                 QColor fill = trackColour(trackIndex);
-                fill.setAlpha(selected ? 225 : 165);
-                painter.setPen(QPen(selected ? QColor(QStringLiteral("#d5fff7")) : fill.lighter(125), selected ? 2 : 1));
+                fill.setAlpha(inactiveTake ? 65 : selected ? 225 : 165);
+                QPen outline(selected ? QColor(QStringLiteral("#d5fff7")) : fill.lighter(125), selected ? 2 : 1);
+                if (inactiveTake)
+                    outline.setStyle(Qt::DashLine);
+                painter.setPen(outline);
                 painter.setBrush(fill);
                 painter.drawRoundedRect(bounds, 4.0, 4.0);
 
@@ -293,9 +314,12 @@ protected:
 
                 painter.setPen(QColor(QStringLiteral("#102126")));
                 painter.setFont(QFont(QStringLiteral("Sans Serif"), 8, QFont::DemiBold));
+                QString clipLabel = clip.name;
+                if (clip.audioTakeGroupId != 0)
+                    clipLabel += clip.audioTakeActive ? tr(" · COMP") : tr(" · ALT");
                 painter.drawText(bounds.adjusted(7, 3, -4, -3), Qt::AlignTop | Qt::AlignLeft,
-                                 clip.isAudioRegion() ? clip.name :
-                                     QStringLiteral("%1\n%2 notes").arg(clip.name).arg(clip.notes.size()));
+                                 clip.isAudioRegion() ? clipLabel :
+                                     QStringLiteral("%1\n%2 notes").arg(clipLabel).arg(clip.notes.size()));
 
                 if (clip.isAudioRegion())
                 {
@@ -603,12 +627,42 @@ protected:
                 {
                     QMenu menu(this);
                     QAction* duplicateAction = menu.addAction(tr("Duplicate region"));
+                    QAction* splitTakesAction = nullptr;
+                    QMenu* useTakeMenu = nullptr;
+                    QHash<QAction*, quint64> takeActions;
+                    if (clip.audioTakeGroupId != 0)
+                    {
+                        splitTakesAction = menu.addAction(tr("Split all takes here"));
+                        useTakeMenu = menu.addMenu(tr("Use take for this section"));
+                        for (const MidiClip& candidate : track.clips)
+                        {
+                            if (!candidate.isAudioRegion() ||
+                                candidate.audioTakeGroupId != clip.audioTakeGroupId ||
+                                std::abs(candidate.startBeat - clip.startBeat) > 1.0e-6 ||
+                                std::abs(candidate.lengthBeats - clip.lengthBeats) > 1.0e-6)
+                                continue;
+                            QAction* takeAction = useTakeMenu->addAction(
+                                tr("%1 · take %2").arg(candidate.name).arg(candidate.id));
+                            takeAction->setCheckable(true);
+                            takeAction->setChecked(candidate.audioTakeActive);
+                            takeActions.insert(takeAction, candidate.id);
+                        }
+                    }
                     menu.addSeparator();
                     QAction* relinkAction = menu.addAction(tr("Relink WAV…"));
                     QAction* removeAction = menu.addAction(tr("Remove region"));
                     QAction* chosen = menu.exec(event->globalPosition().toPoint());
                     if (chosen == duplicateAction)
                         emit owner->clipDuplicateRequested(track.id, clip.id);
+                    else if (splitTakesAction != nullptr && chosen == splitTakesAction)
+                    {
+                        const double splitBeat = std::clamp(
+                            (point.x() - trackHeaderWidth) / static_cast<double>(pixelsPerBeat),
+                            clip.startBeat, clip.startBeat + clip.lengthBeats);
+                        emit owner->audioTakeSplitRequested(track.id, clip.id, splitBeat);
+                    }
+                    else if (takeActions.contains(chosen))
+                        emit owner->audioTakeSelected(track.id, takeActions.value(chosen));
                     else if (chosen == relinkAction)
                         emit owner->audioRegionRelinkRequested(track.id, clip.id);
                     else if (chosen == removeAction)
@@ -1530,9 +1584,21 @@ private:
         if (row < 0 || row >= project.tracks.size())
             return -1;
         const InstrumentTrack& track = project.tracks[row];
+        int hit = -1;
+        int hitLayer = -1;
         for (int index = track.clips.size() - 1; index >= 0; --index)
-            if (clipBounds(track.clips[index], row).contains(point)) return index;
-        return -1;
+        {
+            const MidiClip& clip = track.clips[index];
+            if (!clipBounds(clip, row).contains(point))
+                continue;
+            const int layer = clip.audioTakeGroupId == 0 ? 1 : clip.audioTakeActive ? 2 : 0;
+            if (layer > hitLayer)
+            {
+                hit = index;
+                hitLayer = layer;
+            }
+        }
+        return hit;
     }
 
     void setLocalClipPosition(quint64 sourceTrackId, quint64 targetTrackId, quint64 clipId, double startBeat)

@@ -39,7 +39,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Per-pad sample waveform display with draggable start-position editing
 - [x] Per-track Synth ADSR envelope controls in live playback and render
 - [x] Undoable per-track volume and pan keyframes with linear interpolation in live playback and WAV render
-- [x] Mono/stereo WAV input recording with count-in, optional beat-range punch recording, an automatic bounded Qt input-stream clock estimate plus per-input manual placement adjustment, monitoring through Master or an armed Audio track, and direct recording to the armed track
+- [x] Mono/stereo WAV input recording with count-in, optional beat-range punch recording, an automatic bounded Qt input-stream clock estimate plus per-input manual placement adjustment, undoable alternate-take comping for repeated punch passes, monitoring through Master or an armed Audio track, and direct recording to the armed track
 - [x] Live MIDI monitoring and basic note recording from ALSA on Linux, WinMM on Windows, and CoreMIDI on macOS
 - [x] Learnable MIDI CC and NRPN mappings for master level, selected-track level/pan/mute/solo and output-bus level/pan/mute/solo, synth waveform and oscillator 2 enable/waveform/detune/mix, synth-filter enable/type/cutoff/resonance, synth amplitude-envelope ADSR, filter-envelope amount/ADSR/enable, and tempo
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
@@ -51,7 +51,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Undoable equal-power crossfades between overlapping audio regions
 - [x] Named arrangement markers with ruler seeking and undoable editing
 - [x] Custom power and freehand drawn fades, portable media packaging, and WAV relinking
-- [ ] Hardware-referenced input/output latency calibration, audio comping, and format-2 time-signature changes
+- [ ] General-purpose take grouping, hardware-referenced input/output latency calibration, and format-2 time-signature changes
 - [x] Mixer submix buses with track assignment, level/pan, mute/solo, parent routing, and metering
 - [x] Multiple post-track auxiliary sends per track to mixer buses
 - [x] Multiple post-fader auxiliary sends from buses to other mixer buses, with cycle prevention

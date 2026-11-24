@@ -2298,6 +2298,67 @@ private:
     QVector<MainWindow::AudioFadeState> after;
 };
 
+class AudioTakeSelectionCommand final : public QUndoCommand
+{
+public:
+    AudioTakeSelectionCommand(MainWindow* window, quint64 trackId,
+                              QVector<MainWindow::AudioTakeState> before,
+                              QVector<MainWindow::AudioTakeState> after)
+        : window(window), trackId(trackId), before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Choose audio comp take"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyAudioTakeSelectionHistory(trackId, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyAudioTakeSelectionHistory(trackId, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    QVector<MainWindow::AudioTakeState> before;
+    QVector<MainWindow::AudioTakeState> after;
+};
+
+class AudioTakeSplitCommand final : public QUndoCommand
+{
+public:
+    AudioTakeSplitCommand(MainWindow* window, quint64 trackId, quint64 groupId,
+                          QVector<MidiClip> before, QVector<MidiClip> after)
+        : window(window), trackId(trackId), groupId(groupId),
+          before(std::move(before)), after(std::move(after))
+    {
+        setText(QObject::tr("Split audio take section"));
+    }
+
+    void undo() override
+    {
+        if (window != nullptr)
+            window->applyAudioTakeSplitHistory(trackId, groupId, before);
+    }
+
+    void redo() override
+    {
+        if (window != nullptr)
+            window->applyAudioTakeSplitHistory(trackId, groupId, after);
+    }
+
+private:
+    QPointer<MainWindow> window;
+    quint64 trackId;
+    quint64 groupId;
+    QVector<MidiClip> before;
+    QVector<MidiClip> after;
+};
+
 class AudioTrimCommand final : public QUndoCommand
 {
 public:
@@ -2645,6 +2706,11 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     });
     connect(arrangementEditor, &ArrangementEditor::audioRegionRelinkRequested, this,
             &MainWindow::relinkAudioRegion);
+    connect(arrangementEditor, &ArrangementEditor::audioTakeSelected, this,
+            [this](quint64 trackId, quint64 clipId) { selectAudioTake(trackId, clipId); });
+    connect(arrangementEditor, &ArrangementEditor::audioTakeSplitRequested, this,
+            [this](quint64 trackId, quint64 clipId, double beat)
+            { splitAudioTakesAtBeat(trackId, clipId, beat); });
     connect(arrangementEditor, &ArrangementEditor::automationChanged, this,
             [this](quint64 trackId, int parameter, const QString& pluginUri,
                    const QVector<AutomationPoint>& before,
@@ -6974,6 +7040,9 @@ void MainWindow::duplicateClip(quint64 trackId, quint64 clipId)
     MidiClip duplicate = *source;
     const QString sourceName = source->name;
     duplicate.id = nextClipId();
+    duplicate.audioTakeGroupId = 0;
+    duplicate.audioTakeActive = true;
+    duplicate.audioTakeEligible = false;
     duplicate.name = duplicate.name.isEmpty() ? tr("Pattern copy")
                                                : tr("%1 copy").arg(duplicate.name);
     duplicate.startBeat = duplicateStart;
@@ -7178,11 +7247,15 @@ void MainWindow::trimAudioRegion(quint64 trackId, quint64 clipId, double startBe
         return;
 
     AudioTrimState before{clip->id, clip->startBeat, clip->lengthBeats, clip->audioStartFrame,
+                          clip->audioTakeGroupId, clip->audioTakeActive, clip->audioTakeEligible,
                           clip->audioFadeInBeats, clip->audioFadeOutBeats};
     AudioTrimState after = before;
     after.startBeat = std::clamp(startBeat, 0.0, 16384.0);
     after.lengthBeats = std::clamp(lengthBeats, 0.25, 16384.0);
     after.audioStartFrame = std::max<qint64>(0, audioStartFrame);
+    after.takeGroupId = 0;
+    after.takeActive = true;
+    after.takeEligible = false;
     after.fadeInBeats = std::clamp(before.fadeInBeats, 0.0, after.lengthBeats);
     after.fadeOutBeats = std::clamp(before.fadeOutBeats, 0.0, after.lengthBeats);
     if (std::abs(before.startBeat - after.startBeat) < 1.0e-9 &&
@@ -7205,6 +7278,9 @@ void MainWindow::applyAudioTrimHistory(quint64 trackId, const AudioTrimState& st
     clip->startBeat = state.startBeat;
     clip->lengthBeats = state.lengthBeats;
     clip->audioStartFrame = state.audioStartFrame;
+    clip->audioTakeGroupId = state.takeGroupId;
+    clip->audioTakeActive = state.takeActive;
+    clip->audioTakeEligible = state.takeEligible;
     clip->audioFadeInBeats = state.fadeInBeats;
     clip->audioFadeOutBeats = state.fadeOutBeats;
     project.normalize();
@@ -7453,6 +7529,175 @@ void MainWindow::applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeS
         clip->audioFadeOutBezierHandles = fade.fadeOutBezierHandles;
     }
     project.normalize();
+    audioEngine.setProject(project);
+    refreshProjectUi();
+    refreshDirtyState();
+}
+
+void MainWindow::selectAudioTake(quint64 trackId, quint64 clipId)
+{
+    const InstrumentTrack* track = project.findTrack(trackId);
+    const MidiClip* selected = project.findClip(trackId, clipId);
+    if (track == nullptr || selected == nullptr || !selected->isAudioRegion() ||
+        selected->audioTakeGroupId == 0)
+        return;
+
+    QVector<AudioTakeState> before;
+    QVector<AudioTakeState> after;
+    for (const MidiClip& candidate : track->clips)
+    {
+        if (!candidate.isAudioRegion() || candidate.audioTakeGroupId != selected->audioTakeGroupId ||
+            std::abs(candidate.startBeat - selected->startBeat) > 1.0e-6 ||
+            std::abs(candidate.lengthBeats - selected->lengthBeats) > 1.0e-6)
+            continue;
+        before.push_back({candidate.id, candidate.audioTakeActive});
+        after.push_back({candidate.id, candidate.id == clipId});
+    }
+    bool unchanged = before.size() == after.size();
+    for (qsizetype index = 0; unchanged && index < before.size(); ++index)
+        unchanged = before[index].active == after[index].active;
+    if (before.size() < 2 || unchanged)
+        return;
+
+    undoStack.push(new AudioTakeSelectionCommand(this, trackId, before, after));
+}
+
+void MainWindow::applyAudioTakeSelectionHistory(quint64 trackId,
+                                                 const QVector<AudioTakeState>& states)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+    for (const AudioTakeState& state : states)
+    {
+        MidiClip* clip = project.findClip(trackId, state.clipId);
+        if (clip != nullptr && clip->audioTakeGroupId != 0)
+            clip->audioTakeActive = state.active;
+    }
+    audioEngine.setProject(project);
+    refreshProjectUi();
+    refreshDirtyState();
+}
+
+void MainWindow::splitAudioTakesAtBeat(quint64 trackId, quint64 clipId, double beat)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    const MidiClip* selected = project.findClip(trackId, clipId);
+    if (track == nullptr || selected == nullptr || !selected->isAudioRegion() ||
+        selected->audioTakeGroupId == 0)
+        return;
+
+    const quint64 groupId = selected->audioTakeGroupId;
+    const double selectedEndBeat = selected->startBeat + selected->lengthBeats;
+    const double splitBeat = std::clamp(beat, selected->startBeat, selectedEndBeat);
+    if (splitBeat <= selected->startBeat + 1.0e-5 || splitBeat >= selectedEndBeat - 1.0e-5)
+    {
+        statusBar()->showMessage(tr("Place the split point inside the take section."), 3000);
+        return;
+    }
+
+    QVector<MidiClip> before;
+    QVector<MidiClip> after;
+    bool splitAny = false;
+    QString error;
+    for (const MidiClip& candidate : track->clips)
+    {
+        if (!candidate.isAudioRegion() || candidate.audioTakeGroupId != groupId)
+            continue;
+        before.push_back(candidate);
+        const double candidateEndBeat = candidate.startBeat + candidate.lengthBeats;
+        if (splitBeat <= candidate.startBeat + 1.0e-5 || splitBeat >= candidateEndBeat - 1.0e-5)
+        {
+            after.push_back(candidate);
+            continue;
+        }
+        if (candidate.audioSource == nullptr || candidate.audioSource->sampleRate <= 0)
+        {
+            error = tr("All takes in this section must be online before they can be split.");
+            break;
+        }
+        if (splitBeat < candidate.startBeat + candidate.audioFadeInBeats - 1.0e-6 ||
+            splitBeat > candidateEndBeat - candidate.audioFadeOutBeats + 1.0e-6)
+        {
+            error = tr("Split outside the existing fade so the full fade stays with one take section.");
+            break;
+        }
+
+        const double elapsedSeconds = project.secondsAtBeat(splitBeat) -
+                                      project.secondsAtBeat(candidate.startBeat);
+        const qint64 frameOffset = static_cast<qint64>(std::llround(
+            elapsedSeconds * candidate.audioSource->sampleRate));
+        const qint64 sourceFrame = candidate.audioStartFrame + frameOffset;
+        if (frameOffset <= 0 || sourceFrame >= candidate.audioSource->frameCount())
+        {
+            error = tr("The split point falls outside one of the recorded takes.");
+            break;
+        }
+
+        MidiClip left = candidate;
+        left.lengthBeats = splitBeat - candidate.startBeat;
+        left.audioFadeOutBeats = 0.0;
+        left.audioFadeOutCurve = AudioFadeCurve::Linear;
+        left.audioFadeOutShape = 1.0;
+        left.audioFadeOutCurvePoints = defaultAudioFadeCurvePoints();
+        left.audioFadeOutBezierHandles = defaultAudioFadeBezierHandles();
+
+        MidiClip right = candidate;
+        right.id = nextClipId();
+        right.startBeat = splitBeat;
+        right.lengthBeats = candidateEndBeat - splitBeat;
+        right.audioStartFrame = sourceFrame;
+        right.audioFadeInBeats = 0.0;
+        right.audioFadeInCurve = AudioFadeCurve::Linear;
+        right.audioFadeInShape = 1.0;
+        right.audioFadeInCurvePoints = defaultAudioFadeCurvePoints();
+        right.audioFadeInBezierHandles = defaultAudioFadeBezierHandles();
+        after.push_back(std::move(left));
+        after.push_back(std::move(right));
+        splitAny = true;
+    }
+
+    if (!error.isEmpty())
+    {
+        statusBar()->showMessage(error, 4500);
+        return;
+    }
+    if (!splitAny)
+    {
+        statusBar()->showMessage(tr("The take group is already split at this point."), 3000);
+        return;
+    }
+    undoStack.push(new AudioTakeSplitCommand(this, trackId, groupId, before, after));
+}
+
+void MainWindow::applyAudioTakeSplitHistory(quint64 trackId, quint64 groupId,
+                                             const QVector<MidiClip>& clips)
+{
+    InstrumentTrack* track = project.findTrack(trackId);
+    if (track == nullptr || groupId == 0)
+        return;
+
+    qsizetype insertIndex = track->clips.size();
+    for (qsizetype index = 0; index < track->clips.size();)
+    {
+        if (track->clips[index].audioTakeGroupId == groupId)
+        {
+            insertIndex = std::min(insertIndex, index);
+            track->clips.removeAt(index);
+        }
+        else
+            ++index;
+    }
+    insertIndex = std::min(insertIndex, track->clips.size());
+    for (qsizetype offset = 0; offset < clips.size(); ++offset)
+        track->clips.insert(insertIndex + offset, clips[offset]);
+
+    project.normalize();
+    if (project.findClip(trackId, selectedClipId) == nullptr)
+    {
+        selectedTrackId = trackId;
+        selectedClipId = clips.isEmpty() ? 0 : clips.first().id;
+    }
     audioEngine.setProject(project);
     refreshProjectUi();
     refreshDirtyState();
@@ -11055,6 +11300,57 @@ void MainWindow::finishAudioRecording(bool keepTake)
     }
     clip.audioSourcePath = asset->path;
     clip.audioSource = asset;
+    clip.audioTakeEligible = recordingIntoExistingTrack && wasPunchRecording;
+    bool addedToPunchCompGroup = false;
+    if (recordingIntoExistingTrack && wasPunchRecording &&
+        punchOutBeat > punchInBeat && targetTrack != nullptr)
+    {
+        QHash<quint64, QPair<double, double>> takeGroupRanges;
+        for (const MidiClip& candidate : targetTrack->clips)
+        {
+            if (!candidate.isAudioRegion() || !candidate.audioTakeEligible)
+                continue;
+            const quint64 groupId = candidate.audioTakeGroupId != 0
+                ? candidate.audioTakeGroupId : candidate.id;
+            const double endBeat = audioRegionEndBeat(project, candidate);
+            auto range = takeGroupRanges.find(groupId);
+            if (range == takeGroupRanges.end())
+                takeGroupRanges.insert(groupId, {candidate.startBeat, endBeat});
+            else
+            {
+                range->first = std::min(range->first, candidate.startBeat);
+                range->second = std::max(range->second, endBeat);
+            }
+        }
+
+        quint64 matchingGroupId = 0;
+        for (auto range = takeGroupRanges.cbegin(); range != takeGroupRanges.cend(); ++range)
+        {
+            if (std::abs(range->first - punchInBeat) <= 0.02 &&
+                std::abs(range->second - punchOutBeat) <= 0.02)
+            {
+                matchingGroupId = range.key();
+                break;
+            }
+        }
+        if (matchingGroupId != 0)
+        {
+            for (MidiClip& candidate : targetTrack->clips)
+            {
+                const quint64 groupId = candidate.audioTakeGroupId != 0
+                    ? candidate.audioTakeGroupId : candidate.id;
+                if (candidate.isAudioRegion() && candidate.audioTakeEligible &&
+                    groupId == matchingGroupId)
+                {
+                    candidate.audioTakeGroupId = matchingGroupId;
+                    candidate.audioTakeActive = false;
+                }
+            }
+            clip.audioTakeGroupId = matchingGroupId;
+            clip.audioTakeActive = true;
+            addedToPunchCompGroup = true;
+        }
+    }
     const quint64 recordedClipId = clip.id;
     if (recordingIntoExistingTrack)
     {
@@ -11091,7 +11387,9 @@ void MainWindow::finishAudioRecording(bool keepTake)
     else
         statusBar()->showMessage((recordingIntoExistingTrack
             ? tr("Recorded %1 to %2").arg(QFileInfo(path).fileName(), destinationTrackName)
-            : tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName())) + alignmentDetails, 5000);
+            : tr("Recorded %1 to a new audio track").arg(QFileInfo(path).fileName())) +
+            (addedToPunchCompGroup ? tr(" · added to a punch take group") : QString()) +
+            alignmentDetails, 5000);
 }
 
 void MainWindow::startMidiRecording()

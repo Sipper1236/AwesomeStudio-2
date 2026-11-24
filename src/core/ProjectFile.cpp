@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 56;
+constexpr int currentProjectVersion = 57;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -541,6 +541,9 @@ QJsonObject saveClip(const MidiClip& clip)
         {QStringLiteral("pitchBends"), savePitchBends(clip.pitchBends)},
         {QStringLiteral("audioSourcePath"), clip.audioSourcePath},
         {QStringLiteral("audioStartFrame"), static_cast<qint64>(clip.audioStartFrame)},
+        {QStringLiteral("audioTakeGroupId"), static_cast<qint64>(clip.audioTakeGroupId)},
+        {QStringLiteral("audioTakeActive"), clip.audioTakeActive},
+        {QStringLiteral("audioTakeEligible"), clip.audioTakeEligible},
         {QStringLiteral("audioFadeInBeats"), clip.audioFadeInBeats},
         {QStringLiteral("audioFadeOutBeats"), clip.audioFadeOutBeats},
         {QStringLiteral("audioFadeInCurve"), static_cast<int>(clip.audioFadeInCurve)},
@@ -753,12 +756,21 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
     }
     clip.audioSourcePath = object.value(QStringLiteral("audioSourcePath")).toString();
     const qint64 storedAudioStart = object.value(QStringLiteral("audioStartFrame")).toInteger(0);
-    if (storedAudioStart < 0)
+    const qint64 storedTakeGroup = version >= 57
+        ? object.value(QStringLiteral("audioTakeGroupId")).toInteger(0) : 0;
+    const bool storedTakeEligible = version >= 57 && !clip.audioSourcePath.isEmpty()
+        ? object.value(QStringLiteral("audioTakeEligible")).toBool(false) : false;
+    if (storedAudioStart < 0 || storedTakeGroup < 0 ||
+        (storedTakeGroup > 0 && (clip.audioSourcePath.isEmpty() || !storedTakeEligible)))
     {
-        setError(error, QStringLiteral("The project contains an invalid audio trim position."));
+        setError(error, QStringLiteral("The project contains invalid audio region metadata."));
         return false;
     }
     clip.audioStartFrame = storedAudioStart;
+    clip.audioTakeGroupId = static_cast<quint64>(storedTakeGroup);
+    clip.audioTakeActive = version >= 57 && clip.audioTakeGroupId != 0
+        ? object.value(QStringLiteral("audioTakeActive")).toBool(true) : true;
+    clip.audioTakeEligible = storedTakeEligible;
     clip.audioFadeInBeats = object.value(QStringLiteral("audioFadeInBeats")).toDouble(0.0);
     clip.audioFadeOutBeats = object.value(QStringLiteral("audioFadeOutBeats")).toDouble(0.0);
     if (version >= 16)
