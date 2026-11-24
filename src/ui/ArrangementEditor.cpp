@@ -27,10 +27,21 @@ constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
 constexpr int clapInstrumentAutomationTargetBase =
     pluginAutomationTargetBase + pluginParametersPerEffect * maximumPluginEffectCount;
+constexpr int vst3InstrumentAutomationTargetBase = clapInstrumentAutomationTargetBase +
+    pluginParametersPerEffect;
 
 bool decodeClapInstrumentAutomationTarget(int target, qsizetype& parameterIndex)
 {
     const int encoded = target - clapInstrumentAutomationTargetBase;
+    if (encoded < 0 || encoded >= pluginParametersPerEffect)
+        return false;
+    parameterIndex = encoded;
+    return true;
+}
+
+bool decodeVst3InstrumentAutomationTarget(int target, qsizetype& parameterIndex)
+{
+    const int encoded = target - vst3InstrumentAutomationTargetBase;
     if (encoded < 0 || encoded >= pluginParametersPerEffect)
         return false;
     parameterIndex = encoded;
@@ -1013,6 +1024,14 @@ private:
                 return empty;
             return track.clapParameterAutomation[instrumentParameterIndex];
         }
+        if (decodeVst3InstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+        {
+            if (track.instrumentType != InstrumentType::Vst3Instrument ||
+                automationPluginUri.isEmpty() || track.vst3PluginId != automationPluginUri ||
+                instrumentParameterIndex >= track.vst3ParameterAutomation.size())
+                return empty;
+            return track.vst3ParameterAutomation[instrumentParameterIndex];
+        }
         const int encoded = automationParameter - pluginAutomationTargetBase;
         if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
             automationPluginUri.isEmpty())
@@ -1050,6 +1069,14 @@ private:
                 return automationDefaultValue;
             return instrumentParameterIndex < track.clapParameterValues.size()
                 ? track.clapParameterValues[instrumentParameterIndex] : automationDefaultValue;
+        }
+        if (decodeVst3InstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+        {
+            if (track.instrumentType != InstrumentType::Vst3Instrument ||
+                automationPluginUri.isEmpty() || track.vst3PluginId != automationPluginUri)
+                return automationDefaultValue;
+            return instrumentParameterIndex < track.vst3ParameterValues.size()
+                ? track.vst3ParameterValues[instrumentParameterIndex] : automationDefaultValue;
         }
         const int encoded = automationParameter - pluginAutomationTargetBase;
         if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
@@ -1091,6 +1118,15 @@ private:
                 track.clapParameterAutomation.push_back({});
             return track.clapParameterAutomation[instrumentParameterIndex];
         }
+        if (decodeVst3InstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+        {
+            if (track.instrumentType != InstrumentType::Vst3Instrument ||
+                automationPluginUri.isEmpty() || track.vst3PluginId != automationPluginUri)
+                return invalid;
+            while (track.vst3ParameterAutomation.size() <= instrumentParameterIndex)
+                track.vst3ParameterAutomation.push_back({});
+            return track.vst3ParameterAutomation[instrumentParameterIndex];
+        }
         const int encoded = automationParameter - pluginAutomationTargetBase;
         if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
             automationPluginUri.isEmpty())
@@ -1118,6 +1154,9 @@ private:
         if (decodeClapInstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
             return track.instrumentType == InstrumentType::ClapInstrument &&
                 !automationPluginUri.isEmpty() && track.clapPluginId == automationPluginUri;
+        if (decodeVst3InstrumentAutomationTarget(automationParameter, instrumentParameterIndex))
+            return track.instrumentType == InstrumentType::Vst3Instrument &&
+                !automationPluginUri.isEmpty() && track.vst3PluginId == automationPluginUri;
         const int encoded = automationParameter - pluginAutomationTargetBase;
         if (encoded < 0 || encoded >= pluginParametersPerEffect * maximumPluginEffectCount ||
             automationPluginUri.isEmpty())

@@ -29,7 +29,8 @@ enum class InstrumentType
     Synth,
     DrumRack,
     Audio,
-    ClapInstrument
+    ClapInstrument,
+    Vst3Instrument
 };
 
 enum class AudioFadeCurve
@@ -382,6 +383,11 @@ struct InstrumentTrack
     QString clapPluginState;
     QVector<float> clapParameterValues;
     QVector<QVector<AutomationPoint>> clapParameterAutomation;
+    QString vst3PluginId;
+    QString vst3PluginName;
+    QString vst3PluginState;
+    QVector<float> vst3ParameterValues;
+    QVector<QVector<AutomationPoint>> vst3ParameterAutomation;
     SynthWaveform waveform = SynthWaveform::Sine;
     bool secondOscillatorEnabled = false;
     SynthWaveform secondOscillatorWaveform = SynthWaveform::Saw;

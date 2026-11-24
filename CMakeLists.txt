@@ -71,6 +71,7 @@ add_executable(AwesomeStudio
     src/ui/MidiEditor.cpp
     src/ui/MidiEditor.h
     ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${steinberg_vst3sdk_SOURCE_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
 )
 
 if(WIN32)

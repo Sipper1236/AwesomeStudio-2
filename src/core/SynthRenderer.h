@@ -28,14 +28,14 @@ public:
     void setCurrentBeat(double beat);
     StereoSample addLiveTrackSample(size_t trackIndex, StereoSample input);
     void setSynthFilterEnvelope(size_t trackIndex, float semitoneOffset);
-    bool isClapInstrumentTrack(size_t trackIndex) const;
-    void clapInstrumentNoteOn(size_t trackIndex, std::int32_t noteId,
-                              int channel, int key, float velocity);
-    void clapInstrumentNoteOff(size_t trackIndex, std::int32_t noteId,
-                               int channel, int key, float velocity = 0.0f);
-    void clapInstrumentAllNotesOff(size_t trackIndex);
-    void clapInstrumentPitchBend(size_t trackIndex, int channel, int value);
-    void clapInstrumentsAllNotesOff();
+    bool isPluginInstrumentTrack(size_t trackIndex) const;
+    void pluginInstrumentNoteOn(size_t trackIndex, std::int32_t noteId,
+                                int channel, int key, float velocity);
+    void pluginInstrumentNoteOff(size_t trackIndex, std::int32_t noteId,
+                                 int channel, int key, float velocity = 0.0f);
+    void pluginInstrumentAllNotesOff(size_t trackIndex);
+    void pluginInstrumentPitchBend(size_t trackIndex, int channel, int value);
+    void pluginInstrumentsAllNotesOff();
     StereoSample finishMixerFrame();
     StereoSample processMasterEffects(StereoSample input);
     double effectTailSeconds() const;
@@ -92,7 +92,7 @@ private:
         float semitones = 0.0f;
     };
 
-    struct ClapInstrumentEvent
+    struct PluginInstrumentEvent
     {
         enum class Type { NoteOn, NoteOff } type = Type::NoteOn;
         qint64 frame = 0;
@@ -264,7 +264,7 @@ private:
 
     const TrackMixValue& trackMixAt(size_t trackIndex, qint64 frame, double beat);
     void addTrackSample(size_t trackIndex, float left, float right,
-                        bool clapInstrumentOutput = false);
+                        bool pluginInstrumentOutput = false);
     void addBusFrameSample(size_t busIndex, StereoSample input);
     StereoSample applyTrackEqualizer(size_t trackIndex, StereoSample input);
     void resetTrackEqualizers();
@@ -295,7 +295,8 @@ private:
     quint64 mixerFrameNumber = 0;
     std::vector<std::vector<EffectState>> trackEffectStates;
     std::vector<std::unique_ptr<ClapAudioPluginInstance>> clapInstruments;
-    std::vector<std::vector<float>> clapInstrumentLiveParameterOverrides;
+    std::vector<std::unique_ptr<Vst3AudioInstrumentInstance>> vst3Instruments;
+    std::vector<std::vector<float>> pluginInstrumentLiveParameterOverrides;
     std::vector<unsigned char> trackEffectHasTail;
     std::vector<size_t> activeEqualizerTailTracks;
     std::vector<int> trackBusIndices;
@@ -319,25 +320,25 @@ private:
     std::vector<size_t> touchedBusIndices;
     std::vector<float> busPeakLevels;
     std::vector<StereoSample> trackFrameSamples;
-    std::vector<StereoSample> trackFrameClapInstrumentSamples;
+    std::vector<StereoSample> trackFramePluginInstrumentSamples;
     std::vector<unsigned char> trackFrameTouched;
     std::vector<size_t> touchedTrackIndices;
     std::vector<float> trackPeakLevels;
     std::vector<EffectState> masterEffectStates;
     std::vector<VoiceNote> notes;
     std::vector<PitchBendEvent> pitchBendEvents;
-    std::vector<ClapInstrumentEvent> clapInstrumentEvents;
+    std::vector<PluginInstrumentEvent> pluginInstrumentEvents;
     std::vector<std::array<float, 16>> trackPitchBends;
     std::vector<size_t> activeNotes;
     std::vector<AudioRegion> audioRegions;
     std::vector<size_t> activeAudioRegions;
     size_t nextStartIndex = 0;
     size_t nextPitchBendIndex = 0;
-    size_t nextClapInstrumentEventIndex = 0;
+    size_t nextPluginInstrumentEventIndex = 0;
     size_t nextAudioStartIndex = 0;
     quint64 playbackCycle = 0;
     qint64 lastFrame = -1;
-    std::int32_t nextClapArrangementNoteId = 1;
+    std::int32_t nextPluginArrangementNoteId = 1;
     double sampleRate = 48000.0;
     double currentBeat = 0.0;
     bool hasBusSolo = false;

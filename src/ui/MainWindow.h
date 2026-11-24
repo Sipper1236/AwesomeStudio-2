@@ -119,7 +119,8 @@ private:
     void addTrack();
     void addDrumTrack();
     void addClapInstrumentTrack();
-    void editSelectedClapInstrument();
+    void addVst3InstrumentTrack();
+    void editSelectedPluginInstrument();
     void addClipAt(quint64 trackId, double startBeat);
     void addNewPattern();
     void duplicateSelectedClip();
@@ -379,7 +380,7 @@ private:
     std::array<QSpinBox*, 4> veryHighVelocityThresholdControls{};
     QLabel* masterGainReadout = nullptr;
     QLabel* instrumentHeading = nullptr;
-    QPushButton* clapInstrumentControlsButton = nullptr;
+    QPushButton* pluginInstrumentControlsButton = nullptr;
     QLabel* playheadLabel = nullptr;
     QLabel* audioDeviceLabel = nullptr;
     QAction* playAction = nullptr;
@@ -389,6 +390,7 @@ private:
     QAction* addTrackAction = nullptr;
     QAction* addDrumTrackAction = nullptr;
     QAction* addClapInstrumentTrackAction = nullptr;
+    QAction* addVst3InstrumentTrackAction = nullptr;
     QAction* addPatternAction = nullptr;
     QAction* undoAction = nullptr;
     QAction* redoAction = nullptr;

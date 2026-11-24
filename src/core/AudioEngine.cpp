@@ -504,7 +504,8 @@ void AudioEngine::triggerLiveMidiNoteOn(int channel, int midiPitch, int velocity
         }
     }
     event.percussion = track.instrumentType == InstrumentType::DrumRack;
-    event.clapInstrument = track.instrumentType == InstrumentType::ClapInstrument;
+    event.pluginInstrument = track.instrumentType == InstrumentType::ClapInstrument ||
+                             track.instrumentType == InstrumentType::Vst3Instrument;
     event.waveform = track.waveform;
     event.secondOscillatorWaveform = track.secondOscillatorWaveform;
     event.secondOscillatorDetuneCents = track.secondOscillatorDetuneCents;
@@ -611,10 +612,11 @@ void AudioEngine::triggerLiveMidiPitchBend(int channel, int value,
     enqueueLiveMidiEvent(event);
 }
 
-void AudioEngine::triggerClapInstrumentPreview(int midiPitch, int velocity,
+void AudioEngine::triggerPluginInstrumentPreview(int midiPitch, int velocity,
                                                const InstrumentTrack& track)
 {
-    if (track.instrumentType != InstrumentType::ClapInstrument)
+    if (track.instrumentType != InstrumentType::ClapInstrument &&
+        track.instrumentType != InstrumentType::Vst3Instrument)
         return;
     const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
     const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
@@ -628,7 +630,8 @@ void AudioEngine::triggerClapInstrumentPreview(int midiPitch, int velocity,
     {
         const InstrumentTrack& candidate = project->tracks[static_cast<qsizetype>(index)];
         if (candidate.instrumentType == InstrumentType::Synth ||
-            candidate.instrumentType == InstrumentType::ClapInstrument)
+            candidate.instrumentType == InstrumentType::ClapInstrument ||
+            candidate.instrumentType == InstrumentType::Vst3Instrument)
         {
             if (candidate.id == track.id)
             {
@@ -665,7 +668,7 @@ void AudioEngine::triggerClapInstrumentPreview(int midiPitch, int velocity,
     event.velocity = std::clamp(velocity, 1, 127);
     event.noteId = noteId;
     event.trackIndex = trackIndex;
-    event.clapInstrument = true;
+    event.pluginInstrument = true;
     event.preview = true;
     enqueueLiveMidiEvent(event);
 
@@ -723,13 +726,13 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
         liveMidiChannelPitchBendValues[static_cast<size_t>(event.channel)] = event.pitchBendValue;
         const double bendRatio = std::pow(2.0, static_cast<double>(bendSemitones) / 12.0);
         if (event.trackIndex < maximumTrackCount)
-            renderer.clapInstrumentPitchBend(event.trackIndex, event.channel,
+            renderer.pluginInstrumentPitchBend(event.trackIndex, event.channel,
                                              event.pitchBendValue);
         for (LiveMidiVoice& voice : liveMidiVoices)
         {
             if (event.trackIndex >= maximumTrackCount && voice.active &&
-                voice.clapInstrument && voice.channel == event.channel)
-                renderer.clapInstrumentPitchBend(voice.trackIndex, event.channel,
+                voice.pluginInstrument && voice.channel == event.channel)
+                renderer.pluginInstrumentPitchBend(voice.trackIndex, event.channel,
                                                  event.pitchBendValue);
             else if (voice.active && !voice.percussion && voice.channel == event.channel)
                 voice.frequency = voice.baseFrequency * bendRatio;
@@ -744,16 +747,16 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
         {
             if (!voice.active || !voice.held || voice.channel != event.channel ||
                 voice.pitch != event.pitch || voice.preview != event.preview ||
-                (event.noteId > 0 && voice.clapNoteId != event.noteId))
+                (event.noteId > 0 && voice.pluginNoteId != event.noteId))
                 continue;
             if (matchedVoice == nullptr || voice.serial > matchedVoice->serial)
                 matchedVoice = &voice;
         }
         if (matchedVoice == nullptr)
             return;
-        if (matchedVoice->clapInstrument)
+        if (matchedVoice->pluginInstrument)
         {
-            renderer.clapInstrumentNoteOff(matchedVoice->trackIndex, matchedVoice->clapNoteId,
+            renderer.pluginInstrumentNoteOff(matchedVoice->trackIndex, matchedVoice->pluginNoteId,
                                            matchedVoice->channel, matchedVoice->pitch);
             *matchedVoice = LiveMidiVoice{};
             return;
@@ -810,8 +813,8 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
     if (target == nullptr)
         return;
 
-    if (target->active && target->clapInstrument)
-        renderer.clapInstrumentNoteOff(target->trackIndex, target->clapNoteId,
+    if (target->active && target->pluginInstrument)
+        renderer.pluginInstrumentNoteOff(target->trackIndex, target->pluginNoteId,
                                        target->channel, target->pitch);
 
     const double panAngle = (static_cast<double>(event.pan) + 1.0) * 0.7853981633974483;
@@ -819,7 +822,7 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
     target->active = true;
     target->held = true;
     target->percussion = event.percussion;
-    target->clapInstrument = event.clapInstrument;
+    target->pluginInstrument = event.pluginInstrument;
     target->preview = event.preview;
     target->channel = event.channel;
     target->pitch = event.pitch;
@@ -841,13 +844,13 @@ void AudioEngine::applyLiveMidiEvent(const LiveMidiEvent& event, qint64 frame,
     target->filterEnvelopeReleaseFrames = std::max<qint64>(0,
         static_cast<qint64>(std::llround(event.filterEnvelopeReleaseSeconds * outputSampleRate)));
     target->serial = nextLiveMidiSerial++;
-    if (target->clapInstrument)
+    if (target->pluginInstrument)
     {
-        target->clapNoteId = event.noteId > 0 ? event.noteId :
+        target->pluginNoteId = event.noteId > 0 ? event.noteId :
             static_cast<std::int32_t>(target->serial & 0x7FFFFFFFULL);
-        if (target->clapNoteId == 0)
-            target->clapNoteId = 1;
-        renderer.clapInstrumentNoteOn(target->trackIndex, target->clapNoteId,
+        if (target->pluginNoteId == 0)
+            target->pluginNoteId = 1;
+        renderer.pluginInstrumentNoteOn(target->trackIndex, target->pluginNoteId,
             target->channel, target->pitch, static_cast<float>(event.velocity) / 127.0f);
     }
     target->baseFrequency = 440.0 * std::pow(2.0, (event.pitch - 69) / 12.0);
@@ -899,7 +902,7 @@ void AudioEngine::renderLiveMidiVoices(qint64 frame, SynthRenderer& renderer)
     {
         if (!voice.active)
             continue;
-        if (voice.clapInstrument)
+        if (voice.pluginInstrument)
             continue;
 
         const qint64 age = frame - voice.startFrame;
@@ -1425,7 +1428,7 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
 
     if (liveMidiPanic.exchange(false, std::memory_order_acq_rel))
     {
-        renderer.clapInstrumentsAllNotesOff();
+        renderer.pluginInstrumentsAllNotesOff();
         clearLiveMidiVoices();
         clapPreviewNoteOffPending.store(false, std::memory_order_release);
         const size_t writeIndex = liveMidiWriteIndex.load(std::memory_order_acquire);

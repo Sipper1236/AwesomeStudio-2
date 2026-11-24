@@ -47,7 +47,7 @@ public:
     void triggerLiveMidiNoteOff(int channel, int midiPitch);
     void triggerLiveMidiPitchBend(int channel, int value,
                                   const InstrumentTrack* track = nullptr);
-    void triggerClapInstrumentPreview(int midiPitch, int velocity, const InstrumentTrack& track);
+    void triggerPluginInstrumentPreview(int midiPitch, int velocity, const InstrumentTrack& track);
     void stopLiveMidiNotes();
     void triggerPreview(int midiPitch, int velocity = 96,
                         SynthWaveform waveform = SynthWaveform::Sine, float pan = 0.0f,
@@ -104,7 +104,7 @@ private:
         size_t trackIndex = maximumTrackCount;
         bool percussion = false;
         bool pitchBend = false;
-        bool clapInstrument = false;
+        bool pluginInstrument = false;
         bool preview = false;
         bool filterEnvelopeEnabled = false;
         SynthWaveform waveform = SynthWaveform::Sine;
@@ -135,12 +135,12 @@ private:
         bool active = false;
         bool held = false;
         bool percussion = false;
-        bool clapInstrument = false;
+        bool pluginInstrument = false;
         bool preview = false;
         bool filterEnvelopeEnabled = false;
         int channel = 0;
         int pitch = 0;
-        std::int32_t clapNoteId = 0;
+        std::int32_t pluginNoteId = 0;
         size_t trackIndex = maximumTrackCount;
         qint64 startFrame = 0;
         qint64 releaseFrame = -1;

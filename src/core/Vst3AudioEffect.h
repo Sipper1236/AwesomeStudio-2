@@ -26,6 +26,7 @@ struct Vst3PluginDescriptor
     QString name;
     QString vendor;
     QString path;
+    bool instrument = false;
     std::uint32_t inputChannels = 0;
     std::uint32_t outputChannels = 0;
     QVector<Vst3PluginParameter> parameters;
@@ -54,6 +55,39 @@ public:
     void stopProcessing();
     void resetProcessingState();
     bool process(float& left, float& right, float& alignedDryLeft, float& alignedDryRight);
+
+private:
+    struct Private;
+    std::unique_ptr<Private> d;
+};
+
+class Vst3AudioInstrumentInstance
+{
+public:
+    static QVector<Vst3PluginDescriptor> availableInstruments();
+    static bool describe(const QString& id, Vst3PluginDescriptor& descriptor);
+
+    Vst3AudioInstrumentInstance(const QString& id, double sampleRate,
+                                const QVector<float>& parameterValues,
+                                const QString& pluginState = QString());
+    ~Vst3AudioInstrumentInstance();
+
+    Vst3AudioInstrumentInstance(const Vst3AudioInstrumentInstance&) = delete;
+    Vst3AudioInstrumentInstance& operator=(const Vst3AudioInstrumentInstance&) = delete;
+
+    bool isValid() const;
+    qint64 processingLatencyFrames() const;
+    qsizetype parameterCount() const;
+    float parameterValue(qsizetype index) const;
+    void setParameter(qsizetype index, float value);
+    bool saveState(QString& pluginState) const;
+    void stopProcessing();
+    void resetProcessingState();
+    void allNotesOff();
+    void noteOn(std::int32_t noteId, int channel, int key, float velocity);
+    void noteOff(std::int32_t noteId, int channel, int key, float velocity = 0.0f);
+    void pitchBend(int channel, int value);
+    bool process(float& left, float& right);
 
 private:
     struct Private;

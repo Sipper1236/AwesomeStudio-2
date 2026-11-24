@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 55;
+constexpr int currentProjectVersion = 56;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -590,6 +590,23 @@ QJsonObject saveTrack(const InstrumentTrack& track)
                  automation.push_back(saveAutomation(points));
              return automation;
          }()},
+        {QStringLiteral("vst3PluginId"), track.vst3PluginId},
+        {QStringLiteral("vst3PluginName"), track.vst3PluginName},
+        {QStringLiteral("vst3PluginState"), track.vst3PluginState},
+        {QStringLiteral("vst3ParameterValues"), [&track]
+         {
+             QJsonArray values;
+             for (float value : track.vst3ParameterValues)
+                 values.push_back(value);
+             return values;
+         }()},
+        {QStringLiteral("vst3ParameterAutomation"), [&track]
+         {
+             QJsonArray automation;
+             for (const QVector<AutomationPoint>& points : track.vst3ParameterAutomation)
+                 automation.push_back(saveAutomation(points));
+             return automation;
+         }()},
         {QStringLiteral("waveform"), static_cast<int>(track.waveform)},
         {QStringLiteral("secondOscillatorEnabled"), track.secondOscillatorEnabled},
         {QStringLiteral("secondOscillatorWaveform"), static_cast<int>(track.secondOscillatorWaveform)},
@@ -816,7 +833,8 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
         return false;
     track.name = object.value(QStringLiteral("name")).toString(QStringLiteral("Synth"));
     const int instrumentType = object.value(QStringLiteral("instrumentType")).toInt(0);
-    if (instrumentType < 0 || instrumentType > (version >= 40 ? 3 : 2))
+    if (instrumentType < 0 || instrumentType >
+            (version >= 56 ? 4 : version >= 40 ? 3 : 2))
     {
         setError(error, QStringLiteral("The project contains an unsupported instrument type."));
         return false;
@@ -873,6 +891,51 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                     return false;
                 track.clapParameterAutomation.push_back(std::move(points));
             }
+        }
+    }
+    if (version >= 56)
+    {
+        const QJsonValue pluginId = object.value(QStringLiteral("vst3PluginId"));
+        const QJsonValue pluginName = object.value(QStringLiteral("vst3PluginName"));
+        const QJsonValue pluginState = object.value(QStringLiteral("vst3PluginState"));
+        const QJsonValue parameterValues = object.value(QStringLiteral("vst3ParameterValues"));
+        const QJsonValue parameterAutomation = object.value(QStringLiteral("vst3ParameterAutomation"));
+        if ((!pluginId.isString() && !pluginId.isUndefined()) ||
+            (!pluginName.isString() && !pluginName.isUndefined()) ||
+            (!pluginState.isString() && !pluginState.isUndefined()) ||
+            !parameterValues.isArray() || parameterValues.toArray().size() > 256 ||
+            (!parameterAutomation.isUndefined() &&
+             (!parameterAutomation.isArray() || parameterAutomation.toArray().size() > 256)))
+        {
+            setError(error, QStringLiteral("The track contains invalid VST3 instrument settings."));
+            return false;
+        }
+        track.vst3PluginId = pluginId.toString();
+        track.vst3PluginName = pluginName.toString();
+        track.vst3PluginState = pluginState.toString();
+        if (track.vst3PluginId.size() > 1024 || track.vst3PluginName.size() > 512 ||
+            track.vst3PluginState.toUtf8().size() > maximumPluginStateBytes)
+        {
+            setError(error, QStringLiteral("The track contains oversized VST3 instrument settings."));
+            return false;
+        }
+        for (const QJsonValue& parameterValue : parameterValues.toArray())
+        {
+            const double number = parameterValue.toDouble(std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(number) || number < -1.0e9 || number > 1.0e9)
+            {
+                setError(error, QStringLiteral("The track contains an invalid VST3 parameter value."));
+                return false;
+            }
+            track.vst3ParameterValues.push_back(static_cast<float>(number));
+        }
+        for (const QJsonValue& curve : parameterAutomation.toArray())
+        {
+            QVector<AutomationPoint> points;
+            if (!loadAutomation(curve, points, QStringLiteral("VST3 instrument parameter"),
+                                version, error))
+                return false;
+            track.vst3ParameterAutomation.push_back(std::move(points));
         }
     }
     track.waveform = static_cast<SynthWaveform>(object.value(QStringLiteral("waveform")).toInt(0));
@@ -1251,7 +1314,8 @@ bool ProjectFile::save(const QString& path, const ProjectData& project, QString*
         !std::all_of(safeProject.tracks.cbegin(), safeProject.tracks.cend(),
                      [&statesAreWithinLimit](const InstrumentTrack& track)
                      { return statesAreWithinLimit(track.effects) &&
-                         track.clapPluginState.toUtf8().size() <= maximumPluginStateBytes; }) ||
+                         track.clapPluginState.toUtf8().size() <= maximumPluginStateBytes &&
+                         track.vst3PluginState.toUtf8().size() <= maximumPluginStateBytes; }) ||
         !std::all_of(safeProject.buses.cbegin(), safeProject.buses.cend(),
                      [&statesAreWithinLimit](const MixerBus& bus)
                      { return statesAreWithinLimit(bus.effects); }))

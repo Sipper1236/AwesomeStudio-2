@@ -984,6 +984,8 @@ constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
 constexpr int clapInstrumentAutomationTargetBase =
     pluginAutomationTargetBase + pluginParametersPerEffect * maximumPluginEffectCount;
+constexpr int vst3InstrumentAutomationTargetBase = clapInstrumentAutomationTargetBase +
+    pluginParametersPerEffect;
 
 int pluginAutomationTarget(qsizetype effectIndex, qsizetype parameterIndex)
 {
@@ -996,9 +998,23 @@ int clapInstrumentAutomationTarget(qsizetype parameterIndex)
     return clapInstrumentAutomationTargetBase + static_cast<int>(parameterIndex);
 }
 
+int vst3InstrumentAutomationTarget(qsizetype parameterIndex)
+{
+    return vst3InstrumentAutomationTargetBase + static_cast<int>(parameterIndex);
+}
+
 bool decodeClapInstrumentAutomationTarget(int target, qsizetype& parameterIndex)
 {
     const int encoded = target - clapInstrumentAutomationTargetBase;
+    if (encoded < 0 || encoded >= pluginParametersPerEffect)
+        return false;
+    parameterIndex = encoded;
+    return true;
+}
+
+bool decodeVst3InstrumentAutomationTarget(int target, qsizetype& parameterIndex)
+{
+    const int encoded = target - vst3InstrumentAutomationTargetBase;
     if (encoded < 0 || encoded >= pluginParametersPerEffect)
         return false;
     parameterIndex = encoded;
@@ -1043,6 +1059,16 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
             return &empty;
         return &track.clapParameterAutomation[instrumentParameterIndex];
     }
+    if (decodeVst3InstrumentAutomationTarget(target, instrumentParameterIndex))
+    {
+        if (track.instrumentType != InstrumentType::Vst3Instrument || pluginUri.isEmpty() ||
+            track.vst3PluginId != pluginUri)
+            return nullptr;
+        static const QVector<AutomationPoint> empty;
+        if (instrumentParameterIndex >= track.vst3ParameterAutomation.size())
+            return &empty;
+        return &track.vst3ParameterAutomation[instrumentParameterIndex];
+    }
     qsizetype effectIndex = 0;
     qsizetype parameterIndex = 0;
     if (!decodePluginAutomationTarget(target, effectIndex, parameterIndex) ||
@@ -1081,6 +1107,15 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         while (track.clapParameterAutomation.size() <= instrumentParameterIndex)
             track.clapParameterAutomation.push_back({});
         return &track.clapParameterAutomation[instrumentParameterIndex];
+    }
+    if (decodeVst3InstrumentAutomationTarget(target, instrumentParameterIndex))
+    {
+        if (track.instrumentType != InstrumentType::Vst3Instrument || pluginUri.isEmpty() ||
+            track.vst3PluginId != pluginUri)
+            return nullptr;
+        while (track.vst3ParameterAutomation.size() <= instrumentParameterIndex)
+            track.vst3ParameterAutomation.push_back({});
+        return &track.vst3ParameterAutomation[instrumentParameterIndex];
     }
     qsizetype effectIndex = 0;
     qsizetype parameterIndex = 0;
@@ -1225,6 +1260,32 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
                               clapInstrumentAutomationTarget(parameterIndex),
                               parameter.minimum, parameter.maximum, defaultValue,
                               track->clapPluginId);
+                }
+            }
+        }
+        if (track->instrumentType == InstrumentType::Vst3Instrument &&
+            !track->vst3PluginId.isEmpty())
+        {
+            Vst3PluginDescriptor descriptor;
+            if (Vst3AudioInstrumentInstance::describe(track->vst3PluginId, descriptor))
+            {
+                const QString pluginName = track->vst3PluginName.isEmpty()
+                    ? descriptor.name : track->vst3PluginName;
+                for (qsizetype parameterIndex = 0;
+                     parameterIndex < descriptor.parameters.size() &&
+                         parameterIndex < pluginParametersPerEffect;
+                     ++parameterIndex)
+                {
+                    const Vst3PluginParameter& parameter = descriptor.parameters[parameterIndex];
+                    if (parameter.hidden || parameter.readOnly)
+                        continue;
+                    const float defaultValue = parameterIndex < track->vst3ParameterValues.size()
+                        ? track->vst3ParameterValues[parameterIndex] : parameter.defaultValue;
+                    addTarget(QObject::tr("Instrument · %1 · %2")
+                                  .arg(pluginName, parameter.name),
+                              vst3InstrumentAutomationTarget(parameterIndex),
+                              parameter.minimum, parameter.maximum, defaultValue,
+                              track->vst3PluginId);
                 }
             }
         }
@@ -2374,9 +2435,10 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(midiEditor, &MidiEditor::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
-        if (track != nullptr && track->instrumentType == InstrumentType::ClapInstrument)
+        if (track != nullptr && (track->instrumentType == InstrumentType::ClapInstrument ||
+                                 track->instrumentType == InstrumentType::Vst3Instrument))
         {
-            audioEngine.triggerClapInstrumentPreview(pitch, 96, *track);
+            audioEngine.triggerPluginInstrumentPreview(pitch, 96, *track);
             return;
         }
         const int pad = track != nullptr && track->instrumentType == InstrumentType::DrumRack
@@ -2446,9 +2508,10 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     connect(stepSequencer, &StepSequencer::previewRequested, this, [this](int pitch)
     {
         const InstrumentTrack* track = selectedTrack();
-        if (track != nullptr && track->instrumentType == InstrumentType::ClapInstrument)
+        if (track != nullptr && (track->instrumentType == InstrumentType::ClapInstrument ||
+                                 track->instrumentType == InstrumentType::Vst3Instrument))
         {
-            audioEngine.triggerClapInstrumentPreview(pitch, 100, *track);
+            audioEngine.triggerPluginInstrumentPreview(pitch, 100, *track);
             return;
         }
         const int pad = track != nullptr && track->instrumentType == InstrumentType::DrumRack
@@ -2876,6 +2939,11 @@ void MainWindow::createActions()
     connect(addClapInstrumentTrackAction, &QAction::triggered,
             this, &MainWindow::addClapInstrumentTrack);
 #endif
+#if defined(AWESOME_STUDIO_HAS_VST3)
+    addVst3InstrumentTrackAction = new QAction(tr("Add VST3 instrument"), this);
+    connect(addVst3InstrumentTrackAction, &QAction::triggered,
+            this, &MainWindow::addVst3InstrumentTrack);
+#endif
     addPatternAction = new QAction(tr("New pattern"), this);
     connect(addPatternAction, &QAction::triggered, this, &MainWindow::addNewPattern);
 
@@ -2978,7 +3046,7 @@ void MainWindow::createActions()
 
     midiMonitorAction = new QAction(tr("Monitor MIDI"), this);
     midiMonitorAction->setCheckable(true);
-    midiMonitorAction->setToolTip(tr("Play incoming MIDI on the selected synth, drum rack, or CLAP instrument without recording"));
+    midiMonitorAction->setToolTip(tr("Play incoming MIDI on the selected synth, drum rack, CLAP instrument, or VST3 instrument without recording"));
     connect(midiMonitorAction, &QAction::toggled, this, &MainWindow::setMidiMonitorEnabled);
 
     loopAction = new QAction(tr("Loop"), this);
@@ -3029,6 +3097,8 @@ void MainWindow::createToolBars()
     arrangementBar->addAction(addDrumTrackAction);
     if (addClapInstrumentTrackAction != nullptr)
         arrangementBar->addAction(addClapInstrumentTrackAction);
+    if (addVst3InstrumentTrackAction != nullptr)
+        arrangementBar->addAction(addVst3InstrumentTrackAction);
     arrangementBar->addAction(addPatternAction);
     arrangementBar->addSeparator();
     arrangementBar->addWidget(new QLabel(tr("CLIP LENGTH"), arrangementBar));
@@ -3429,6 +3499,12 @@ void MainWindow::createDocks()
             this, &MainWindow::addClapInstrumentTrack);
     browserLayout->addWidget(addClapInstrumentButton);
 #endif
+#if defined(AWESOME_STUDIO_HAS_VST3)
+    auto* addVst3InstrumentButton = new QPushButton(tr("Add VST3 instrument"), browser);
+    connect(addVst3InstrumentButton, &QPushButton::clicked,
+            this, &MainWindow::addVst3InstrumentTrack);
+    browserLayout->addWidget(addVst3InstrumentButton);
+#endif
     auto* importAudioButton = new QPushButton(tr("Import WAV audio"), browser);
     connect(importAudioButton, &QPushButton::clicked, this, &MainWindow::importAudio);
     browserLayout->addWidget(importAudioButton);
@@ -3436,13 +3512,13 @@ void MainWindow::createDocks()
     instrumentHeading = new QLabel(tr("SELECTED INSTRUMENT"), browser);
     instrumentHeading->setStyleSheet(QStringLiteral("color: #8d9aa7; font-size: 10px; font-weight: 700; margin-top: 10px;"));
     browserLayout->addWidget(instrumentHeading);
-    clapInstrumentControlsButton = new QPushButton(tr("Instrument controls…"), browser);
-    clapInstrumentControlsButton->setToolTip(
-        tr("Edit the selected CLAP instrument's advertised parameters"));
-    clapInstrumentControlsButton->setVisible(false);
-    connect(clapInstrumentControlsButton, &QPushButton::clicked,
-            this, &MainWindow::editSelectedClapInstrument);
-    browserLayout->addWidget(clapInstrumentControlsButton);
+    pluginInstrumentControlsButton = new QPushButton(tr("Instrument controls…"), browser);
+    pluginInstrumentControlsButton->setToolTip(
+        tr("Edit the selected plug-in instrument's advertised parameters"));
+    pluginInstrumentControlsButton->setVisible(false);
+    connect(pluginInstrumentControlsButton, &QPushButton::clicked,
+            this, &MainWindow::editSelectedPluginInstrument);
+    browserLayout->addWidget(pluginInstrumentControlsButton);
     synthPresetPanel = new QWidget(browser);
     auto* synthPresetRow = new QHBoxLayout(synthPresetPanel);
     synthPresetRow->setContentsMargins(0, 0, 0, 0);
@@ -4314,6 +4390,8 @@ void MainWindow::createMenus()
     patternMenu->addAction(addDrumTrackAction);
     if (addClapInstrumentTrackAction != nullptr)
         patternMenu->addAction(addClapInstrumentTrackAction);
+    if (addVst3InstrumentTrackAction != nullptr)
+        patternMenu->addAction(addVst3InstrumentTrackAction);
     patternMenu->addAction(addPatternAction);
 
     QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
@@ -4585,30 +4663,49 @@ void MainWindow::refreshProjectUi()
         envelopeControls[index]->setValue(envelopeValues[index]);
         envelopeControls[index]->setEnabled(synthTrackSelected);
     }
-    const bool clapInstrumentSelected = track != nullptr &&
-        track->instrumentType == InstrumentType::ClapInstrument;
-    bool clapInstrumentAvailable = false;
-    bool clapInstrumentHasControls = false;
-    ClapPluginDescriptor clapInstrumentDescriptor;
-    if (clapInstrumentSelected)
+    const bool pluginInstrumentSelected = track != nullptr &&
+        (track->instrumentType == InstrumentType::ClapInstrument ||
+         track->instrumentType == InstrumentType::Vst3Instrument);
+    bool pluginInstrumentAvailable = false;
+    bool pluginInstrumentHasControls = false;
+    QString pluginInstrumentName;
+    if (pluginInstrumentSelected && track->instrumentType == InstrumentType::ClapInstrument)
     {
-        clapInstrumentAvailable = ClapAudioPluginInstance::describe(
-            track->clapPluginId, ClapPluginKind::Instrument, clapInstrumentDescriptor);
-        if (clapInstrumentAvailable)
+        ClapPluginDescriptor descriptor;
+        pluginInstrumentAvailable = ClapAudioPluginInstance::describe(
+            track->clapPluginId, ClapPluginKind::Instrument, descriptor);
+        if (pluginInstrumentAvailable)
         {
-            clapInstrumentHasControls = std::any_of(
-                clapInstrumentDescriptor.parameters.cbegin(),
-                clapInstrumentDescriptor.parameters.cend(),
+            pluginInstrumentName = track->clapPluginName.isEmpty()
+                ? descriptor.name : track->clapPluginName;
+            pluginInstrumentHasControls = std::any_of(
+                descriptor.parameters.cbegin(), descriptor.parameters.cend(),
                 [](const ClapPluginParameter& parameter)
                 { return !parameter.hidden && !parameter.readOnly; });
         }
     }
-    clapInstrumentControlsButton->setVisible(clapInstrumentSelected);
-    clapInstrumentControlsButton->setEnabled(clapInstrumentAvailable && clapInstrumentHasControls);
-    clapInstrumentControlsButton->setToolTip(
-        !clapInstrumentAvailable ? tr("This CLAP instrument is not installed") :
-        !clapInstrumentHasControls ? tr("This instrument exposes no editable parameters") :
-        tr("Edit the selected CLAP instrument's advertised parameters"));
+    else if (pluginInstrumentSelected)
+    {
+        Vst3PluginDescriptor descriptor;
+        pluginInstrumentAvailable = Vst3AudioInstrumentInstance::describe(
+            track->vst3PluginId, descriptor);
+        if (pluginInstrumentAvailable)
+        {
+            pluginInstrumentName = track->vst3PluginName.isEmpty()
+                ? descriptor.name : track->vst3PluginName;
+            pluginInstrumentHasControls = std::any_of(
+                descriptor.parameters.cbegin(), descriptor.parameters.cend(),
+                [](const Vst3PluginParameter& parameter)
+                { return !parameter.hidden && !parameter.readOnly; });
+        }
+    }
+    pluginInstrumentControlsButton->setVisible(pluginInstrumentSelected);
+    pluginInstrumentControlsButton->setEnabled(pluginInstrumentAvailable &&
+                                                pluginInstrumentHasControls);
+    pluginInstrumentControlsButton->setToolTip(
+        !pluginInstrumentAvailable ? tr("This plug-in instrument is not installed") :
+        !pluginInstrumentHasControls ? tr("This instrument exposes no editable parameters") :
+        tr("Edit the selected plug-in instrument's advertised parameters"));
     equalizerControls->setVisible(track != nullptr);
     const std::array<float, 3> equalizerValues = track == nullptr
         ? std::array<float, 3>{0.0f, 0.0f, 0.0f}
@@ -4634,11 +4731,13 @@ void MainWindow::refreshProjectUi()
     instrumentHeading->setText(track == nullptr ? tr("SELECTED INSTRUMENT") :
                                track->instrumentType == InstrumentType::DrumRack ? tr("DRUM RACK") :
                                track->instrumentType == InstrumentType::Audio ? tr("AUDIO SOURCE") :
-                               clapInstrumentSelected
-                                   ? tr("CLAP INSTRUMENT · %1%2")
-                                         .arg(track->clapPluginName.isEmpty()
-                                                  ? track->name : track->clapPluginName,
-                                              clapInstrumentAvailable ? QString() : tr(" (unavailable)"))
+                               pluginInstrumentSelected
+                                   ? tr("%1 INSTRUMENT · %2%3")
+                                         .arg(track->instrumentType == InstrumentType::Vst3Instrument
+                                                  ? QStringLiteral("VST3") : QStringLiteral("CLAP"),
+                                              pluginInstrumentName.isEmpty()
+                                                  ? track->name : pluginInstrumentName,
+                                              pluginInstrumentAvailable ? QString() : tr(" (unavailable)"))
                                    : tr("SELECTED INSTRUMENT"));
 
     const MidiClip* clip = selectedClip();
@@ -6383,23 +6482,131 @@ void MainWindow::addClapInstrumentTrack()
     statusBar()->showMessage(tr("Added CLAP instrument: %1").arg(plugin.name), 2500);
 }
 
-void MainWindow::editSelectedClapInstrument()
+void MainWindow::addVst3InstrumentTrack()
 {
-    InstrumentTrack* track = selectedTrack();
-    if (track == nullptr || track->instrumentType != InstrumentType::ClapInstrument)
-        return;
-
-    ClapPluginDescriptor descriptor;
-    if (!ClapAudioPluginInstance::describe(track->clapPluginId,
-                                           ClapPluginKind::Instrument, descriptor))
+    if (project.tracks.size() >= 256)
     {
-        QMessageBox::warning(this, tr("CLAP instrument unavailable"),
-            tr("Install %1 or choose another instrument to edit its parameters.")
-                .arg(track->clapPluginName.isEmpty() ? track->name : track->clapPluginName));
+        statusBar()->showMessage(tr("The project has reached the 256-track limit"), 3000);
         return;
     }
+
+    const QVector<Vst3PluginDescriptor> plugins =
+        Vst3AudioInstrumentInstance::availableInstruments();
+    if (plugins.isEmpty())
+    {
+        QMessageBox::information(this, tr("Add VST3 instrument"),
+            tr("No supported VST3 instruments were found in the standard plug-in folders."));
+        return;
+    }
+
+    QStringList choices;
+    choices.reserve(plugins.size());
+    for (const Vst3PluginDescriptor& plugin : plugins)
+        choices.push_back(QStringLiteral("%1 — %2 — %3")
+                              .arg(plugin.name, plugin.vendor, plugin.id));
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(this, tr("Add VST3 instrument"),
+        tr("Instrument"), choices, 0, false, &accepted);
+    if (!accepted)
+        return;
+    const int index = choices.indexOf(selected);
+    if (index < 0)
+        return;
+
+    const Vst3PluginDescriptor& plugin = plugins[index];
+    InstrumentTrack track;
+    track.id = project.nextTrackId();
+    track.name = tr("%1 %2").arg(plugin.name).arg(track.id);
+    track.instrumentType = InstrumentType::Vst3Instrument;
+    track.vst3PluginId = plugin.id;
+    track.vst3PluginName = plugin.name;
+    track.vst3ParameterValues.reserve(plugin.parameters.size());
+    for (const Vst3PluginParameter& parameter : plugin.parameters)
+        track.vst3ParameterValues.push_back(parameter.defaultValue);
+
+    MidiClip clip;
+    clip.id = nextClipId();
+    clip.name = tr("Pattern %1").arg(clip.id);
+    clip.lengthBeats = project.patternLengthBeats();
+    track.clips.push_back(std::move(clip));
+    project.tracks.push_back(std::move(track));
+    selectedTrackId = project.tracks.last().id;
+    selectedClipId = project.tracks.last().clips.first().id;
+    settingsDirty = true;
+    refreshProjectUi();
+    editorTabs->setCurrentWidget(midiEditor);
+    statusBar()->showMessage(tr("Added VST3 instrument: %1").arg(plugin.name), 2500);
+}
+
+void MainWindow::editSelectedPluginInstrument()
+{
+    InstrumentTrack* track = selectedTrack();
+    if (track == nullptr || (track->instrumentType != InstrumentType::ClapInstrument &&
+                             track->instrumentType != InstrumentType::Vst3Instrument))
+        return;
+
+    const bool vst3Instrument = track->instrumentType == InstrumentType::Vst3Instrument;
+    const QString instrumentPluginId = vst3Instrument ? track->vst3PluginId : track->clapPluginId;
+    const QString savedPluginName = vst3Instrument ? track->vst3PluginName : track->clapPluginName;
+    QString descriptorName;
+    struct EditableParameter
+    {
+        QString name;
+        float minimum = 0.0f;
+        float maximum = 1.0f;
+        float defaultValue = 0.0f;
+        bool integer = false;
+        bool toggled = false;
+        bool hidden = false;
+        bool readOnly = false;
+    };
+    QVector<EditableParameter> parameters;
+    if (vst3Instrument)
+    {
+        Vst3PluginDescriptor descriptor;
+        if (!Vst3AudioInstrumentInstance::describe(instrumentPluginId, descriptor))
+        {
+            QMessageBox::warning(this, tr("VST3 instrument unavailable"),
+                tr("Install %1 or choose another instrument to edit its parameters.")
+                    .arg(savedPluginName.isEmpty() ? track->name : savedPluginName));
+            return;
+        }
+        descriptorName = descriptor.name;
+        const qsizetype count = std::min<qsizetype>(descriptor.parameters.size(),
+                                                     pluginParametersPerEffect);
+        parameters.reserve(count);
+        for (qsizetype index = 0; index < count; ++index)
+        {
+            const Vst3PluginParameter& parameter = descriptor.parameters[index];
+            parameters.push_back({parameter.name, parameter.minimum, parameter.maximum,
+                                  parameter.defaultValue, parameter.integer, parameter.toggled,
+                                  parameter.hidden, parameter.readOnly});
+        }
+    }
+    else
+    {
+        ClapPluginDescriptor descriptor;
+        if (!ClapAudioPluginInstance::describe(instrumentPluginId,
+                                               ClapPluginKind::Instrument, descriptor))
+        {
+            QMessageBox::warning(this, tr("CLAP instrument unavailable"),
+                tr("Install %1 or choose another instrument to edit its parameters.")
+                    .arg(savedPluginName.isEmpty() ? track->name : savedPluginName));
+            return;
+        }
+        descriptorName = descriptor.name;
+        const qsizetype count = std::min<qsizetype>(descriptor.parameters.size(),
+                                                     pluginParametersPerEffect);
+        parameters.reserve(count);
+        for (qsizetype index = 0; index < count; ++index)
+        {
+            const ClapPluginParameter& parameter = descriptor.parameters[index];
+            parameters.push_back({parameter.name, parameter.minimum, parameter.maximum,
+                                  parameter.defaultValue, parameter.integer, parameter.toggled,
+                                  parameter.hidden, parameter.readOnly});
+        }
+    }
     const quint64 trackId = track->id;
-    const QString instrumentPluginId = track->clapPluginId;
 
     struct ParameterControl
     {
@@ -6408,28 +6615,31 @@ void MainWindow::editSelectedClapInstrument()
     };
 
     QDialog dialog(this);
-    dialog.setWindowTitle(tr("%1 controls").arg(descriptor.name));
+    dialog.setWindowTitle(tr("%1 controls").arg(descriptorName));
     auto* layout = new QVBoxLayout(&dialog);
     auto* scroll = new QScrollArea(&dialog);
     scroll->setWidgetResizable(true);
     auto* formContents = new QWidget(scroll);
     auto* form = new QFormLayout(formContents);
-    QVector<float> values = track->clapParameterValues;
-    if (values.size() > descriptor.parameters.size())
-        values.resize(descriptor.parameters.size());
-    while (values.size() < descriptor.parameters.size())
-        values.push_back(descriptor.parameters[values.size()].defaultValue);
+    QVector<float> values = vst3Instrument ? track->vst3ParameterValues
+                                            : track->clapParameterValues;
+    if (values.size() > parameters.size())
+        values.resize(parameters.size());
+    while (values.size() < parameters.size())
+        values.push_back(parameters[values.size()].defaultValue);
 
     QVector<ParameterControl> controls;
-    for (qsizetype index = 0; index < descriptor.parameters.size(); ++index)
+    for (qsizetype index = 0; index < parameters.size(); ++index)
     {
-        const ClapPluginParameter& parameter = descriptor.parameters[index];
+        const EditableParameter& parameter = parameters[index];
         if (parameter.hidden)
             continue;
         const float value = std::clamp(values[index], parameter.minimum, parameter.maximum);
-        const int automationTarget = clapInstrumentAutomationTarget(index);
+        const int automationTarget = vst3Instrument
+            ? vst3InstrumentAutomationTarget(index) : clapInstrumentAutomationTarget(index);
         const auto recordInstrumentParameterChange =
-            [this, trackId, instrumentPluginId, automationTarget, index, parameter](float newValue)
+            [this, trackId, instrumentPluginId, automationTarget, index, parameter,
+             vst3Instrument](float newValue)
         {
             if (automationWriteSession.active &&
                 automationWriteSession.trackId == trackId &&
@@ -6447,11 +6657,16 @@ void MainWindow::editSelectedClapInstrument()
                 return;
             InstrumentTrack* currentTrack = project.findTrack(trackId);
             if (currentTrack == nullptr ||
-                currentTrack->instrumentType != InstrumentType::ClapInstrument ||
-                currentTrack->clapPluginId != instrumentPluginId)
+                (vst3Instrument
+                    ? currentTrack->instrumentType != InstrumentType::Vst3Instrument ||
+                          currentTrack->vst3PluginId != instrumentPluginId
+                    : currentTrack->instrumentType != InstrumentType::ClapInstrument ||
+                          currentTrack->clapPluginId != instrumentPluginId))
                 return;
-            const float baseValue = index < currentTrack->clapParameterValues.size()
-                ? currentTrack->clapParameterValues[index] : parameter.defaultValue;
+            const QVector<float>& currentValues = vst3Instrument
+                ? currentTrack->vst3ParameterValues : currentTrack->clapParameterValues;
+            const float baseValue = index < currentValues.size()
+                ? currentValues[index] : parameter.defaultValue;
             beginAutomationWrite(trackId, automationTarget, baseValue, instrumentPluginId,
                                  -1, index, parameter.minimum, parameter.maximum,
                                  parameter.name);
@@ -6507,7 +6722,7 @@ void MainWindow::editSelectedClapInstrument()
     dialog.resize(440, 520);
     if (controls.isEmpty())
     {
-        QMessageBox::information(this, tr("CLAP instrument controls"),
+        QMessageBox::information(this, tr("Plug-in instrument controls"),
             tr("This instrument does not expose editable parameters."));
         return;
     }
@@ -6522,7 +6737,7 @@ void MainWindow::editSelectedClapInstrument()
     {
         if (auto* toggle = qobject_cast<QCheckBox*>(control.editor))
         {
-            const ClapPluginParameter& parameter = descriptor.parameters[control.index];
+            const EditableParameter& parameter = parameters[control.index];
             values[control.index] = toggle->isChecked() ? parameter.maximum : parameter.minimum;
         }
         else if (auto* number = qobject_cast<QDoubleSpinBox*>(control.editor))
@@ -6530,7 +6745,10 @@ void MainWindow::editSelectedClapInstrument()
             values[control.index] = static_cast<float>(number->value());
         }
     }
-    track->clapParameterValues = std::move(values);
+    if (vst3Instrument)
+        track->vst3ParameterValues = std::move(values);
+    else
+        track->clapParameterValues = std::move(values);
     project.normalize();
     settingsDirty = true;
     refreshProjectUi();

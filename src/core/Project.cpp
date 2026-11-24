@@ -702,7 +702,7 @@ void ProjectData::normalize()
         track.sends = std::move(validSends);
         normalizeEffectChain(track.effects, effectBudget);
         track.instrumentType = static_cast<InstrumentType>(
-            std::clamp(static_cast<int>(track.instrumentType), 0, 3));
+            std::clamp(static_cast<int>(track.instrumentType), 0, 4));
         if (track.clapParameterValues.size() > 256)
             track.clapParameterValues.resize(256);
         for (float& value : track.clapParameterValues)
@@ -711,6 +711,18 @@ void ProjectData::normalize()
         if (track.clapParameterAutomation.size() > 256)
             track.clapParameterAutomation.resize(256);
         for (QVector<AutomationPoint>& points : track.clapParameterAutomation)
+            normalizeAutomation(points, -1.0e9f, 1.0e9f);
+        if (track.vst3ParameterValues.size() > 256)
+            track.vst3ParameterValues.resize(256);
+        for (float& value : track.vst3ParameterValues)
+        {
+            if (!std::isfinite(value))
+                value = 0.0f;
+            value = std::clamp(value, -1.0e9f, 1.0e9f);
+        }
+        if (track.vst3ParameterAutomation.size() > 256)
+            track.vst3ParameterAutomation.resize(256);
+        for (QVector<AutomationPoint>& points : track.vst3ParameterAutomation)
             normalizeAutomation(points, -1.0e9f, 1.0e9f);
         track.gain = std::clamp(track.gain, 0.0f, 1.0f);
         track.pan = std::clamp(track.pan, -1.0f, 1.0f);
