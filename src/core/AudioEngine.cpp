@@ -1471,6 +1471,11 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
     const qint64 releaseTailFrames = static_cast<qint64>(outputSampleRate * 0.08);
     const qint64 clockStart = audioClockFrames.load(std::memory_order_relaxed);
     const auto sampleFormat = outputFormat->sampleFormat();
+    qint64 initialProjectFrame = playbackFrame;
+    if (project->loopEnabled && initialProjectFrame >= 0)
+        initialProjectFrame %= patternFrames;
+    renderer.setTransportContext(initialProjectFrame, playingState,
+                                 playingState && project->loopEnabled);
 
     if (liveMidiPanic.exchange(false, std::memory_order_acq_rel))
     {
@@ -1521,7 +1526,8 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
         if (project->loopEnabled && playbackFrame >= 0)
             currentFrame %= patternFrames;
 
-        renderer.setCurrentBeat(project->beatAtFrame(currentFrame, outputSampleRate));
+        renderer.setTransportContext(currentFrame, playingState,
+                                     playingState && project->loopEnabled);
         renderer.beginMixerFrame();
         StereoSample mixed = playingState ? renderer.renderSample(currentFrame) : StereoSample{};
         const qint64 clockFrame = clockStart + frameIndex;

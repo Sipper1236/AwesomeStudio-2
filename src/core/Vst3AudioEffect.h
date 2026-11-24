@@ -6,6 +6,20 @@
 #include <cstdint>
 #include <memory>
 
+struct Vst3TransportContext
+{
+    qint64 projectTimeSamples = 0;
+    double projectTimeMusic = 0.0;
+    double tempo = 120.0;
+    double sampleRate = 44100.0;
+    double cycleStartMusic = 0.0;
+    double cycleEndMusic = 0.0;
+    int timeSigNumerator = 4;
+    int timeSigDenominator = 4;
+    bool playing = false;
+    bool cycleActive = false;
+};
+
 struct Vst3PluginParameter
 {
     std::uint32_t id = 0;
@@ -54,7 +68,8 @@ public:
     bool saveState(QString& pluginState) const;
     void stopProcessing();
     void resetProcessingState();
-    bool process(float& left, float& right, float& alignedDryLeft, float& alignedDryRight);
+    bool process(float& left, float& right, float& alignedDryLeft, float& alignedDryRight,
+                 const Vst3TransportContext& transportContext);
 
 private:
     struct Private;
@@ -87,7 +102,9 @@ public:
     void noteOn(std::int32_t noteId, int channel, int key, float velocity);
     void noteOff(std::int32_t noteId, int channel, int key, float velocity = 0.0f);
     void pitchBend(int channel, int value);
-    bool process(float& left, float& right);
+    void setTransportContext(const Vst3TransportContext& transportContext);
+    bool process(float& left, float& right,
+                 const Vst3TransportContext& transportContext);
 
 private:
     struct Private;

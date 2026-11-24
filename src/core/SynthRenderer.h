@@ -25,7 +25,7 @@ public:
     void setProject(std::shared_ptr<const ProjectData> project, double sampleRate);
     void resetTransport();
     void beginMixerFrame();
-    void setCurrentBeat(double beat);
+    void setTransportContext(qint64 projectFrame, bool playing, bool cycleActive);
     StereoSample addLiveTrackSample(size_t trackIndex, StereoSample input);
     void setSynthFilterEnvelope(size_t trackIndex, float semitoneOffset);
     bool isPluginInstrumentTrack(size_t trackIndex) const;
@@ -274,6 +274,7 @@ private:
     static ParametricEqCoefficients makeParametricEqCoefficients(
         const ParametricEqBand& band, double sampleRate);
     void prepareEffectChain(const QVector<MixerEffect>& settings, std::vector<EffectState>& states);
+    Vst3TransportContext currentVst3TransportContext() const;
     void configureFilter(EffectState& state, SynthFilterType type);
     void resetEffectChain(std::vector<EffectState>& states);
     bool effectChainHasTail(const std::vector<EffectState>& states) const;
@@ -344,5 +345,9 @@ private:
     std::int32_t nextPluginArrangementNoteId = 1;
     double sampleRate = 48000.0;
     double currentBeat = 0.0;
+    double transportProjectBeat = 0.0;
+    qint64 currentProjectFrame = 0;
+    bool transportPlaying = true;
+    bool transportCycleActive = false;
     bool hasBusSolo = false;
 };

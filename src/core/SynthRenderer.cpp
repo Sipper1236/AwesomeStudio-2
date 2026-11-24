@@ -182,6 +182,10 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     project = std::move(newProject);
     sampleRate = std::max(1.0, newSampleRate);
     currentBeat = 0.0;
+    transportProjectBeat = 0.0;
+    currentProjectFrame = 0;
+    transportPlaying = true;
+    transportCycleActive = false;
     notes.clear();
     pitchBendEvents.clear();
     pluginInstrumentEvents.clear();
@@ -941,9 +945,34 @@ void SynthRenderer::beginMixerFrame()
     ++mixerFrameNumber;
 }
 
-void SynthRenderer::setCurrentBeat(double beat)
+void SynthRenderer::setTransportContext(qint64 projectFrame, bool playing, bool cycleActive)
 {
-    currentBeat = std::isfinite(beat) ? std::clamp(beat, 0.0, 16384.0) : 0.0;
+    currentProjectFrame = projectFrame;
+    transportPlaying = playing;
+    transportCycleActive = cycleActive && playing;
+    transportProjectBeat = project == nullptr ? 0.0 :
+        project->beatAtFrame(projectFrame, static_cast<int>(sampleRate));
+    if (!std::isfinite(transportProjectBeat))
+        transportProjectBeat = 0.0;
+    currentBeat = std::clamp(transportProjectBeat, 0.0, 16384.0);
+}
+
+Vst3TransportContext SynthRenderer::currentVst3TransportContext() const
+{
+    Vst3TransportContext context;
+    context.projectTimeSamples = currentProjectFrame;
+    context.projectTimeMusic = transportProjectBeat;
+    context.sampleRate = sampleRate;
+    context.playing = transportPlaying;
+    context.cycleActive = transportCycleActive;
+    if (project != nullptr)
+    {
+        context.tempo = project->tempoAtBeat(transportProjectBeat);
+        context.timeSigNumerator = project->beatsPerBar;
+        context.timeSigDenominator = project->beatUnit;
+        context.cycleEndMusic = project->songLengthBeats();
+    }
+    return context;
 }
 
 StereoSample SynthRenderer::addLiveTrackSample(size_t trackIndex, StereoSample input)
@@ -977,7 +1006,10 @@ void SynthRenderer::pluginInstrumentNoteOn(size_t trackIndex, std::int32_t noteI
     if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
         clapInstruments[trackIndex]->noteOn(noteId, channel, key, velocity);
     else if (trackIndex < vst3Instruments.size() && vst3Instruments[trackIndex] != nullptr)
+    {
+        vst3Instruments[trackIndex]->setTransportContext(currentVst3TransportContext());
         vst3Instruments[trackIndex]->noteOn(noteId, channel, key, velocity);
+    }
 }
 
 void SynthRenderer::pluginInstrumentNoteOff(size_t trackIndex, std::int32_t noteId,
@@ -986,7 +1018,10 @@ void SynthRenderer::pluginInstrumentNoteOff(size_t trackIndex, std::int32_t note
     if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
         clapInstruments[trackIndex]->noteOff(noteId, channel, key, velocity);
     else if (trackIndex < vst3Instruments.size() && vst3Instruments[trackIndex] != nullptr)
+    {
+        vst3Instruments[trackIndex]->setTransportContext(currentVst3TransportContext());
         vst3Instruments[trackIndex]->noteOff(noteId, channel, key, velocity);
+    }
 }
 
 void SynthRenderer::pluginInstrumentAllNotesOff(size_t trackIndex)
@@ -994,7 +1029,10 @@ void SynthRenderer::pluginInstrumentAllNotesOff(size_t trackIndex)
     if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
         clapInstruments[trackIndex]->allNotesOff();
     if (trackIndex < vst3Instruments.size() && vst3Instruments[trackIndex] != nullptr)
+    {
+        vst3Instruments[trackIndex]->setTransportContext(currentVst3TransportContext());
         vst3Instruments[trackIndex]->allNotesOff();
+    }
 }
 
 void SynthRenderer::pluginInstrumentPitchBend(size_t trackIndex, int channel, int value)
@@ -1012,7 +1050,10 @@ void SynthRenderer::pluginInstrumentsAllNotesOff()
             instrument->allNotesOff();
     for (const std::unique_ptr<Vst3AudioInstrumentInstance>& instrument : vst3Instruments)
         if (instrument != nullptr)
+        {
+            instrument->setTransportContext(currentVst3TransportContext());
             instrument->allNotesOff();
+        }
 }
 
 StereoSample SynthRenderer::finishMixerFrame()
@@ -1092,7 +1133,7 @@ StereoSample SynthRenderer::finishMixerFrame()
         }
         float left = 0.0f;
         float right = 0.0f;
-        if (instrument->process(left, right))
+        if (instrument->process(left, right, currentVst3TransportContext()))
             addTrackSample(trackIndex, left, right, true);
     }
 
@@ -1523,6 +1564,7 @@ bool SynthRenderer::effectChainHasTail(const std::vector<EffectState>& states) c
 StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states, StereoSample input)
 {
     StereoSample output = input;
+    const Vst3TransportContext vst3Context = currentVst3TransportContext();
     const auto updateClapParameters = [this](EffectState& state, const MixerEffect& effect)
     {
         if (state.clapEffect == nullptr || !state.clapEffect->isValid())
@@ -1598,7 +1640,7 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
                 float discardedDryLeft = output.left;
                 float discardedDryRight = output.right;
                 state.vst3Effect->process(discardedWet.left, discardedWet.right,
-                                          discardedDryLeft, discardedDryRight);
+                                          discardedDryLeft, discardedDryRight, vst3Context);
             }
             continue;
         }
@@ -1773,7 +1815,7 @@ StereoSample SynthRenderer::processEffectChain(std::vector<EffectState>& states,
                  state.vst3Effect != nullptr && state.vst3Effect->isValid())
         {
             if (!state.vst3Effect->process(wet.left, wet.right,
-                                           alignedDry.left, alignedDry.right))
+                                           alignedDry.left, alignedDry.right, vst3Context))
             {
                 wet = dry;
                 alignedDry = dry;
@@ -2170,8 +2212,8 @@ StereoSample SynthRenderer::renderSample(qint64 projectFrame)
             bends.fill(0.0f);
     }
     lastFrame = projectFrame;
-    const double projectBeat = project->beatAtFrame(projectFrame, static_cast<int>(sampleRate));
-    setCurrentBeat(projectBeat);
+    setTransportContext(projectFrame, transportPlaying, transportCycleActive);
+    const double projectBeat = transportProjectBeat;
 
     StereoSample sample;
     while (nextPitchBendIndex < pitchBendEvents.size() &&

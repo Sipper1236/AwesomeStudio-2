@@ -19,6 +19,7 @@
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstmidicontrollers.h>
+#include <pluginterfaces/vst/ivstprocesscontext.h>
 #include <public.sdk/source/vst/utility/uid.h>
 
 #include <algorithm>
@@ -290,6 +291,35 @@ bool loadStream(const QByteArray& bytes, Steinberg::ResizableMemoryIBStream& str
     return true;
 }
 
+void updateProcessContext(const Vst3TransportContext& transport,
+                          Steinberg::Vst::ProcessContext& context)
+{
+    context = {};
+    context.sampleRate = transport.sampleRate;
+    context.projectTimeSamples = transport.projectTimeSamples;
+    context.projectTimeMusic = transport.projectTimeMusic;
+    context.tempo = transport.tempo;
+    context.timeSigNumerator = transport.timeSigNumerator;
+    context.timeSigDenominator = transport.timeSigDenominator;
+    const double quarterNotesPerBar = transport.timeSigNumerator * 4.0 /
+        std::max(1, transport.timeSigDenominator);
+    context.barPositionMusic = std::floor(transport.projectTimeMusic / quarterNotesPerBar) *
+        quarterNotesPerBar;
+    context.state = Steinberg::Vst::ProcessContext::kProjectTimeMusicValid |
+        Steinberg::Vst::ProcessContext::kBarPositionValid |
+        Steinberg::Vst::ProcessContext::kTempoValid |
+        Steinberg::Vst::ProcessContext::kTimeSigValid;
+    if (transport.playing)
+        context.state |= Steinberg::Vst::ProcessContext::kPlaying;
+    if (transport.cycleActive)
+    {
+        context.state |= Steinberg::Vst::ProcessContext::kCycleActive |
+            Steinberg::Vst::ProcessContext::kCycleValid;
+        context.cycleStartMusic = transport.cycleStartMusic;
+        context.cycleEndMusic = transport.cycleEndMusic;
+    }
+}
+
 QByteArray streamBytes(const Steinberg::ResizableMemoryIBStream& stream)
 {
     return QByteArray(static_cast<const char*>(stream.getData()),
@@ -309,6 +339,7 @@ struct Vst3AudioEffectInstance::Private
     std::vector<float> controlValues;
     std::vector<double> normalizedValues;
     std::vector<double> lastSentValues;
+    Steinberg::Vst::ProcessContext processContext{};
     std::array<float, vst3BlockFrames> inputLeft{};
     std::array<float, vst3BlockFrames> inputRight{};
     std::array<float, vst3BlockFrames> monoInput{};
@@ -424,6 +455,7 @@ struct Vst3AudioEffectInstance::Private
         data.inputs = &inputBus;
         data.outputs = &outputBus;
         data.inputParameterChanges = &parameterChanges;
+        data.processContext = &processContext;
         const bool processed = processor && processor->process(data) == Steinberg::kResultTrue;
         parameterChanges.clearQueue();
         if (!processed)
@@ -673,10 +705,14 @@ void Vst3AudioEffectInstance::resetProcessingState()
 }
 
 bool Vst3AudioEffectInstance::process(float& left, float& right,
-                                      float& alignedDryLeft, float& alignedDryRight)
+                                      float& alignedDryLeft, float& alignedDryRight,
+                                      const Vst3TransportContext& transportContext)
 {
     if (!isValid())
         return false;
+
+    if (d->bufferedFrames == 0)
+        updateProcessContext(transportContext, d->processContext);
 
     if (!d->processing)
     {
@@ -756,6 +792,7 @@ struct Vst3AudioInstrumentInstance::Private
     std::vector<float> controlValues;
     std::vector<double> normalizedValues;
     std::vector<double> lastSentValues;
+    Steinberg::Vst::ProcessContext processContext{};
     std::array<Steinberg::Vst::ParamID, 16> pitchBendParameterIds{};
     std::array<double, 16> pitchBendNormalizedValues{};
     std::array<std::uint64_t, 16> pitchBendChangeOrder{};
@@ -847,7 +884,9 @@ struct Vst3AudioInstrumentInstance::Private
         event.busIndex = 0;
         event.sampleOffset = static_cast<Steinberg::int32>(
             std::min<std::uint32_t>(bufferedFrames, vst3BlockFrames - 1));
-        event.ppqPosition = 0.0;
+        event.ppqPosition = processContext.projectTimeMusic +
+            static_cast<double>(event.sampleOffset) * processContext.tempo /
+                (60.0 * std::max(1.0, processContext.sampleRate));
         return inputEvents.addEvent(event) == Steinberg::kResultTrue;
     }
 
@@ -873,6 +912,7 @@ struct Vst3AudioInstrumentInstance::Private
         data.outputs = &outputBus;
         data.inputParameterChanges = &parameterChanges;
         data.inputEvents = &inputEvents;
+        data.processContext = &processContext;
         const bool processed = processor && processor->process(data) == Steinberg::kResultTrue;
         parameterChanges.clearQueue();
         inputEvents.clear();
@@ -1171,10 +1211,20 @@ void Vst3AudioInstrumentInstance::pitchBend(int channel, int value)
     d->pitchBendChangeOrder[channelIndex] = ++d->nextPitchBendChangeOrder;
 }
 
-bool Vst3AudioInstrumentInstance::process(float& left, float& right)
+void Vst3AudioInstrumentInstance::setTransportContext(
+    const Vst3TransportContext& transportContext)
+{
+    if (d != nullptr && d->bufferedFrames == 0)
+        updateProcessContext(transportContext, d->processContext);
+}
+
+bool Vst3AudioInstrumentInstance::process(
+    float& left, float& right, const Vst3TransportContext& transportContext)
 {
     if (!isValid())
         return false;
+    if (d->bufferedFrames == 0)
+        updateProcessContext(transportContext, d->processContext);
     if (!d->processing)
     {
         if (d->processor->setProcessing(true) != Steinberg::kResultTrue)
