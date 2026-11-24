@@ -13,10 +13,12 @@
 #include <public.sdk/source/vst/hosting/plugprovider.h>
 #include <public.sdk/source/vst/hosting/eventlist.h>
 #include <public.sdk/source/vst/utility/memoryibstream.h>
+#include <public.sdk/source/vst/utility/midiconvert.h>
 #include <public.sdk/source/vst/utility/stringconvert.h>
 #include <pluginterfaces/vst/ivstcomponent.h>
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
 #include <pluginterfaces/vst/ivsteditcontroller.h>
+#include <pluginterfaces/vst/ivstmidicontrollers.h>
 #include <public.sdk/source/vst/utility/uid.h>
 
 #include <algorithm>
@@ -754,6 +756,10 @@ struct Vst3AudioInstrumentInstance::Private
     std::vector<float> controlValues;
     std::vector<double> normalizedValues;
     std::vector<double> lastSentValues;
+    std::array<Steinberg::Vst::ParamID, 16> pitchBendParameterIds{};
+    std::array<double, 16> pitchBendNormalizedValues{};
+    std::array<std::uint64_t, 16> pitchBendChangeOrder{};
+    std::uint64_t nextPitchBendChangeOrder = 0;
     std::array<float, vst3BlockFrames> outputLeft{};
     std::array<float, vst3BlockFrames> outputRight{};
     std::array<float, vst3BlockFrames> monoOutput{};
@@ -907,6 +913,9 @@ Vst3AudioInstrumentInstance::Vst3AudioInstrumentInstance(
     d->module = entry->module;
     d->descriptor = entry->descriptor;
     d->outputChannels = d->descriptor.outputChannels;
+    d->pitchBendParameterIds.fill(Steinberg::Vst::kNoParamId);
+    d->pitchBendNormalizedValues.fill(
+        Steinberg::Vst::midi14BitToNormalized<double>(8192));
     const Vst3Factory factory = d->module->getFactory();
     factory.setHostContext(hostContext());
     d->provider = Steinberg::owned(new Steinberg::Vst::PlugProvider(factory, entry->classInfo, true));
@@ -927,6 +936,25 @@ Vst3AudioInstrumentInstance::Vst3AudioInstrumentInstance(
         return;
 
     d->restoreState(pluginState);
+    if (auto midiMapping = Steinberg::FUnknownPtr<Steinberg::Vst::IMidiMapping>(d->controller))
+    {
+        for (Steinberg::int16 channel = 0; channel <
+             static_cast<Steinberg::int16>(d->pitchBendParameterIds.size()); ++channel)
+        {
+            Steinberg::Vst::ParamID parameterId = Steinberg::Vst::kNoParamId;
+            if (midiMapping->getMidiControllerAssignment(
+                    0, channel, Steinberg::Vst::kPitchBend, parameterId) !=
+                    Steinberg::kResultTrue || parameterId == Steinberg::Vst::kNoParamId)
+                continue;
+            const bool parameterExists = std::any_of(
+                d->descriptor.parameters.cbegin(), d->descriptor.parameters.cend(),
+                [parameterId](const Vst3PluginParameter& parameter)
+                { return parameter.id == parameterId; });
+            if (parameterExists)
+                d->pitchBendParameterIds[static_cast<size_t>(channel)] = parameterId;
+        }
+    }
+
     d->controlValues.resize(static_cast<size_t>(d->descriptor.parameters.size()));
     d->normalizedValues.resize(d->controlValues.size(), 0.0);
     d->lastSentValues.resize(d->controlValues.size(), std::numeric_limits<double>::quiet_NaN());
@@ -1080,6 +1108,8 @@ void Vst3AudioInstrumentInstance::allNotesOff()
     for (Private::ActiveNote& note : d->activeNotes)
         if (note.active)
             noteOff(note.id, note.channel, note.key);
+    for (int channel = 0; channel < 16; ++channel)
+        pitchBend(channel, 8192);
 }
 
 void Vst3AudioInstrumentInstance::noteOn(std::int32_t noteId, int channel, int key, float velocity)
@@ -1129,10 +1159,16 @@ void Vst3AudioInstrumentInstance::noteOff(std::int32_t noteId, int channel, int 
                 note.active = false;
 }
 
-void Vst3AudioInstrumentInstance::pitchBend(int, int)
+void Vst3AudioInstrumentInstance::pitchBend(int channel, int value)
 {
-    // VST3 instruments can expose pitch as note expression, which requires a plug-in-specific
-    // expression type. MIDI pitch bend is not guessed for plug-ins that do not advertise one.
+    if (d == nullptr || channel < 0 || channel >=
+            static_cast<int>(d->pitchBendParameterIds.size()) ||
+        d->pitchBendParameterIds[static_cast<size_t>(channel)] == Steinberg::Vst::kNoParamId)
+        return;
+    const size_t channelIndex = static_cast<size_t>(channel);
+    d->pitchBendNormalizedValues[channelIndex] = Steinberg::Vst::midi14BitToNormalized<double>(
+        static_cast<std::uint16_t>(std::clamp(value, 0, 16383)));
+    d->pitchBendChangeOrder[channelIndex] = ++d->nextPitchBendChangeOrder;
 }
 
 bool Vst3AudioInstrumentInstance::process(float& left, float& right)
@@ -1147,13 +1183,25 @@ bool Vst3AudioInstrumentInstance::process(float& left, float& right)
     }
     for (size_t index = 0; index < d->normalizedValues.size(); ++index)
     {
-        const double value = d->normalizedValues[index];
+        const Steinberg::Vst::ParamID parameterId =
+            d->descriptor.parameters[static_cast<qsizetype>(index)].id;
+        double value = d->normalizedValues[index];
+        std::uint64_t newestPitchBend = 0;
+        for (size_t channelIndex = 0; channelIndex < d->pitchBendParameterIds.size();
+             ++channelIndex)
+        {
+            if (d->pitchBendParameterIds[channelIndex] == parameterId &&
+                d->pitchBendChangeOrder[channelIndex] > newestPitchBend)
+            {
+                newestPitchBend = d->pitchBendChangeOrder[channelIndex];
+                value = d->pitchBendNormalizedValues[channelIndex];
+            }
+        }
         if (std::isfinite(d->lastSentValues[index]) &&
             std::abs(d->lastSentValues[index] - value) <= 1.0e-10)
             continue;
         Steinberg::int32 queueIndex = 0;
-        auto* queue = d->parameterChanges.addParameterData(
-            d->descriptor.parameters[static_cast<qsizetype>(index)].id, queueIndex);
+        auto* queue = d->parameterChanges.addParameterData(parameterId, queueIndex);
         if (queue == nullptr)
             continue;
         Steinberg::int32 pointIndex = 0;

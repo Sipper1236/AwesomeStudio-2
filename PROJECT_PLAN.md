@@ -77,7 +77,8 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Cross-platform VST3 audio-effect hosting with generic controls, automation, saved state, and latency compensation
 - [x] Cross-platform VST3 instrument tracks with generic controls, per-parameter Playlist automation, saved parameter and plug-in state, playback/export, and MIDI audition
 - [x] Native VST3 editor windows on Windows, macOS, and Linux/X11, with generic controls retained on Wayland
-- [ ] VST3 note expression and pitch bend
+- [x] VST3 MIDI pitch bend through plug-ins' advertised MIDI-mapping assignments
+- [ ] VST3 note expression
 - [ ] Dynamic plug-in latency changes and transport context/timing compensation
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
 - [ ] Broader controller target coverage
