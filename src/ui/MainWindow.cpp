@@ -3460,6 +3460,15 @@ void MainWindow::createActions()
     {
         if (playing && drumChainTimer != nullptr && drumChainTimer->isActive())
             stopDrumPatternChain();
+        if (!playing && midiClockTransportStarted)
+        {
+            midiClockTransportStarted = false;
+            if (midiClockTempoOverrideActive)
+            {
+                audioEngine.setProject(project);
+                midiClockTempoOverrideActive = false;
+            }
+        }
     });
 
     recordAction = new QAction(tr("Record audio…"), this);
