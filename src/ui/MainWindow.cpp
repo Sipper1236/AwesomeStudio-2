@@ -981,6 +981,9 @@ QString automationCurveName(AutomationPoint::Curve curve)
 constexpr int synthFilterCutoffAutomationTarget = 2;
 constexpr int synthFilterResonanceAutomationTarget = 3;
 constexpr int pluginAutomationTargetBase = 4;
+constexpr int trackEqLowGainAutomationTarget = 10000;
+constexpr int trackEqMidGainAutomationTarget = 10001;
+constexpr int trackEqHighGainAutomationTarget = 10002;
 constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
 constexpr int clapInstrumentAutomationTargetBase =
@@ -1041,6 +1044,12 @@ const QVector<AutomationPoint>* automationCurve(const InstrumentTrack& track, in
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    if (target == trackEqLowGainAutomationTarget)
+        return &track.eqLowGainAutomation;
+    if (target == trackEqMidGainAutomationTarget)
+        return &track.eqMidGainAutomation;
+    if (target == trackEqHighGainAutomationTarget)
+        return &track.eqHighGainAutomation;
     if (target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget)
     {
@@ -1091,6 +1100,12 @@ QVector<AutomationPoint>* automationCurve(InstrumentTrack& track, int target,
         return &track.volumeAutomation;
     if (target == 1)
         return &track.panAutomation;
+    if (target == trackEqLowGainAutomationTarget)
+        return &track.eqLowGainAutomation;
+    if (target == trackEqMidGainAutomationTarget)
+        return &track.eqMidGainAutomation;
+    if (target == trackEqHighGainAutomationTarget)
+        return &track.eqHighGainAutomation;
     if (target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget)
     {
@@ -1155,6 +1170,12 @@ void populateAutomationTargets(QComboBox* control, const InstrumentTrack* track)
               track == nullptr ? 0.0f : track->pan, QString());
     if (track != nullptr)
     {
+        addTarget(QObject::tr("Low EQ gain"), trackEqLowGainAutomationTarget,
+                  -18.0f, 18.0f, track->eqLowDb, QString());
+        addTarget(QObject::tr("Mid EQ gain"), trackEqMidGainAutomationTarget,
+                  -18.0f, 18.0f, track->eqMidDb, QString());
+        addTarget(QObject::tr("High EQ gain"), trackEqHighGainAutomationTarget,
+                  -18.0f, 18.0f, track->eqHighDb, QString());
         if (track->instrumentType == InstrumentType::Synth)
         {
             addTarget(QObject::tr("Synth filter cutoff"), synthFilterCutoffAutomationTarget,

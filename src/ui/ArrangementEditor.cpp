@@ -23,6 +23,9 @@ constexpr int trackHeight = 72;
 constexpr int automationLaneHeight = 50;
 constexpr int synthFilterCutoffAutomationTarget = 2;
 constexpr int synthFilterResonanceAutomationTarget = 3;
+constexpr int trackEqLowGainAutomationTarget = 10000;
+constexpr int trackEqMidGainAutomationTarget = 10001;
+constexpr int trackEqHighGainAutomationTarget = 10002;
 constexpr int pluginAutomationTargetBase = 4;
 constexpr int pluginParametersPerEffect = 256;
 constexpr int maximumPluginEffectCount = 8;
@@ -1084,6 +1087,12 @@ private:
             return track.volumeAutomation;
         if (automationParameter == 1)
             return track.panAutomation;
+        if (automationParameter == trackEqLowGainAutomationTarget)
+            return track.eqLowGainAutomation;
+        if (automationParameter == trackEqMidGainAutomationTarget)
+            return track.eqMidGainAutomation;
+        if (automationParameter == trackEqHighGainAutomationTarget)
+            return track.eqHighGainAutomation;
         static const QVector<AutomationPoint> empty;
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)
@@ -1131,6 +1140,12 @@ private:
             return track.gain;
         if (automationParameter == 1)
             return track.pan;
+        if (automationParameter == trackEqLowGainAutomationTarget)
+            return track.eqLowDb;
+        if (automationParameter == trackEqMidGainAutomationTarget)
+            return track.eqMidDb;
+        if (automationParameter == trackEqHighGainAutomationTarget)
+            return track.eqHighDb;
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)
         {
@@ -1177,6 +1192,12 @@ private:
             return track.volumeAutomation;
         if (automationParameter == 1)
             return track.panAutomation;
+        if (automationParameter == trackEqLowGainAutomationTarget)
+            return track.eqLowGainAutomation;
+        if (automationParameter == trackEqMidGainAutomationTarget)
+            return track.eqMidGainAutomation;
+        if (automationParameter == trackEqHighGainAutomationTarget)
+            return track.eqHighGainAutomation;
         static QVector<AutomationPoint> invalid;
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)
@@ -1224,6 +1245,10 @@ private:
     bool hasAutomationTarget(const InstrumentTrack& track) const
     {
         if (automationParameter == 0 || automationParameter == 1)
+            return true;
+        if (automationParameter == trackEqLowGainAutomationTarget ||
+            automationParameter == trackEqMidGainAutomationTarget ||
+            automationParameter == trackEqHighGainAutomationTarget)
             return true;
         if (automationParameter == synthFilterCutoffAutomationTarget ||
             automationParameter == synthFilterResonanceAutomationTarget)

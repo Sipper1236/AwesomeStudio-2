@@ -18,7 +18,7 @@
 
 namespace
 {
-constexpr int currentProjectVersion = 57;
+constexpr int currentProjectVersion = 58;
 constexpr auto projectFormat = "awesome-studio-project";
 
 struct MediaLoadContext
@@ -666,6 +666,9 @@ QJsonObject saveTrack(const InstrumentTrack& track)
          }()},
         {QStringLiteral("volumeAutomation"), saveAutomation(track.volumeAutomation)},
         {QStringLiteral("panAutomation"), saveAutomation(track.panAutomation)},
+        {QStringLiteral("eqLowGainAutomation"), saveAutomation(track.eqLowGainAutomation)},
+        {QStringLiteral("eqMidGainAutomation"), saveAutomation(track.eqMidGainAutomation)},
+        {QStringLiteral("eqHighGainAutomation"), saveAutomation(track.eqHighGainAutomation)},
         {QStringLiteral("synthFilterCutoffAutomation"),
          saveAutomation(track.synthFilterCutoffAutomation)},
         {QStringLiteral("synthFilterResonanceAutomation"),
@@ -1086,6 +1089,13 @@ bool loadTrack(const QJsonValue& value, InstrumentTrack& track, const QString& m
                         QStringLiteral("volume"), version, error) ||
         !loadAutomation(object.value(QStringLiteral("panAutomation")), track.panAutomation,
                         QStringLiteral("pan"), version, error) ||
+        (version >= 58 &&
+         (!loadAutomation(object.value(QStringLiteral("eqLowGainAutomation")),
+                          track.eqLowGainAutomation, QStringLiteral("low EQ gain"), version, error) ||
+          !loadAutomation(object.value(QStringLiteral("eqMidGainAutomation")),
+                          track.eqMidGainAutomation, QStringLiteral("mid EQ gain"), version, error) ||
+          !loadAutomation(object.value(QStringLiteral("eqHighGainAutomation")),
+                          track.eqHighGainAutomation, QStringLiteral("high EQ gain"), version, error))) ||
         !loadAutomation(object.value(QStringLiteral("synthFilterCutoffAutomation")),
                         track.synthFilterCutoffAutomation,
                         QStringLiteral("synth filter cutoff"), version, error) ||

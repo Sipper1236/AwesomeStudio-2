@@ -427,6 +427,9 @@ struct InstrumentTrack
     QVector<MixerEffect> effects;
     QVector<AutomationPoint> volumeAutomation;
     QVector<AutomationPoint> panAutomation;
+    QVector<AutomationPoint> eqLowGainAutomation;
+    QVector<AutomationPoint> eqMidGainAutomation;
+    QVector<AutomationPoint> eqHighGainAutomation;
     QVector<AutomationPoint> synthFilterCutoffAutomation;
     QVector<AutomationPoint> synthFilterResonanceAutomation;
     bool muted = false;

@@ -165,6 +165,15 @@ const SynthRenderer::TrackMixValue& SynthRenderer::trackMixAt(size_t trackIndex,
                                         0.0f, 1.0f);
         const float pan = std::clamp(automationValue(automation.pan, beat, automation.basePan),
                                      -1.0f, 1.0f);
+        for (size_t bandIndex = 0; bandIndex < automation.equalizerGain.size(); ++bandIndex)
+        {
+            const float gainDb = std::clamp(
+                automationValue(automation.equalizerGain[bandIndex], beat,
+                                automation.baseEqualizerDb[bandIndex]),
+                -18.0f, 18.0f);
+            rendered.equalizerGains[bandIndex] = static_cast<float>(
+                std::pow(10.0, static_cast<double>(gainDb) / 20.0));
+        }
         const LiveTrackMixOverride& live = liveTrackMixOverrides[trackIndex];
         const float effectiveVolume = live.volume >= 0.0f ? std::clamp(live.volume, 0.0f, 1.0f) : volume;
         const float effectivePan = live.pan >= -1.0f && live.pan <= 1.0f
@@ -196,7 +205,6 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     trackMixAutomations.clear();
     trackMixValues.clear();
     liveTrackMixOverrides.clear();
-    trackEqualizerGains.clear();
     trackEqualizerStates.clear();
     trackInstrumentFilterStates.clear();
     trackInstrumentFilterHasTail.clear();
@@ -252,7 +260,6 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     liveSynthFilterCutoffOverrides.assign(static_cast<size_t>(project->tracks.size()), -1.0f);
     liveSynthFilterResonanceOverrides.assign(static_cast<size_t>(project->tracks.size()), -1.0f);
     trackPitchBends.assign(static_cast<size_t>(project->tracks.size()), {});
-    trackEqualizerGains.reserve(static_cast<size_t>(project->tracks.size()));
     trackEqualizerStates.resize(static_cast<size_t>(project->tracks.size()));
     trackInstrumentFilterStates.resize(static_cast<size_t>(project->tracks.size()));
     trackInstrumentFilterHasTail.assign(static_cast<size_t>(project->tracks.size()), 0);
@@ -293,13 +300,16 @@ void SynthRenderer::setProject(std::shared_ptr<const ProjectData> newProject, do
     for (size_t trackIndex = 0; trackIndex < static_cast<size_t>(project->tracks.size()); ++trackIndex)
     {
         const InstrumentTrack& track = project->tracks[static_cast<qsizetype>(trackIndex)];
-        trackMixAutomations.push_back({track.gain, track.pan,
-                                       track.volumeAutomation, track.panAutomation});
-        trackEqualizerGains.push_back({
-            static_cast<float>(std::pow(10.0, track.eqLowDb / 20.0)),
-            static_cast<float>(std::pow(10.0, track.eqMidDb / 20.0)),
-            static_cast<float>(std::pow(10.0, track.eqHighDb / 20.0))
-        });
+        TrackMixAutomation mixAutomation;
+        mixAutomation.baseVolume = track.gain;
+        mixAutomation.basePan = track.pan;
+        mixAutomation.baseEqualizerDb = {track.eqLowDb, track.eqMidDb, track.eqHighDb};
+        mixAutomation.volume = track.volumeAutomation;
+        mixAutomation.pan = track.panAutomation;
+        mixAutomation.equalizerGain = {track.eqLowGainAutomation,
+                                       track.eqMidGainAutomation,
+                                       track.eqHighGainAutomation};
+        trackMixAutomations.push_back(std::move(mixAutomation));
         TrackEqualizerState& equalizerState = trackEqualizerStates[trackIndex];
         const double maximumCutoff = std::max(20.0, sampleRate * 0.49);
         const double lowCutoff = std::clamp(static_cast<double>(track.eqLowCrossoverHz),
@@ -1348,9 +1358,11 @@ StereoSample SynthRenderer::finishMixerFrame()
 
 StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample input)
 {
-    if (trackIndex >= trackEqualizerGains.size() || trackIndex >= trackEqualizerStates.size())
+    if (trackIndex >= trackMixAutomations.size() || trackIndex >= trackMixValues.size() ||
+        trackIndex >= trackEqualizerStates.size())
         return input;
-    const std::array<float, 3>& gains = trackEqualizerGains[trackIndex];
+    const TrackMixValue& mix = trackMixAt(trackIndex, currentProjectFrame, currentBeat);
+    const std::array<float, 3>& gains = mix.equalizerGains;
     TrackEqualizerState& state = trackEqualizerStates[trackIndex];
     const bool legacyActive = std::abs(gains[0] - 1.0f) >= 1.0e-6f ||
                               std::abs(gains[1] - 1.0f) >= 1.0e-6f ||
@@ -1358,7 +1370,11 @@ StereoSample SynthRenderer::applyTrackEqualizer(size_t trackIndex, StereoSample 
     const bool parametricActive = std::any_of(
         state.parametricCoefficients.cbegin(), state.parametricCoefficients.cend(),
         [](const ParametricEqCoefficients& coefficients) { return coefficients.active; });
-    if (!legacyActive && !parametricActive)
+    const bool automated = std::any_of(
+        trackMixAutomations[trackIndex].equalizerGain.cbegin(),
+        trackMixAutomations[trackIndex].equalizerGain.cend(),
+        [](const QVector<AutomationPoint>& points) { return !points.isEmpty(); });
+    if (!legacyActive && !parametricActive && !automated)
     {
         const float lowCoefficient = state.lowBandCoefficient;
         const float highCoefficient = state.highBandCoefficient;

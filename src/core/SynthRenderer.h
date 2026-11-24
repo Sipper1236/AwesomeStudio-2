@@ -147,8 +147,10 @@ private:
     {
         float baseVolume = 1.0f;
         float basePan = 0.0f;
+        std::array<float, 3> baseEqualizerDb{};
         QVector<AutomationPoint> volume;
         QVector<AutomationPoint> pan;
+        std::array<QVector<AutomationPoint>, 3> equalizerGain;
     };
 
     struct TrackMixValue
@@ -156,6 +158,7 @@ private:
         qint64 frame = -1;
         float leftGain = 0.70710678f;
         float rightGain = 0.70710678f;
+        std::array<float, 3> equalizerGains{1.0f, 1.0f, 1.0f};
     };
 
     struct LiveTrackMixOverride
@@ -296,7 +299,6 @@ private:
     std::vector<LiveTrackMixOverride> liveTrackMixOverrides;
     std::vector<float> liveSynthFilterCutoffOverrides;
     std::vector<float> liveSynthFilterResonanceOverrides;
-    std::vector<std::array<float, 3>> trackEqualizerGains;
     std::vector<TrackEqualizerState> trackEqualizerStates;
     std::vector<std::vector<EffectState>> trackInstrumentFilterStates;
     std::vector<unsigned char> trackInstrumentFilterHasTail;
