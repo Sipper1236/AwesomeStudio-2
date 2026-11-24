@@ -94,13 +94,14 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Native VST3 editor windows on Windows, macOS, and Linux/X11, with generic controls retained on Wayland
 - [x] VST3 MIDI pitch bend through plug-ins' advertised MIDI-mapping assignments
 - [x] VST3 per-block transport context for project position, tempo, meter, loop state, and PPQ note events
-- [ ] VST3 note expression
+- [ ] VST3 note expression beyond Linux live polyphonic/channel pressure
 - [x] VST3 latency restart notifications with component reactivation and Mixer compensation recalculation
 - [x] Dynamic CLAP latency restart handling and Mixer compensation recalculation
 - [x] LV2 latency output port tracking and dynamic Mixer compensation recalculation
 - [x] Map the transport playhead to QAudioSink-processed output frames through output buffering, seeks, loops, and song end
 - [x] Linux ALSA external MIDI clock following with Start/Continue/Stop, 24 PPQN transport/tempo updates, and a lost-clock timeout that restores project tempo
 - [x] Linux CLAP live MIDI polyphonic and channel aftertouch forwarded as per-note CLAP pressure expressions
+- [x] Linux VST3 live MIDI polyphonic and channel aftertouch forwarded as note-ID-specific poly-pressure events
 - [ ] Physical validation of MIDI clock synchronization and hardware-referenced output timestamps
 - [x] Native MIDI input backends for Linux ALSA, Windows WinMM, and macOS CoreMIDI
 - [x] Autosave, rotating backups, project recovery, and versioned migrations

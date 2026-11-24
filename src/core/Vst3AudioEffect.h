@@ -106,6 +106,7 @@ public:
     void noteOn(std::int32_t noteId, int channel, int key, float velocity);
     void noteOff(std::int32_t noteId, int channel, int key, float velocity = 0.0f);
     void pitchBend(int channel, int value);
+    void notePressure(std::int32_t noteId, int channel, int key, float value);
     void setTransportContext(const Vst3TransportContext& transportContext);
     bool process(float& left, float& right,
                  const Vst3TransportContext& transportContext);

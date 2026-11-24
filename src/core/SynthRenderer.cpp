@@ -1158,6 +1158,8 @@ void SynthRenderer::pluginInstrumentNotePressure(size_t trackIndex, std::int32_t
 {
     if (trackIndex < clapInstruments.size() && clapInstruments[trackIndex] != nullptr)
         clapInstruments[trackIndex]->notePressure(noteId, channel, key, value);
+    if (trackIndex < vst3Instruments.size() && vst3Instruments[trackIndex] != nullptr)
+        vst3Instruments[trackIndex]->notePressure(noteId, channel, key, value);
 }
 
 void SynthRenderer::pluginInstrumentsAllNotesOff()

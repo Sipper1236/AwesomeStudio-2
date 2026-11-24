@@ -1426,6 +1426,20 @@ void Vst3AudioInstrumentInstance::pitchBend(int channel, int value)
     d->pitchBendChangeOrder[channelIndex] = ++d->nextPitchBendChangeOrder;
 }
 
+void Vst3AudioInstrumentInstance::notePressure(std::int32_t noteId, int channel, int key,
+                                               float value)
+{
+    if (!isValid() || noteId <= 0 || !std::isfinite(value))
+        return;
+    Steinberg::Vst::Event event{};
+    event.type = Steinberg::Vst::Event::kPolyPressureEvent;
+    event.polyPressure.channel = static_cast<Steinberg::int16>(std::clamp(channel, 0, 15));
+    event.polyPressure.pitch = static_cast<Steinberg::int16>(std::clamp(key, 0, 127));
+    event.polyPressure.pressure = std::clamp(value, 0.0f, 1.0f);
+    event.polyPressure.noteId = noteId;
+    d->pushEvent(event);
+}
+
 void Vst3AudioInstrumentInstance::setTransportContext(
     const Vst3TransportContext& transportContext)
 {
