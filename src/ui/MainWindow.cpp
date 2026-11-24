@@ -2303,10 +2303,11 @@ class AudioTakeSelectionCommand final : public QUndoCommand
 public:
     AudioTakeSelectionCommand(MainWindow* window, quint64 trackId,
                               QVector<MainWindow::AudioTakeState> before,
-                              QVector<MainWindow::AudioTakeState> after)
+                              QVector<MainWindow::AudioTakeState> after,
+                              const QString& commandName)
         : window(window), trackId(trackId), before(std::move(before)), after(std::move(after))
     {
-        setText(QObject::tr("Choose audio comp take"));
+        setText(commandName);
     }
 
     void undo() override
@@ -2706,6 +2707,10 @@ MainWindow::MainWindow(AudioEngine& engine, QWidget* parent)
     });
     connect(arrangementEditor, &ArrangementEditor::audioRegionRelinkRequested, this,
             &MainWindow::relinkAudioRegion);
+    connect(arrangementEditor, &ArrangementEditor::audioTakeGroupRequested, this,
+            [this](quint64 trackId, quint64 clipId) { groupAlignedAudioTakes(trackId, clipId); });
+    connect(arrangementEditor, &ArrangementEditor::audioTakeUngroupRequested, this,
+            [this](quint64 trackId, quint64 clipId) { ungroupAudioTakes(trackId, clipId); });
     connect(arrangementEditor, &ArrangementEditor::audioTakeSelected, this,
             [this](quint64 trackId, quint64 clipId) { selectAudioTake(trackId, clipId); });
     connect(arrangementEditor, &ArrangementEditor::audioTakeSplitRequested, this,
@@ -7534,6 +7539,69 @@ void MainWindow::applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeS
     refreshDirtyState();
 }
 
+void MainWindow::groupAlignedAudioTakes(quint64 trackId, quint64 clipId)
+{
+    const InstrumentTrack* track = project.findTrack(trackId);
+    const MidiClip* selected = project.findClip(trackId, clipId);
+    if (track == nullptr || selected == nullptr || !selected->isAudioRegion() ||
+        selected->audioTakeGroupId != 0)
+        return;
+
+    QVector<AudioTakeState> before;
+    QVector<AudioTakeState> after;
+    for (const MidiClip& candidate : track->clips)
+    {
+        if (!candidate.isAudioRegion() || candidate.audioTakeGroupId != 0 ||
+            std::abs(candidate.startBeat - selected->startBeat) > 1.0e-6 ||
+            std::abs(candidate.lengthBeats - selected->lengthBeats) > 1.0e-6)
+            continue;
+        before.push_back({candidate.id, candidate.audioTakeGroupId,
+                          candidate.audioTakeActive, candidate.audioTakeEligible});
+    }
+    if (before.size() < 2)
+        return;
+
+    const quint64 groupId = nextClipId();
+    after.reserve(before.size());
+    for (const AudioTakeState& state : before)
+    {
+        AudioTakeState next = state;
+        next.groupId = groupId;
+        next.active = state.clipId == clipId;
+        after.push_back(next);
+    }
+    undoStack.push(new AudioTakeSelectionCommand(this, trackId, before, after,
+                                                  tr("Group aligned audio takes")));
+}
+
+void MainWindow::ungroupAudioTakes(quint64 trackId, quint64 clipId)
+{
+    const InstrumentTrack* track = project.findTrack(trackId);
+    const MidiClip* selected = project.findClip(trackId, clipId);
+    if (track == nullptr || selected == nullptr || !selected->isAudioRegion() ||
+        selected->audioTakeGroupId == 0)
+        return;
+
+    QVector<AudioTakeState> before;
+    QVector<AudioTakeState> after;
+    for (const MidiClip& candidate : track->clips)
+    {
+        if (!candidate.isAudioRegion() || candidate.audioTakeGroupId != selected->audioTakeGroupId)
+            continue;
+        before.push_back({candidate.id, candidate.audioTakeGroupId,
+                          candidate.audioTakeActive, candidate.audioTakeEligible});
+        AudioTakeState next = before.back();
+        next.groupId = 0;
+        next.active = true;
+        after.push_back(next);
+    }
+    if (before.isEmpty())
+        return;
+
+    undoStack.push(new AudioTakeSelectionCommand(this, trackId, before, after,
+                                                  tr("Ungroup audio takes")));
+}
+
 void MainWindow::selectAudioTake(quint64 trackId, quint64 clipId)
 {
     const InstrumentTrack* track = project.findTrack(trackId);
@@ -7550,16 +7618,22 @@ void MainWindow::selectAudioTake(quint64 trackId, quint64 clipId)
             std::abs(candidate.startBeat - selected->startBeat) > 1.0e-6 ||
             std::abs(candidate.lengthBeats - selected->lengthBeats) > 1.0e-6)
             continue;
-        before.push_back({candidate.id, candidate.audioTakeActive});
-        after.push_back({candidate.id, candidate.id == clipId});
+        before.push_back({candidate.id, candidate.audioTakeGroupId,
+                          candidate.audioTakeActive, candidate.audioTakeEligible});
+        AudioTakeState next = before.back();
+        next.active = candidate.id == clipId;
+        after.push_back(next);
     }
     bool unchanged = before.size() == after.size();
     for (qsizetype index = 0; unchanged && index < before.size(); ++index)
-        unchanged = before[index].active == after[index].active;
+        unchanged = before[index].groupId == after[index].groupId &&
+                    before[index].active == after[index].active &&
+                    before[index].eligible == after[index].eligible;
     if (before.size() < 2 || unchanged)
         return;
 
-    undoStack.push(new AudioTakeSelectionCommand(this, trackId, before, after));
+    undoStack.push(new AudioTakeSelectionCommand(this, trackId, before, after,
+                                                  tr("Choose audio comp take")));
 }
 
 void MainWindow::applyAudioTakeSelectionHistory(quint64 trackId,
@@ -7571,8 +7645,12 @@ void MainWindow::applyAudioTakeSelectionHistory(quint64 trackId,
     for (const AudioTakeState& state : states)
     {
         MidiClip* clip = project.findClip(trackId, state.clipId);
-        if (clip != nullptr && clip->audioTakeGroupId != 0)
+        if (clip != nullptr)
+        {
+            clip->audioTakeGroupId = state.groupId;
             clip->audioTakeActive = state.active;
+            clip->audioTakeEligible = state.eligible;
+        }
     }
     audioEngine.setProject(project);
     refreshProjectUi();

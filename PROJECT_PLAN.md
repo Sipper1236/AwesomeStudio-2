@@ -49,9 +49,10 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 
 - [x] Basic left/right edge trimming for WAV audio regions
 - [x] Undoable equal-power crossfades between overlapping audio regions
+- [x] Automatic punch-pass comp groups plus undoable manual grouping/ungrouping of aligned WAV regions, per-section take selection, and clicked-beat group splitting
 - [x] Named arrangement markers with ruler seeking and undoable editing
 - [x] Custom power and freehand drawn fades, portable media packaging, and WAV relinking
-- [ ] General-purpose take grouping, hardware-referenced input/output latency calibration, and format-2 time-signature changes
+- [ ] Hardware-referenced input/output latency calibration and format-2 time-signature changes
 - [x] Mixer submix buses with track assignment, level/pan, mute/solo, parent routing, and metering
 - [x] Multiple post-track auxiliary sends per track to mixer buses
 - [x] Multiple post-fader auxiliary sends from buses to other mixer buses, with cycle prevention

@@ -37,6 +37,8 @@ signals:
                                        const QVector<QPointF>& before,
                                        const QVector<QPointF>& after);
     void audioRegionRelinkRequested(quint64 trackId, quint64 clipId);
+    void audioTakeGroupRequested(quint64 trackId, quint64 clipId);
+    void audioTakeUngroupRequested(quint64 trackId, quint64 clipId);
     void audioTakeSelected(quint64 trackId, quint64 clipId);
     void audioTakeSplitRequested(quint64 trackId, quint64 clipId, double beat);
     void trackSelected(quint64 trackId);

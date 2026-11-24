@@ -476,7 +476,7 @@ quint64 ProjectData::nextClipId() const
     quint64 nextId = 1;
     for (const InstrumentTrack& track : tracks)
         for (const MidiClip& clip : track.clips)
-            nextId = std::max(nextId, clip.id + 1);
+            nextId = std::max({nextId, clip.id + 1, clip.audioTakeGroupId + 1});
     return nextId;
 }
 

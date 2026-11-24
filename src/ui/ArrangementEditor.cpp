@@ -627,11 +627,14 @@ protected:
                 {
                     QMenu menu(this);
                     QAction* duplicateAction = menu.addAction(tr("Duplicate region"));
+                    QAction* groupTakesAction = nullptr;
+                    QAction* ungroupTakesAction = nullptr;
                     QAction* splitTakesAction = nullptr;
                     QMenu* useTakeMenu = nullptr;
                     QHash<QAction*, quint64> takeActions;
                     if (clip.audioTakeGroupId != 0)
                     {
+                        ungroupTakesAction = menu.addAction(tr("Ungroup takes"));
                         splitTakesAction = menu.addAction(tr("Split all takes here"));
                         useTakeMenu = menu.addMenu(tr("Use take for this section"));
                         for (const MidiClip& candidate : track.clips)
@@ -648,12 +651,29 @@ protected:
                             takeActions.insert(takeAction, candidate.id);
                         }
                     }
+                    else
+                    {
+                        int alignedRegionCount = 0;
+                        for (const MidiClip& candidate : track.clips)
+                        {
+                            if (candidate.isAudioRegion() && candidate.audioTakeGroupId == 0 &&
+                                std::abs(candidate.startBeat - clip.startBeat) <= 1.0e-6 &&
+                                std::abs(candidate.lengthBeats - clip.lengthBeats) <= 1.0e-6)
+                                ++alignedRegionCount;
+                        }
+                        if (alignedRegionCount >= 2)
+                            groupTakesAction = menu.addAction(tr("Group aligned regions as takes"));
+                    }
                     menu.addSeparator();
                     QAction* relinkAction = menu.addAction(tr("Relink WAV…"));
                     QAction* removeAction = menu.addAction(tr("Remove region"));
                     QAction* chosen = menu.exec(event->globalPosition().toPoint());
                     if (chosen == duplicateAction)
                         emit owner->clipDuplicateRequested(track.id, clip.id);
+                    else if (groupTakesAction != nullptr && chosen == groupTakesAction)
+                        emit owner->audioTakeGroupRequested(track.id, clip.id);
+                    else if (ungroupTakesAction != nullptr && chosen == ungroupTakesAction)
+                        emit owner->audioTakeUngroupRequested(track.id, clip.id);
                     else if (splitTakesAction != nullptr && chosen == splitTakesAction)
                     {
                         const double splitBeat = std::clamp(

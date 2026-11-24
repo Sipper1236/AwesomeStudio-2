@@ -91,7 +91,9 @@ private:
     struct AudioTakeState
     {
         quint64 clipId = 0;
+        quint64 groupId = 0;
         bool active = true;
+        bool eligible = false;
     };
 
     struct AudioRelinkState
@@ -156,6 +158,8 @@ private:
     void setSelectedAudioFadeShape(bool fadeIn, double shape);
     void createSelectedAudioCrossfade();
     void applyAudioFadeHistory(quint64 trackId, const QVector<AudioFadeState>& fades);
+    void groupAlignedAudioTakes(quint64 trackId, quint64 clipId);
+    void ungroupAudioTakes(quint64 trackId, quint64 clipId);
     void selectAudioTake(quint64 trackId, quint64 clipId);
     void splitAudioTakesAtBeat(quint64 trackId, quint64 clipId, double beat);
     void applyAudioTakeSelectionHistory(quint64 trackId, const QVector<AudioTakeState>& states);

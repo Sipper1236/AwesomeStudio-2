@@ -761,7 +761,7 @@ bool loadClip(const QJsonValue& value, MidiClip& clip, const QString& mediaBaseD
     const bool storedTakeEligible = version >= 57 && !clip.audioSourcePath.isEmpty()
         ? object.value(QStringLiteral("audioTakeEligible")).toBool(false) : false;
     if (storedAudioStart < 0 || storedTakeGroup < 0 ||
-        (storedTakeGroup > 0 && (clip.audioSourcePath.isEmpty() || !storedTakeEligible)))
+        (storedTakeGroup > 0 && clip.audioSourcePath.isEmpty()))
     {
         setError(error, QStringLiteral("The project contains invalid audio region metadata."));
         return false;
