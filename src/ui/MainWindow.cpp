@@ -3973,7 +3973,7 @@ void MainWindow::createDocks()
             if (parameter == 0) settings.frequencyHz = static_cast<float>(value);
             else if (parameter == 1) settings.gainDb = static_cast<float>(value);
             else settings.q = static_cast<float>(value);
-            setSelectedTrackParametricEqualizer(band, settings);
+            setSelectedTrackParametricEqualizer(band, settings, parameter);
         });
     }
     parametricEqLayout->addLayout(parametricEqForm);
@@ -8599,11 +8599,72 @@ void MainWindow::setSelectedTrackEqualizerCrossover(int band, double frequencyHz
     refreshDirtyState();
 }
 
-void MainWindow::setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings)
+void MainWindow::setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings,
+                                                     int changedParameter)
 {
     InstrumentTrack* track = selectedTrack();
     if (track == nullptr || band < 0 || band >= static_cast<int>(track->eqParametricBands.size()))
         return;
+    const std::array<float, 3> values = {settings.frequencyHz, settings.gainDb, settings.q};
+    const std::array<float, 3> minimum = {20.0f, -18.0f, 0.1f};
+    const std::array<float, 3> maximum = {20000.0f, 18.0f, 10.0f};
+    const std::array<QString, 3> parameterNames = {
+        tr("parametric EQ frequency"), tr("parametric EQ gain"), tr("parametric EQ Q")
+    };
+    const auto recordableParametricTarget = [band](int parameter)
+    {
+        return trackEqParametricAutomationTarget(band, parameter);
+    };
+    int automationParameter = changedParameter;
+    if (automationParameter < 0 || automationParameter > 2)
+    {
+        automationParameter = -1;
+        if (automationLaneParameterControl != nullptr)
+        {
+            const int target = automationLaneParameterControl->currentData().toInt();
+            for (int parameter = 0; parameter < 3; ++parameter)
+                if (target == recordableParametricTarget(parameter))
+                    automationParameter = parameter;
+        }
+    }
+    if (automationParameter >= 0 && automationParameter < 3)
+    {
+        const int automationTarget = recordableParametricTarget(automationParameter);
+        const float value = std::clamp(values[static_cast<size_t>(automationParameter)],
+                                       minimum[static_cast<size_t>(automationParameter)],
+                                       maximum[static_cast<size_t>(automationParameter)]);
+        if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+            automationWriteSession.parameter == automationTarget)
+        {
+            recordAutomationValue(track->id, automationTarget, value);
+            if (automationWriteModeControl->currentData().toInt() != 1)
+                automationWriteIdleTimer->start(250);
+            return;
+        }
+        if (automationWriteAction != nullptr && automationWriteAction->isChecked() &&
+            audioEngine.isPlaying() && automationLaneParameterControl != nullptr &&
+            automationLaneParameterControl->currentData().toInt() == automationTarget)
+        {
+            const ParametricEqBand& current = track->eqParametricBands[
+                static_cast<size_t>(band)];
+            const std::array<float, 3> currentValues = {
+                current.frequencyHz, current.gainDb, current.q
+            };
+            beginAutomationWrite(track->id, automationTarget,
+                currentValues[static_cast<size_t>(automationParameter)], QString(), -1, -1,
+                minimum[static_cast<size_t>(automationParameter)],
+                maximum[static_cast<size_t>(automationParameter)],
+                parameterNames[static_cast<size_t>(automationParameter)]);
+            if (automationWriteSession.active && automationWriteSession.trackId == track->id &&
+                automationWriteSession.parameter == automationTarget)
+            {
+                recordAutomationValue(track->id, automationTarget, value);
+                if (automationWriteModeControl->currentData().toInt() != 1)
+                    automationWriteIdleTimer->start(250);
+                return;
+            }
+        }
+    }
     ParametricEqBand& target = track->eqParametricBands[static_cast<size_t>(band)];
     target.frequencyHz = std::clamp(settings.frequencyHz, 20.0f, 20000.0f);
     target.gainDb = std::clamp(settings.gainDb, -18.0f, 18.0f);
@@ -8735,6 +8796,8 @@ void MainWindow::refreshArrangementAutomationView()
     const bool writeAutomationTarget = target == 0 || target == 1 ||
         (target >= trackEqLowGainAutomationTarget &&
          target <= trackEqHighCrossoverAutomationTarget) ||
+        (target >= trackEqParametricAutomationTargetBase &&
+         target < trackEqParametricAutomationTargetBase + parametricEqBandCount * 3) ||
         target == synthFilterCutoffAutomationTarget ||
         target == synthFilterResonanceAutomationTarget || !pluginUri.isEmpty();
     if (!writeAutomationTarget && automationWriteAction != nullptr && automationWriteAction->isChecked())

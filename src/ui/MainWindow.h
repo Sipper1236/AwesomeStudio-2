@@ -179,7 +179,8 @@ private:
     void removeSelectedSynthPreset();
     void setSelectedTrackEqualizer(int band, double gainDb);
     void setSelectedTrackEqualizerCrossover(int band, double frequencyHz);
-    void setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings);
+    void setSelectedTrackParametricEqualizer(int band, const ParametricEqBand& settings,
+                                             int changedParameter = -1);
     void refreshParametricEqualizerControls();
     void refreshAutomationEditor();
     void refreshArrangementAutomationView();

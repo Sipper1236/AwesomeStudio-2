@@ -211,6 +211,13 @@ const SynthRenderer::TrackMixValue& SynthRenderer::trackMixAt(size_t trackIndex,
                 band.q = automationValue(
                     automation.parametricEqAutomation[bandIndex][2], beat, band.q);
             }
+            const auto& liveBand = live.parametricEqValues[bandIndex];
+            if (liveBand[0] >= 20.0f && liveBand[0] <= 20000.0f)
+                band.frequencyHz = liveBand[0];
+            if (liveBand[1] >= -18.0f && liveBand[1] <= 18.0f)
+                band.gainDb = liveBand[1];
+            if (liveBand[2] >= 0.1f && liveBand[2] <= 10.0f)
+                band.q = liveBand[2];
             band.frequencyHz = std::clamp(band.frequencyHz, 20.0f, 20000.0f);
             band.gainDb = std::clamp(band.gainDb, -18.0f, 18.0f);
             band.q = std::clamp(band.q, 0.1f, 10.0f);
@@ -2089,6 +2096,15 @@ void SynthRenderer::setLiveTrackMixOverride(size_t trackIndex, int parameter, fl
         liveTrackMixOverrides[trackIndex].equalizerCrossoverHz[0] = value;
     else if (parameter == trackEqHighCrossoverAutomationTarget)
         liveTrackMixOverrides[trackIndex].equalizerCrossoverHz[1] = value;
+    else
+    {
+        const int parametricEncoded = parameter - trackEqParametricAutomationTargetBase;
+        if (parametricEncoded < 0 || parametricEncoded >= parametricEqBandCount * 3)
+            return;
+        liveTrackMixOverrides[trackIndex].parametricEqValues[
+            static_cast<size_t>(parametricEncoded / 3)]
+            [static_cast<size_t>(parametricEncoded % 3)] = value;
+    }
 }
 
 void SynthRenderer::setLiveSynthFilterOverride(size_t trackIndex, int parameter, float value)

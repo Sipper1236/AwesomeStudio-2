@@ -176,6 +176,12 @@ private:
         float pan = 2.0f;
         std::array<float, 3> equalizerGainDb{1000.0f, 1000.0f, 1000.0f};
         std::array<float, 2> equalizerCrossoverHz{-1.0f, -1.0f};
+        std::array<std::array<float, 3>, parametricEqBandCount> parametricEqValues{{
+            {-1.0f, 1000.0f, -1.0f}, {-1.0f, 1000.0f, -1.0f},
+            {-1.0f, 1000.0f, -1.0f}, {-1.0f, 1000.0f, -1.0f},
+            {-1.0f, 1000.0f, -1.0f}, {-1.0f, 1000.0f, -1.0f},
+            {-1.0f, 1000.0f, -1.0f}
+        }};
     };
 
     struct ParametricEqCoefficients

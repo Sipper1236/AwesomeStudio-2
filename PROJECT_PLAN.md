@@ -68,6 +68,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Built-in synth filter cutoff/resonance automation in the Playlist, project files, playback, and exports
 - [x] Touch/Latch/Trim recording of synth filter cutoff/resonance moves during playback
 - [x] Touch/Latch/Trim recording of three-band EQ gain and crossover moves from track EQ controls
+- [x] Touch/Latch/Trim recording of parametric EQ frequency, gain, and Q moves
 - [x] Touch recording for volume/pan automation from Mixer controls during playback
 - [x] Latch recording for volume/pan automation until playback stops or Write is disarmed
 - [x] Realtime per-track, bus, and master peak meters in the Mixer

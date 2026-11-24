@@ -142,6 +142,12 @@ AudioEngine::AudioEngine()
             gain.store(1000.0f, std::memory_order_relaxed);
         for (auto& crossover : liveTrackEqCrossoverHz[index])
             crossover.store(-1.0f, std::memory_order_relaxed);
+        for (auto& band : liveTrackParametricEqValues[index])
+        {
+            band[0].store(-1.0f, std::memory_order_relaxed);
+            band[1].store(1000.0f, std::memory_order_relaxed);
+            band[2].store(-1.0f, std::memory_order_relaxed);
+        }
         liveSynthFilterCutoffOverrides[index].store(-1.0f, std::memory_order_relaxed);
         liveSynthFilterResonanceOverrides[index].store(-1.0f, std::memory_order_relaxed);
         trackPeakValues[index].store(0.0f, std::memory_order_relaxed);
@@ -234,6 +240,12 @@ void AudioEngine::setProject(const ProjectData& project)
             gain.store(1000.0f, std::memory_order_release);
         for (auto& crossover : liveTrackEqCrossoverHz[index])
             crossover.store(-1.0f, std::memory_order_release);
+        for (auto& band : liveTrackParametricEqValues[index])
+        {
+            band[0].store(-1.0f, std::memory_order_release);
+            band[1].store(1000.0f, std::memory_order_release);
+            band[2].store(-1.0f, std::memory_order_release);
+        }
         liveSynthFilterCutoffOverrides[index].store(-1.0f, std::memory_order_release);
         liveSynthFilterResonanceOverrides[index].store(-1.0f, std::memory_order_release);
         trackPeakValues[index].store(0.0f, std::memory_order_release);
@@ -421,8 +433,11 @@ void AudioEngine::setLiveTrackMixOverride(quint64 trackId, int parameter, float 
                         parameter <= trackEqHighGainAutomationTarget;
     const bool eqLowCrossover = parameter == trackEqLowCrossoverAutomationTarget;
     const bool eqHighCrossover = parameter == trackEqHighCrossoverAutomationTarget;
+    const int parametricEncoded = parameter - trackEqParametricAutomationTargetBase;
+    const bool parametricEq = parametricEncoded >= 0 &&
+        parametricEncoded < parametricEqBandCount * 3;
     if (parameter != 0 && parameter != 1 && !eqGain &&
-        !eqLowCrossover && !eqHighCrossover)
+        !eqLowCrossover && !eqHighCrossover && !parametricEq)
         return;
     const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
     const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
@@ -447,6 +462,16 @@ void AudioEngine::setLiveTrackMixOverride(quint64 trackId, int parameter, float 
         else if (eqHighCrossover)
             liveTrackEqCrossoverHz[index][1].store(std::clamp(value, 500.0f, 20000.0f),
                                                    std::memory_order_release);
+        else if (parametricEq)
+        {
+            const size_t band = static_cast<size_t>(parametricEncoded / 3);
+            const size_t eqParameter = static_cast<size_t>(parametricEncoded % 3);
+            const std::array<float, 3> minimum = {20.0f, -18.0f, 0.1f};
+            const std::array<float, 3> maximum = {20000.0f, 18.0f, 10.0f};
+            liveTrackParametricEqValues[index][band][eqParameter].store(
+                std::clamp(value, minimum[eqParameter], maximum[eqParameter]),
+                std::memory_order_release);
+        }
         return;
     }
 }
@@ -457,8 +482,11 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
                         parameter <= trackEqHighGainAutomationTarget;
     const bool eqLowCrossover = parameter == trackEqLowCrossoverAutomationTarget;
     const bool eqHighCrossover = parameter == trackEqHighCrossoverAutomationTarget;
+    const int parametricEncoded = parameter - trackEqParametricAutomationTargetBase;
+    const bool parametricEq = parametricEncoded >= 0 &&
+        parametricEncoded < parametricEqBandCount * 3;
     if (parameter != 0 && parameter != 1 && !eqGain &&
-        !eqLowCrossover && !eqHighCrossover)
+        !eqLowCrossover && !eqHighCrossover && !parametricEq)
         return;
     const auto state = std::atomic_load_explicit(&preparedRenderState, std::memory_order_acquire);
     const auto project = state == nullptr ? std::shared_ptr<const ProjectData>{} : state->project;
@@ -481,6 +509,14 @@ void AudioEngine::clearLiveTrackMixOverride(quint64 trackId, int parameter)
             liveTrackEqCrossoverHz[index][0].store(-1.0f, std::memory_order_release);
         else if (eqHighCrossover)
             liveTrackEqCrossoverHz[index][1].store(-1.0f, std::memory_order_release);
+        else if (parametricEq)
+        {
+            const size_t band = static_cast<size_t>(parametricEncoded / 3);
+            const size_t eqParameter = static_cast<size_t>(parametricEncoded % 3);
+            const float defaultValue = eqParameter == 1 ? 1000.0f : -1.0f;
+            liveTrackParametricEqValues[index][band][eqParameter].store(
+                defaultValue, std::memory_order_release);
+        }
         return;
     }
 }
@@ -1574,6 +1610,14 @@ qint64 AudioEngine::renderAudio(char* destination, qint64 maxBytes)
             liveTrackEqCrossoverHz[index][0].load(std::memory_order_acquire));
         renderer.setLiveTrackMixOverride(index, trackEqHighCrossoverAutomationTarget,
             liveTrackEqCrossoverHz[index][1].load(std::memory_order_acquire));
+        for (size_t band = 0; band < liveTrackParametricEqValues[index].size(); ++band)
+            for (size_t parameter = 0;
+                 parameter < liveTrackParametricEqValues[index][band].size(); ++parameter)
+                renderer.setLiveTrackMixOverride(index,
+                    trackEqParametricAutomationTarget(static_cast<int>(band),
+                                                      static_cast<int>(parameter)),
+                    liveTrackParametricEqValues[index][band][parameter].load(
+                        std::memory_order_acquire));
         renderer.setLiveSynthFilterOverride(index, 0,
             liveSynthFilterCutoffOverrides[index].load(std::memory_order_acquire));
         renderer.setLiveSynthFilterOverride(index, 1,
