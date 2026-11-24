@@ -3863,8 +3863,14 @@ void MainWindow::createToolBars()
     snapControl->addItem(tr("1/8."), 0.75);
     snapControl->addItem(tr("1/16."), 0.375);
     snapControl->addItem(tr("1/32."), 0.1875);
+    snapControl->insertSeparator(snapControl->count());
+    snapControl->addItem(tr("Bar"), -1.0);
+    snapControl->addItem(tr("1/2 bar"), -2.0);
+    snapControl->addItem(tr("1/4 bar"), -4.0);
+    snapControl->addItem(tr("1/8 bar"), -8.0);
+    snapControl->addItem(tr("1/16 bar"), -16.0);
     snapControl->setCurrentIndex(2);
-    snapControl->setToolTip(tr("Straight, triplet, or dotted piano-roll grid snap interval"));
+    snapControl->setToolTip(tr("Choose a straight, triplet, dotted, or bar-relative piano-roll snap interval"));
     editorBar->addWidget(snapControl);
     connect(snapControl, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index)
     {

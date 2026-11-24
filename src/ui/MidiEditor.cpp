@@ -164,7 +164,11 @@ public:
 
     void setSnap(double beatStep)
     {
-        snap = std::clamp(beatStep, 1.0 / 64.0, 4.0);
+        snapToBar = beatStep < 0.0;
+        if (snapToBar)
+            barSnapDivisions = std::clamp(static_cast<int>(std::lround(-beatStep)), 1, 16);
+        else
+            snap = std::clamp(beatStep, 1.0 / 64.0, 4.0);
     }
 
     void setScale(int root, const QVector<int>& intervals, bool snapNotes)
@@ -209,7 +213,7 @@ public:
         {
             if (!quantizeAll && !selected.contains(note.id))
                 continue;
-            note.startBeat = std::clamp(std::round(note.startBeat / snap) * snap, 0.0,
+            note.startBeat = std::clamp(snapNearest(note.startBeat), 0.0,
                                         std::max(0.0, patternLength - note.lengthBeats));
         }
         std::sort(notes.begin(), notes.end(), [](const MidiNote& left, const MidiNote& right)
@@ -810,7 +814,7 @@ protected:
         else
         {
             selected.clear();
-            const double minimumLength = std::min(snap, patternLength);
+            const double minimumLength = std::min(snapIntervalAt(beatAt(point.x())), patternLength);
             const double startBeat = std::min(snapDown(beatAt(point.x())),
                                               std::max(0.0, patternLength - minimumLength));
             MidiNote note;
@@ -818,7 +822,8 @@ protected:
             note.pitch = pitchAt(point.y());
             note.velocity = 96;
             note.startBeat = startBeat;
-            note.lengthBeats = std::min(snap, std::max(1.0 / 64.0, patternLength - startBeat));
+            note.lengthBeats = std::min(snapIntervalAt(startBeat),
+                                        std::max(1.0 / 64.0, patternLength - startBeat));
             notes.push_back(note);
             selected.insert(note.id);
             draggedNoteId = note.id;
@@ -850,14 +855,16 @@ protected:
 
         if (dragMode == DragMode::Move)
         {
-            const double deltaBeat = std::round(((point.x() - dragStart.x()) / static_cast<double>(pixelsPerBeat)) / snap) * snap;
+            const double rawDeltaBeat = (point.x() - dragStart.x()) / static_cast<double>(pixelsPerBeat);
             const int deltaPitch = static_cast<int>(std::round((dragStart.y() - point.y()) / static_cast<double>(rowHeight)));
             notes = originalNotes;
             for (MidiNote& note : notes)
             {
                 if (!selected.contains(note.id))
                     continue;
-                note.startBeat = std::clamp(note.startBeat + deltaBeat, 0.0,
+                const double targetBeat = snapToBar ? snapNearest(note.startBeat + rawDeltaBeat)
+                    : note.startBeat + std::round(rawDeltaBeat / snap) * snap;
+                note.startBeat = std::clamp(targetBeat, 0.0,
                                             std::max(0.0, patternLength - note.lengthBeats));
                 note.pitch = std::clamp(note.pitch + deltaPitch, 0, 127);
             }
@@ -865,7 +872,7 @@ protected:
         else if (dragMode == DragMode::Resize || dragMode == DragMode::Create)
         {
             const double endBeat = snapNearest(beatAt(point.x()));
-            const double minimumLength = std::min(snap, patternLength);
+            const double minimumLength = std::min(snapIntervalAt(beatAt(point.x())), patternLength);
             for (MidiNote& note : notes)
             {
                 if (note.id != draggedNoteId)
@@ -1194,12 +1201,49 @@ private:
 
     double snapDown(double beat) const
     {
+        if (snapToBar)
+        {
+            const auto [barStart, barLength] = barAtBeat(beat);
+            const double step = barLength / barSnapDivisions;
+            return barStart + std::floor((beat - barStart) / step) * step;
+        }
         return std::floor(beat / snap) * snap;
     }
 
     double snapNearest(double beat) const
     {
+        if (snapToBar)
+        {
+            const auto [barStart, barLength] = barAtBeat(beat);
+            const double step = barLength / barSnapDivisions;
+            return barStart + std::round((beat - barStart) / step) * step;
+        }
         return std::round(beat / snap) * snap;
+    }
+
+    double snapIntervalAt(double beat) const
+    {
+        if (!snapToBar)
+            return snap;
+        return meterLengthAt(beat) / barSnapDivisions;
+    }
+
+    std::pair<double, double> barAtBeat(double beat) const
+    {
+        double segmentStart = 0.0;
+        double barLength = meterLengthAt(0.0);
+        for (const TimeSignatureChange& change : localTimeSignatureChanges)
+        {
+            if (change.beat <= 1.0e-9)
+                continue;
+            if (change.beat > beat + 1.0e-9)
+                break;
+            segmentStart = change.beat;
+            barLength = static_cast<double>(change.beatsPerBar) * 4.0 / change.beatUnit;
+        }
+        const double barStart = segmentStart +
+            std::floor(std::max(0.0, beat - segmentStart) / barLength) * barLength;
+        return {barStart, barLength};
     }
 
     QRectF noteBounds(const MidiNote& note) const
@@ -1364,6 +1408,8 @@ private:
     double quarterNotesPerBar = 4.0;
     QVector<TimeSignatureChange> localTimeSignatureChanges{{0.0, 4, 4}};
     double snap = 0.25;
+    int barSnapDivisions = 1;
+    bool snapToBar = false;
     double playheadBeat = -1.0;
     int pixelsPerBeat = 84;
     int rootPitchClass = 0;

@@ -16,6 +16,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Piano-roll note entry, movement, resizing, deletion, and velocity editing
 - [x] Quantize selected or all piano-roll note starts to the current snap grid
 - [x] Straight, dotted, and triplet piano-roll snap divisions
+- [x] Bar-relative piano-roll snap divisions aligned to the active meter map
 - [x] Highlight selectable key/scale pitches and optionally snap new piano-roll notes to the scale
 - [x] Piano-roll chord insertion for common triads, suspended chords, and sevenths
 - [x] Toggleable piano-roll ghost notes from other MIDI clips on the same track
@@ -55,7 +56,7 @@ The current Qt 6 executable provides a multi-track Playlist with movable MIDI an
 - [x] Custom power and freehand drawn fades, portable media packaging, and WAV relinking
 - [x] Selectable audio output plus coded hardware loopback calibration with per-input/output compensation and input-buffer estimate subtraction
 - [x] Format-2 meter maps with meter-aware Playlist/piano-roll rulers, Playlist snapping, and step-sequencer bars
-- [ ] Physical validation across audio drivers; meter-aligned piano-roll snap divisions
+- [ ] Physical validation across audio drivers; remaining meter-aware editing
 - [x] Mixer submix buses with track assignment, level/pan, mute/solo, parent routing, and metering
 - [x] Multiple post-track auxiliary sends per track to mixer buses
 - [x] Multiple post-fader auxiliary sends from buses to other mixer buses, with cycle prevention
