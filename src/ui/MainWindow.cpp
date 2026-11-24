@@ -2,6 +2,7 @@
 
 #include "core/AudioFile.h"
 #include "core/AudioRecorder.h"
+#include "core/AudioLatencyCalibration.h"
 #include "core/ClapAudioEffect.h"
 #include "core/ProjectFile.h"
 #include "core/MidiFile.h"
@@ -3737,6 +3738,11 @@ void MainWindow::createToolBars()
     audioInputCompensationControl->setToolTip(
         tr("Additional per-input recording adjustment. Positive values move takes earlier; negative values move them later. An input-stream buffer estimate is also applied when available."));
     recordingBar->addWidget(audioInputCompensationControl);
+    audioInputCalibrationAction = recordingBar->addAction(tr("Calibrate"));
+    audioInputCalibrationAction->setToolTip(
+        tr("Measure input/output loopback latency with a physical line-level connection"));
+    connect(audioInputCalibrationAction, &QAction::triggered,
+            this, &MainWindow::calibrateAudioInputLatency);
     connect(audioInputControl, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this](int) { refreshAudioInputCompensation(); });
     connect(audioInputCompensationControl, qOverload<double>(&QDoubleSpinBox::valueChanged),
@@ -11598,6 +11604,10 @@ void MainWindow::refreshAudioInputs()
     }
     audioInputControl->setEnabled(!devices.isEmpty() && !audioRecorder && !audioMonitor && !recordingPending &&
                                   !midiRecordingActive && !midiRecordingPending);
+    if (audioInputCalibrationAction != nullptr)
+        audioInputCalibrationAction->setEnabled(!devices.isEmpty() && !audioRecorder && !audioMonitor &&
+            !recordingPending && !midiRecordingActive && !midiRecordingPending &&
+            (!audioLatencyCalibration || !audioLatencyCalibration->isActive()));
     refreshAudioInputCompensation();
     audioMonitorAction->setEnabled(audioEngine.isAudioAvailable() && !recordingPending &&
                                    (audioRecorder != nullptr || audioMonitor != nullptr || !devices.isEmpty()));
@@ -11626,6 +11636,81 @@ void MainWindow::refreshAudioInputCompensation()
     const QSignalBlocker blocker(audioInputCompensationControl);
     audioInputCompensationControl->setValue(std::clamp(compensationMs, -500.0, 500.0));
     audioInputCompensationControl->setEnabled(!deviceId.isEmpty() && !audioRecorder && !recordingPending);
+}
+
+void MainWindow::calibrateAudioInputLatency()
+{
+    if (audioInputControl == nullptr || audioInputCompensationControl == nullptr ||
+        audioInputControl->currentData().toByteArray().isEmpty())
+    {
+        QMessageBox::information(this, tr("Audio latency calibration"),
+                                 tr("Select an audio input device first."));
+        return;
+    }
+    if (audioRecorder || recordingPending || audioMonitor || audioEngine.isPlaying() ||
+        midiRecordingActive || midiRecordingPending)
+    {
+        QMessageBox::information(this, tr("Audio latency calibration"),
+                                 tr("Stop playback, monitoring, and recording before calibrating."));
+        return;
+    }
+
+    const QByteArray inputId = audioInputControl->currentData().toByteArray();
+    QAudioDevice inputDevice;
+    for (const QAudioDevice& device : QMediaDevices::audioInputs())
+        if (device.id() == inputId)
+        {
+            inputDevice = device;
+            break;
+        }
+    const QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
+    if (inputDevice.isNull() || outputDevice.isNull())
+    {
+        QMessageBox::warning(this, tr("Audio latency calibration"),
+                             tr("A connected audio input and output are required."));
+        return;
+    }
+
+    QMessageBox prompt(QMessageBox::Information, tr("Audio latency calibration"),
+        tr("Connect the selected output to the selected input with a line-level cable. "
+           "Keep the input gain low and disconnect speakers or headphones. A quiet test "
+           "signal will play for less than a second. The measured input/output delay will "
+           "replace this device's COMP value; the recorder's input-buffer estimate remains "
+           "applied separately."), QMessageBox::Ok | QMessageBox::Cancel, this);
+    prompt.setDefaultButton(QMessageBox::Cancel);
+    if (prompt.exec() != QMessageBox::Ok)
+        return;
+
+    if (!audioLatencyCalibration)
+        audioLatencyCalibration = std::make_unique<AudioLatencyCalibration>();
+    audioInputCalibrationAction->setEnabled(false);
+    audioInputControl->setEnabled(false);
+    audioInputCompensationControl->setEnabled(false);
+    statusBar()->showMessage(tr("Measuring audio loopback latency…"));
+    QString error;
+    const bool started = audioLatencyCalibration->start(inputDevice, outputDevice,
+        [this](bool success, double compensationMs, const QString& message)
+        {
+            if (audioInputCalibrationAction != nullptr)
+                audioInputCalibrationAction->setEnabled(true);
+            refreshAudioInputs();
+            if (!success)
+            {
+                statusBar()->showMessage(tr("Audio latency calibration failed: %1").arg(message), 6000);
+                return;
+            }
+            const double appliedCompensation = std::clamp(compensationMs, 0.0, 500.0);
+            if (audioInputCompensationControl != nullptr)
+                audioInputCompensationControl->setValue(appliedCompensation);
+            statusBar()->showMessage(
+                tr("Loopback calibration set COMP to %1 ms.").arg(appliedCompensation, 0, 'f', 1), 5000);
+        }, &error);
+    if (!started)
+    {
+        audioInputCalibrationAction->setEnabled(true);
+        refreshAudioInputs();
+        statusBar()->showMessage(tr("Could not start audio latency calibration: %1").arg(error), 6000);
+    }
 }
 
 void MainWindow::refreshPunchRangeUi()
@@ -12309,6 +12394,8 @@ void MainWindow::startAudioRecording()
     refreshPunchRangeUi();
     audioInputControl->setEnabled(false);
     audioInputCompensationControl->setEnabled(false);
+    if (audioInputCalibrationAction != nullptr)
+        audioInputCalibrationAction->setEnabled(false);
     tempoControl->setEnabled(false);
     timeSignatureControl->setEnabled(false);
     countInControl->setEnabled(false);
@@ -12699,6 +12786,8 @@ void MainWindow::startMidiRecording()
     loopAction->setEnabled(false);
     metronomeAction->setEnabled(false);
     audioInputControl->setEnabled(false);
+    if (audioInputCalibrationAction != nullptr)
+        audioInputCalibrationAction->setEnabled(false);
     midiInputControl->setEnabled(false);
     recordAction->setEnabled(false);
     midiInputPollTimer->start();

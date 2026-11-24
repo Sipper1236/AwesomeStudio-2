@@ -31,6 +31,7 @@ class MidiEditor;
 class ArrangementEditor;
 class StepSequencer;
 class AudioRecorder;
+class AudioLatencyCalibration;
 class MidiInput;
 class Vst3PluginEditorWindow;
 
@@ -261,6 +262,7 @@ private:
     void refreshPunchRangeUi();
     void refreshAudioInputs();
     void refreshAudioInputCompensation();
+    void calibrateAudioInputLatency();
     void startMidiRecording();
     bool startPendingMidiRecording(double playheadBeat);
     void finishMidiRecording(bool keepTake = true);
@@ -446,6 +448,7 @@ private:
     QMediaDevices* mediaDevices = nullptr;
     QComboBox* audioInputControl = nullptr;
     QDoubleSpinBox* audioInputCompensationControl = nullptr;
+    QAction* audioInputCalibrationAction = nullptr;
     QAction* recordAction = nullptr;
     QAction* punchRecordAction = nullptr;
     QAction* audioMonitorAction = nullptr;
@@ -464,6 +467,7 @@ private:
     QAction* pianoRollGhostNotesAction = nullptr;
     std::unique_ptr<AudioRecorder> audioRecorder;
     std::unique_ptr<AudioRecorder> audioMonitor;
+    std::unique_ptr<AudioLatencyCalibration> audioLatencyCalibration;
     std::unique_ptr<MidiInput> midiInput;
     QComboBox* midiInputControl = nullptr;
     QTimer* midiInputPollTimer = nullptr;

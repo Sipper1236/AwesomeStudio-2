@@ -54,6 +54,8 @@ add_executable(AwesomeStudio
     src/core/Vst3AudioEffect.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
+    src/core/AudioLatencyCalibration.cpp
+    src/core/AudioLatencyCalibration.h
     src/core/MidiFile.cpp
     src/core/MidiFile.h
     src/core/MidiInput.cpp
